@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
@@ -6,12 +7,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Local MySQL (on Mac)
+// ✅ Use Railway MySQL connection from .env
 const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: 'swaraj2004', // Use your local MySQL password
-  database: 'automatedb'
+  host: process.env.MYSQLHOST,
+  user: process.env.MYSQLUSER,
+  password: process.env.MYSQLPASSWORD,
+  database: process.env.MYSQLDATABASE,
+  port: process.env.MYSQLPORT || 3306
 });
 
 // 📌 Test DB connection
@@ -32,12 +34,12 @@ app.post('/signup', (req, res) => {
   }
 
   const query = `INSERT INTO users (name, college, password) VALUES (?, ?, ?)`;
-  db.query(query, [name, college, password], (err, results) => {
+  db.query(query, [name, college, password], (err) => {
     if (err) {
       console.error("Database error:", err);
       return res.status(500).json({ success: false, message: 'DB Error' });
     }
-    return res.json({ success: true, message: 'User created' });
+    res.json({ success: true, message: 'User created' });
   });
 });
 
@@ -71,7 +73,6 @@ app.post('/addTravelPlan', (req, res) => {
     return res.status(400).json({ success: false, message: 'Missing fields' });
   }
 
-  // Check if the user already has a travel plan
   const checkQuery = `SELECT * FROM travel_plans WHERE user_id = ?`;
   db.query(checkQuery, [userId], (err, results) => {
     if (err) {
@@ -80,7 +81,6 @@ app.post('/addTravelPlan', (req, res) => {
     }
 
     if (results.length > 0) {
-      // Update existing
       const updateQuery = `UPDATE travel_plans SET destination = ?, time = ? WHERE user_id = ?`;
       db.query(updateQuery, [destination, time, userId], (err) => {
         if (err) {
@@ -90,7 +90,6 @@ app.post('/addTravelPlan', (req, res) => {
         res.json({ success: true, message: 'Travel plan updated' });
       });
     } else {
-      // Insert new
       const insertQuery = `INSERT INTO travel_plans (user_id, destination, time) VALUES (?, ?, ?)`;
       db.query(insertQuery, [userId, destination, time], (err) => {
         if (err) {
@@ -115,7 +114,7 @@ app.get('/getUserTravelPlan', (req, res) => {
       return res.status(500).json({ success: false, message: 'DB error' });
     }
     if (results.length === 0) {
-      return res.json(null); // No travel plan yet
+      return res.json(null);
     }
     res.json(results[0]);
   });
@@ -133,14 +132,13 @@ app.get('/getTravelPlans', (req, res) => {
       return res.status(500).json({ success: false, message: 'Cleanup failed' });
     }
 
-const fetchQuery = `
-  SELECT users.name AS username, travel_plans.destination,
-         CONVERT_TZ(travel_plans.time, '+00:00', '+05:30') AS time
-  FROM travel_plans
-  INNER JOIN users ON travel_plans.user_id = users.id
-  ORDER BY travel_plans.time DESC
-`;
-
+    const fetchQuery = `
+      SELECT users.name AS username, travel_plans.destination,
+             CONVERT_TZ(travel_plans.time, '+00:00', '+05:30') AS time
+      FROM travel_plans
+      INNER JOIN users ON travel_plans.user_id = users.id
+      ORDER BY travel_plans.time DESC
+    `;
 
     db.query(fetchQuery, (fetchErr, results) => {
       if (fetchErr) {
@@ -162,8 +160,8 @@ app.get('/', (req, res) => {
   res.send('✅ Backend is working!');
 });
 
-// 🌐 Start local server on 3000
-const port =process.env.PORT || 3000;
+// 🌐 Start server
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
