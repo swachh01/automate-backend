@@ -155,7 +155,7 @@ failed` });
 
     const fetchQuery = `
       SELECT users.name AS username, travel_plans.destination,
-             travel_plans AS time
+             travel_plans.time AS time
       FROM travel_plans
       INNER JOIN users ON travel_plans.user_id = users.id
       ORDER BY travel_plans.time DESC
