@@ -144,7 +144,7 @@ app.get('/getUserTravelPlan', (req, res) => {
 app.get('/getTravelPlans', (req, res) => {
   const deleteQuery = `
       DELETE FROM travel_plans
-      WHERE time < DATE_SUB(NOW(), INTERVAL 3 HOUR)
+      WHERE time < DATE_SUB(NOW(), INTERVAL 24 HOUR)
   `;
   db.query(deleteQuery, (deleteErr) => {
     if (deleteErr) {
@@ -155,7 +155,7 @@ failed` });
 
     const fetchQuery = `
       SELECT users.name AS username, travel_plans.destination,
-             CONVERT_TZ(travel_plans.time, '+00:00', '+05:30') AS time
+             travel_plans AS time
       FROM travel_plans
       INNER JOIN users ON travel_plans.user_id = users.id
       ORDER BY travel_plans.time DESC
