@@ -140,35 +140,23 @@ app.get('/getUserTravelPlan', (req, res) => {
   });
 });
 
-// 👀 Get All Valid Travel Plans (🧹 Delete if time < NOW)
+// 👀 Get All Valid Travel Plans
 app.get('/getTravelPlans', (req, res) => {
-  const deleteQuery = `
-      DELETE FROM travel_plans
-      WHERE time < NOW()
+  const fetchQuery = `
+    SELECT users.name AS username, travel_plans.destination, 
+travel_plans.time AS time
+    FROM travel_plans
+    INNER JOIN users ON travel_plans.user_id = users.id
+    ORDER BY travel_plans.time DESC
   `;
-  db.query(deleteQuery, (deleteErr) => {
-    if (deleteErr) {
-      console.error('Delete Error:', deleteErr);
-      return res.status(500).json({ success: false, message: `Cleanup 
-failed` });
-    }
 
-    const fetchQuery = `
-      SELECT users.name AS username, travel_plans.destination,
-             travel_plans.time AS time
-      FROM travel_plans
-      INNER JOIN users ON travel_plans.user_id = users.id
-      ORDER BY travel_plans.time DESC
-    `;
-
-    db.query(fetchQuery, (fetchErr, results) => {
-      if (fetchErr) {
-        console.error('Fetch Error:', fetchErr);
-        return res.status(500).json({ success: false, message: 'DB error' 
+  db.query(fetchQuery, (fetchErr, results) => {
+    if (fetchErr) {
+      console.error('Fetch Error:', fetchErr);
+      return res.status(500).json({ success: false, message: 'DB error' 
 });
-      }
-      res.json({ success: true, users: results });
-    });
+    }
+    res.json({ success: true, users: results });
   });
 });
 
@@ -186,4 +174,16 @@ const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
+
+setInterval(() => {
+  const cleanupQuery = `DELETE FROM travel_plans WHERE time < NOW()`;
+  db.query(cleanupQuery, (err, result) => {
+    if (err) {
+      console.error('❌ Failed to delete expired plans:', err.message);
+    } else {
+      console.log(`🧹 Deleted ${result.affectedRows} expired travel 
+plan(s)`);
+    }
+  });
+}, 60 * 1000); // runs every 1 minute
 
