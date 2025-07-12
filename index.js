@@ -178,7 +178,7 @@ app.listen(PORT, () => {
 setInterval(() => {
 const deleteQuery = `
     DELETE FROM travel_plans
-    WHERE time < CONVERT_TZ(NOW(), '+00:00', '+05:30')
+    WHERE time < CONVERT_TZ(NOW(), '+00:00', '+11:00')
 `;
 
   db.query(cleanupQuery, (err, result) => {
