@@ -176,7 +176,11 @@ app.listen(PORT, () => {
 });
 
 setInterval(() => {
-  const cleanupQuery = `DELETE FROM travel_plans WHERE time < NOW()`;
+const deleteQuery = `
+    DELETE FROM travel_plans
+    WHERE time < CONVERT_TZ(NOW(), '+00:00', '+05:30')
+`;
+
   db.query(cleanupQuery, (err, result) => {
     if (err) {
       console.error('❌ Failed to delete expired plans:', err.message);
