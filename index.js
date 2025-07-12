@@ -34,8 +34,8 @@ db.getConnection((err, connection) => {
 app.post('/signup', (req, res) => {
   const { name, college, password } = req.body;
   if (!name || !college || !password) {
-    return res.status(400).json({ success: false, message: 'Missing 
-fields' });
+    return res.status(400).json({ success: false, message: `Missing 
+fields` });
   }
 
   const query = `INSERT INTO users (name, college, password) VALUES (?, ?, 
@@ -43,8 +43,8 @@ fields' });
   db.query(query, [name, college, password], (err) => {
     if (err) {
       console.error("DB Error:", err);
-      return res.status(500).json({ success: false, message: 'Database 
-error' });
+      return res.status(500).json({ success: false, message: `Database 
+error` });
     }
     res.json({ success: true, message: 'User created' });
   });
@@ -54,16 +54,16 @@ error' });
 app.post('/login', (req, res) => {
   const { name, password } = req.body;
   if (!name || !password) {
-    return res.status(400).json({ success: false, message: 'Missing 
-credentials' });
+    return res.status(400).json({ success: false, message: `Missing 
+credentials` });
   }
 
   const query = 'SELECT * FROM users WHERE name = ? AND password = ?';
   db.query(query, [name, password], (err, results) => {
     if (err) {
       console.error('DB Error:', err);
-      return res.status(500).json({ success: false, message: 'Database 
-error' });
+      return res.status(500).json({ success: false, message: `Database 
+error` });
     }
 
     if (results.length > 0) {
@@ -81,8 +81,8 @@ user.id, name: user.name });
 app.post('/addTravelPlan', (req, res) => {
   const { userId, destination, time } = req.body;
   if (!userId || !destination || !time) {
-    return res.status(400).json({ success: false, message: 'Missing 
-fields' });
+    return res.status(400).json({ success: false, message: `Missing 
+fields` });
   }
 
   const checkQuery = `SELECT * FROM travel_plans WHERE user_id = ?`;
@@ -99,8 +99,8 @@ fields' });
       db.query(updateQuery, [destination, time, userId], (err) => {
         if (err) {
           console.error('Update error:', err);
-          return res.status(500).json({ success: false, message: 'Update 
-failed' });
+          return res.status(500).json({ success: false, message: `Update 
+failed` });
         }
         res.json({ success: true, message: 'Travel plan updated' });
       });
@@ -110,8 +110,8 @@ time) VALUES (?, ?, ?)`;
       db.query(insertQuery, [userId, destination, time], (err) => {
         if (err) {
           console.error('Insert error:', err);
-          return res.status(500).json({ success: false, message: 'Insert 
-failed' });
+          return res.status(500).json({ success: false, message: `Insert 
+failed` });
         }
         res.json({ success: true, message: 'Travel plan added' });
       });
@@ -149,8 +149,8 @@ app.get('/getTravelPlans', (req, res) => {
   db.query(deleteQuery, (deleteErr) => {
     if (deleteErr) {
       console.error('Delete Error:', deleteErr);
-      return res.status(500).json({ success: false, message: 'Cleanup 
-failed' });
+      return res.status(500).json({ success: false, message: `Cleanup 
+failed` });
     }
 
     const fetchQuery = `
@@ -182,8 +182,7 @@ app.get('/', (req, res) => {
   res.send('✅ Backend is working!');
 });
 
-const PORT = process.env.PORT || 8080;
-
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
