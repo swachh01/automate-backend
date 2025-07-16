@@ -7,19 +7,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ MySQL connection pool
+// ✅ Use Railway MySQL connection pool
 const db = mysql.createPool({
   host: process.env.MYSQLHOST,
   user: process.env.MYSQLUSER,
   password: process.env.MYSQLPASSWORD,
   database: process.env.MYSQLDATABASE,
-  port: process.env.MYSQLPORT,
+  port: process.env.MYSQLPORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0,
+  queueLimit: 0
 });
 
-// ✅ Test DB connection
+// 📌 Test DB connection
 db.getConnection((err, connection) => {
   if (err) {
     console.error('❌ Failed to connect to MySQL:', err.message);
@@ -140,39 +140,50 @@ app.get('/getUserTravelPlan', (req, res) => {
   });
 });
 
-// 👀 Get All Valid Travel Plans (only future ones)
+// 🧹 Get Travel Plans (Recent only)
 app.get('/getTravelPlans', (req, res) => {
-  const fetchQuery = `
-    SELECT users.name AS username, users.id AS userId, users.college AS college,
-           travel_plans.destination, travel_plans.time AS time
-    FROM travel_plans
-    INNER JOIN users ON travel_plans.user_id = users.id
-    WHERE travel_plans.time >= NOW()
-    ORDER BY travel_plans.time ASC
+  const deleteQuery = `
+      DELETE FROM travel_plans
+      WHERE time < DATE_SUB(NOW(), INTERVAL 24 HOUR)
   `;
-
-  db.query(fetchQuery, (fetchErr, results) => {
-    if (fetchErr) {
-      console.error('Fetch Error:', fetchErr);
-      return res.status(500).json({ success: false, message: 'DB error' });
+  db.query(deleteQuery, (deleteErr) => {
+    if (deleteErr) {
+      console.error('Delete Error:', deleteErr);
+      return res.status(500).json({ success: false, message: `Cleanup 
+failed` });
     }
-    res.json({ success: true, users: results });
+
+    const fetchQuery = `
+      SELECT users.name AS username, travel_plans.destination,
+             travel_plans.time AS time
+      FROM travel_plans
+      INNER JOIN users ON travel_plans.user_id = users.id
+      ORDER BY travel_plans.time DESC
+    `;
+
+    db.query(fetchQuery, (fetchErr, results) => {
+      if (fetchErr) {
+        console.error('Fetch Error:', fetchErr);
+        return res.status(500).json({ success: false, message: 'DB error' 
+});
+      }
+      res.json({ success: true, users: results });
+    });
   });
 });
 
-
-// ✅ Health check
+// 🟢 Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// 🔄 Root route
+// 🔄 Default root
 app.get('/', (req, res) => {
   res.send('✅ Backend is working!');
 });
 
-// 🚀 Start server
-const PORT = process.env.PORT || 3000;
+// 🌐 Start server
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
