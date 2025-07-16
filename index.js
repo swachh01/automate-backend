@@ -142,17 +142,6 @@ app.get('/getUserTravelPlan', (req, res) => {
 
 // 🧹 Get Travel Plans (Recent only)
 app.get('/getTravelPlans', (req, res) => {
-  const deleteQuery = `
-      DELETE FROM travel_plans
-      WHERE time < DATE_SUB(NOW(), INTERVAL 24 HOUR)
-  `;
-  db.query(deleteQuery, (deleteErr) => {
-    if (deleteErr) {
-      console.error('Delete Error:', deleteErr);
-      return res.status(500).json({ success: false, message: `Cleanup 
-failed` });
-    }
-
     const fetchQuery = `
       SELECT users.name AS username, travel_plans.destination,
              travel_plans.time AS time
