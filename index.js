@@ -158,7 +158,6 @@ app.get('/getTravelPlans', (req, res) => {
       }
       res.json({ success: true, users: results });
     });
-  });
 });
 
 // 🟢 Health check
