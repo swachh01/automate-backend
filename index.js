@@ -143,12 +143,16 @@ app.get('/getUserTravelPlan', (req, res) => {
 // 🧹 Get Travel Plans (Recent only)
 app.get('/getTravelPlans', (req, res) => {
     const fetchQuery = `
-      SELECT users.name AS username, travel_plans.destination,
-             travel_plans.time AS time
-      FROM travel_plans
-      INNER JOIN users ON travel_plans.user_id = users.id
-      WHERE travel_plans.time >= CONVERT_TZ(NOW(), '+00:00', '+05:30')
-      ORDER BY travel_plans.time DESC
+SELECT 
+      users.id AS userId,
+      users.name AS username,
+      users.college AS college,
+      travel_plans.destination,
+      travel_plans.time AS time
+    FROM travel_plans
+    INNER JOIN users ON travel_plans.user_id = users.id
+    WHERE travel_plans.time >= UTC_TIMESTAMP()
+    ORDER BY travel_plans.time DESC
     `;
 
     db.query(fetchQuery, (fetchErr, results) => {
