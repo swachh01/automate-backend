@@ -140,29 +140,42 @@ app.get('/getUserTravelPlan', (req, res) => {
   });
 });
 
-// 🧹 Get Travel Plans (Recent only)
+// 🧹 Delete expired travel plans and fetch valid ones
 app.get('/getTravelPlans', (req, res) => {
+  const deleteQuery = `
+    DELETE FROM travel_plans
+    WHERE time < UTC_TIMESTAMP()
+  `;
+
+  db.query(deleteQuery, (deleteErr) => {
+    if (deleteErr) {
+      console.error('Delete Error:', deleteErr);
+      return res.status(500).json({ success: false, message: `Delete 
+failed` });
+    }
+
     const fetchQuery = `
-SELECT 
-      users.id AS userId,
-      users.name AS username,
-      users.college AS college,
-      travel_plans.destination,
-      travel_plans.time AS time
-    FROM travel_plans
-    INNER JOIN users ON travel_plans.user_id = users.id
-    WHERE travel_plans.time >= UTC_TIMESTAMP()
-    ORDER BY travel_plans.time DESC
+      SELECT 
+        users.id AS userId,
+        users.name AS username,
+        users.college AS college,
+        travel_plans.destination,
+        travel_plans.time AS time
+      FROM travel_plans
+      INNER JOIN users ON travel_plans.user_id = users.id
+      WHERE travel_plans.time >= UTC_TIMESTAMP()
+      ORDER BY travel_plans.time DESC
     `;
 
     db.query(fetchQuery, (fetchErr, results) => {
       if (fetchErr) {
         console.error('Fetch Error:', fetchErr);
-        return res.status(500).json({ success: false, message: 'DB error' 
-});
+        return res.status(500).json({ success: false, message: `Fetch 
+failed` });
       }
       res.json({ success: true, users: results });
     });
+  });
 });
 
 // 🟢 Health check
