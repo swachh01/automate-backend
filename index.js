@@ -180,7 +180,6 @@ failed` });
 
 // 🟢 Health check
 app.get('/health', (req, res) => {
-  console.log('Health check hit');
   res.status(200).json({ status: 'ok' });
 });
 
