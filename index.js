@@ -140,11 +140,11 @@ app.get('/getUserTravelPlan', (req, res) => {
   });
 });
 
-// 🧹 Delete expired travel plans and fetch valid ones
+// 🧹 Delete expired travel plans and fetch valid ones (IST/local time)
 app.get('/getTravelPlans', (req, res) => {
   const deleteQuery = `
     DELETE FROM travel_plans
-    WHERE time < UTC_TIMESTAMP()
+    WHERE time < NOW()
   `;
 
   db.query(deleteQuery, (deleteErr) => {
@@ -155,7 +155,7 @@ failed` });
     }
 
     const fetchQuery = `
-      SELECT 
+      SELECT
         users.id AS userId,
         users.name AS username,
         users.college AS college,
@@ -163,7 +163,7 @@ failed` });
         travel_plans.time AS time
       FROM travel_plans
       INNER JOIN users ON travel_plans.user_id = users.id
-      WHERE travel_plans.time >= UTC_TIMESTAMP()
+      WHERE travel_plans.time >= NOW()
       ORDER BY travel_plans.time DESC
     `;
 
@@ -190,7 +190,7 @@ app.get('/', (req, res) => {
 
 // 🌐 Start server
 const PORT = process.env.PORT || 8080;
-app.listen(PORT,'0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
 
