@@ -7,7 +7,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Use Railway MySQL connection pool
+// ✅ MySQL connection pool
 const db = mysql.createPool({
   host: process.env.MYSQLHOST,
   user: process.env.MYSQLUSER,
@@ -140,11 +140,11 @@ app.get('/getUserTravelPlan', (req, res) => {
   });
 });
 
-// 🧹 Delete expired travel plans and fetch valid ones (IST/local time)
+// 🧹 Delete expired travel plans and fetch valid ones — always use IST
 app.get('/getTravelPlans', (req, res) => {
   const deleteQuery = `
     DELETE FROM travel_plans
-    WHERE time < NOW()
+    WHERE time < CONVERT_TZ(NOW(), '+00:00', '+05:30')
   `;
 
   db.query(deleteQuery, (deleteErr) => {
@@ -163,7 +163,7 @@ failed` });
         travel_plans.time AS time
       FROM travel_plans
       INNER JOIN users ON travel_plans.user_id = users.id
-      WHERE travel_plans.time >= NOW()
+      WHERE travel_plans.time >= CONVERT_TZ(NOW(), '+00:00', '+05:30')
       ORDER BY travel_plans.time DESC
     `;
 
