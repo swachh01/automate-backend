@@ -7,7 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ MySQL connection pool
 const db = mysql.createPool({
   host: process.env.MYSQLHOST,
   user: process.env.MYSQLUSER,
@@ -19,7 +18,7 @@ const db = mysql.createPool({
   queueLimit: 0
 });
 
-// 📌 Test DB connection
+// Test DB connection
 db.getConnection((err, connection) => {
   if (err) {
     console.error('❌ Failed to connect to MySQL:', err.message);
@@ -30,7 +29,7 @@ db.getConnection((err, connection) => {
   }
 });
 
-// 🔐 Signup
+// Signup
 app.post('/signup', (req, res) => {
   const { name, college, password } = req.body;
   if (!name || !college || !password) {
@@ -50,7 +49,7 @@ error` });
   });
 });
 
-// 🔐 Login
+// Login
 app.post('/login', (req, res) => {
   const { name, password } = req.body;
   if (!name || !password) {
@@ -77,13 +76,16 @@ user.id, name: user.name });
   });
 });
 
-// ✏️ Add or Update Travel Plan
+// Add or Update Travel Plan (convert IST → UTC before saving)
 app.post('/addTravelPlan', (req, res) => {
   const { userId, destination, time } = req.body;
   if (!userId || !destination || !time) {
     return res.status(400).json({ success: false, message: `Missing 
 fields` });
   }
+
+  // Convert incoming IST time to UTC before storing
+  const convertToUTC = `CONVERT_TZ(?, '+05:30', '+00:00')`;
 
   const checkQuery = `SELECT * FROM travel_plans WHERE user_id = ?`;
   db.query(checkQuery, [userId], (err, results) => {
@@ -95,7 +97,7 @@ fields` });
 
     if (results.length > 0) {
       const updateQuery = `UPDATE travel_plans SET destination = ?, time = 
-? WHERE user_id = ?`;
+${convertToUTC} WHERE user_id = ?`;
       db.query(updateQuery, [destination, time, userId], (err) => {
         if (err) {
           console.error('Update error:', err);
@@ -106,7 +108,7 @@ failed` });
       });
     } else {
       const insertQuery = `INSERT INTO travel_plans (user_id, destination, 
-time) VALUES (?, ?, ?)`;
+time) VALUES (?, ?, ${convertToUTC})`;
       db.query(insertQuery, [userId, destination, time], (err) => {
         if (err) {
           console.error('Insert error:', err);
@@ -119,14 +121,18 @@ failed` });
   });
 });
 
-// 👤 Get Current User's Travel Plan
+// Get Current User's Travel Plan (return in ISO 8601)
 app.get('/getUserTravelPlan', (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ success: false, message: 
 'Missing userId' });
 
-  const query = `SELECT destination, time FROM travel_plans WHERE user_id 
-= ?`;
+  const query = `
+    SELECT destination, DATE_FORMAT(CONVERT_TZ(time, '+00:00', '+05:30'), 
+'%Y-%m-%dT%H:%i:%s.000Z') AS time
+    FROM travel_plans
+    WHERE user_id = ?
+  `;
   db.query(query, [userId], (err, results) => {
     if (err) {
       console.error('Fetch error:', err);
@@ -140,11 +146,11 @@ app.get('/getUserTravelPlan', (req, res) => {
   });
 });
 
-// 🧹 Delete expired travel plans and fetch valid ones — always use IST
+// Delete expired travel plans and fetch valid ones (always in IST)
 app.get('/getTravelPlans', (req, res) => {
   const deleteQuery = `
     DELETE FROM travel_plans
-    WHERE time < CONVERT_TZ(NOW(), '+00:00', '+05:30')
+    WHERE CONVERT_TZ(time, '+00:00', '+05:30') < NOW()
   `;
 
   db.query(deleteQuery, (deleteErr) => {
@@ -160,10 +166,11 @@ failed` });
         users.name AS username,
         users.college AS college,
         travel_plans.destination,
-        travel_plans.time AS time
+        DATE_FORMAT(CONVERT_TZ(travel_plans.time, '+00:00', '+05:30'), 
+'%Y-%m-%dT%H:%i:%s.000Z') AS time
       FROM travel_plans
       INNER JOIN users ON travel_plans.user_id = users.id
-      WHERE travel_plans.time >= CONVERT_TZ(NOW(), '+00:00', '+05:30')
+      WHERE CONVERT_TZ(travel_plans.time, '+00:00', '+05:30') >= NOW()
       ORDER BY travel_plans.time DESC
     `;
 
@@ -178,17 +185,15 @@ failed` });
   });
 });
 
-// 🟢 Health check
+// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// 🔄 Default root
 app.get('/', (req, res) => {
   res.send('✅ Backend is working!');
 });
 
-// 🌐 Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on ${PORT}`);
