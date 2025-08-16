@@ -78,6 +78,26 @@ user.id, name: user.name });
   });
 });
 
+// Get all travel plans with user details
+app.get("/going-users", (req, res) => {
+  const query = `
+    SELECT users.id AS userId, users.name AS username, users.college, 
+           travel_plans.destination, travel_plans.time 
+    FROM travel_plans
+    JOIN users ON travel_plans.user_id = users.id
+    ORDER BY travel_plans.time ASC
+  `;
+
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error("Error fetching going users:", err);
+      return res.status(500).json({ success: false, message: "Database error" });
+    }
+    res.json({ success: true, users: results });
+  });
+});
+
+
 // ===================== TRAVEL PLANS =====================
 
 // Add or Update Travel Plan (store UTC, accept IST)
