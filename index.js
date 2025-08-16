@@ -77,40 +77,42 @@ user.id, name: user.name });
 });
 
 // Add or Update Travel Plan (store in UTC)
+// Add or Update Travel Plan (convert IST to UTC before storing)
 app.post('/addTravelPlan', (req, res) => {
   const { userId, destination, time } = req.body;
   if (!userId || !destination || !time) {
-    return res.status(400).json({ success: false, message: `Missing 
-fields` });
+    return res.status(400).json({ success: false, message: `Missing fields` });
   }
 
   const checkQuery = `SELECT * FROM travel_plans WHERE user_id = ?`;
   db.query(checkQuery, [userId], (err, results) => {
     if (err) {
       console.error('Check error:', err);
-      return res.status(500).json({ success: false, message: 'DB error' 
-});
+      return res.status(500).json({ success: false, message: 'DB error' });
     }
 
     if (results.length > 0) {
-      const updateQuery = `UPDATE travel_plans SET destination = ?, time = 
-CONVERT_TZ(?, '+05:30', '+00:00') WHERE user_id = ?`;
+      const updateQuery = `
+        UPDATE travel_plans 
+        SET destination = ?, time = CONVERT_TZ(?, '+05:30', '+00:00') 
+        WHERE user_id = ?
+      `;
       db.query(updateQuery, [destination, time, userId], (err) => {
         if (err) {
           console.error('Update error:', err);
-          return res.status(500).json({ success: false, message: `Update 
-failed` });
+          return res.status(500).json({ success: false, message: `Update failed` });
         }
         res.json({ success: true, message: 'Travel plan updated' });
       });
     } else {
-      const insertQuery = `INSERT INTO travel_plans (user_id, destination, 
-time) VALUES (?, ?, CONVERT_TZ(?, '+05:30', '+00:00'))`;
+      const insertQuery = `
+        INSERT INTO travel_plans (user_id, destination, time) 
+        VALUES (?, ?, CONVERT_TZ(?, '+05:30', '+00:00'))
+      `;
       db.query(insertQuery, [userId, destination, time], (err) => {
         if (err) {
           console.error('Insert error:', err);
-          return res.status(500).json({ success: false, message: `Insert 
-failed` });
+          return res.status(500).json({ success: false, message: `Insert failed` });
         }
         res.json({ success: true, message: 'Travel plan added' });
       });
@@ -118,23 +120,21 @@ failed` });
   });
 });
 
-// Get Current User's Travel Plan (return IST formatted nicely)
+// Get Current User's Travel Plan (always return IST)
 app.get('/getUserTravelPlan', (req, res) => {
   const userId = req.query.userId;
-  if (!userId) return res.status(400).json({ success: false, message: 
-'Missing userId' });
+  if (!userId) return res.status(400).json({ success: false, message: 'Missing userId' });
 
   const query = `
-    SELECT destination, DATE_FORMAT(CONVERT_TZ(time, '+00:00', '+05:30'), 
-'%d/%m/%Y %H:%i') AS time
+    SELECT destination, 
+           DATE_FORMAT(CONVERT_TZ(time, '+00:00', '+05:30'), '%Y-%m-%d %H:%i:%s') AS time
     FROM travel_plans
     WHERE user_id = ?
   `;
   db.query(query, [userId], (err, results) => {
     if (err) {
       console.error('Fetch error:', err);
-      return res.status(500).json({ success: false, message: 'DB error' 
-});
+      return res.status(500).json({ success: false, message: 'DB error' });
     }
     if (results.length === 0) {
       return res.json(null);
@@ -153,8 +153,7 @@ app.get('/getTravelPlans', (req, res) => {
   db.query(deleteQuery, (deleteErr) => {
     if (deleteErr) {
       console.error('Delete Error:', deleteErr);
-      return res.status(500).json({ success: false, message: `Delete 
-failed` });
+      return res.status(500).json({ success: false, message: `Delete failed` });
     }
 
     const fetchQuery = `
@@ -163,24 +162,23 @@ failed` });
         users.name AS username,
         users.college AS college,
         travel_plans.destination,
-        DATE_FORMAT(CONVERT_TZ(travel_plans.time, '+00:00', '+05:30'), 
-'%d/%m/%Y %H:%i') AS time
+        DATE_FORMAT(CONVERT_TZ(travel_plans.time, '+00:00', '+05:30'), '%d/%m/%Y %H:%i') AS time
       FROM travel_plans
       INNER JOIN users ON travel_plans.user_id = users.id
       WHERE CONVERT_TZ(travel_plans.time, '+00:00', '+05:30') >= NOW()
-      ORDER BY travel_plans.time DESC
+      ORDER BY travel_plans.time ASC
     `;
 
     db.query(fetchQuery, (fetchErr, results) => {
       if (fetchErr) {
         console.error('Fetch Error:', fetchErr);
-        return res.status(500).json({ success: false, message: `Fetch 
-failed` });
+        return res.status(500).json({ success: false, message: `Fetch failed` });
       }
       res.json({ success: true, users: results });
     });
   });
 });
+
 
 // Health check
 app.get('/health', (req, res) => {
