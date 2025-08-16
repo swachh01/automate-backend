@@ -76,16 +76,13 @@ user.id, name: user.name });
   });
 });
 
-// Add or Update Travel Plan (convert IST → UTC before saving)
+// Add or Update Travel Plan (store in UTC)
 app.post('/addTravelPlan', (req, res) => {
   const { userId, destination, time } = req.body;
   if (!userId || !destination || !time) {
     return res.status(400).json({ success: false, message: `Missing 
 fields` });
   }
-
-  // Convert incoming IST time to UTC before storing
-  const convertToUTC = `CONVERT_TZ(?, '+05:30', '+00:00')`;
 
   const checkQuery = `SELECT * FROM travel_plans WHERE user_id = ?`;
   db.query(checkQuery, [userId], (err, results) => {
@@ -97,7 +94,7 @@ fields` });
 
     if (results.length > 0) {
       const updateQuery = `UPDATE travel_plans SET destination = ?, time = 
-${convertToUTC} WHERE user_id = ?`;
+CONVERT_TZ(?, '+05:30', '+00:00') WHERE user_id = ?`;
       db.query(updateQuery, [destination, time, userId], (err) => {
         if (err) {
           console.error('Update error:', err);
@@ -108,7 +105,7 @@ failed` });
       });
     } else {
       const insertQuery = `INSERT INTO travel_plans (user_id, destination, 
-time) VALUES (?, ?, ${convertToUTC})`;
+time) VALUES (?, ?, CONVERT_TZ(?, '+05:30', '+00:00'))`;
       db.query(insertQuery, [userId, destination, time], (err) => {
         if (err) {
           console.error('Insert error:', err);
@@ -121,7 +118,7 @@ failed` });
   });
 });
 
-// Get Current User's Travel Plan (return in ISO 8601)
+// Get Current User's Travel Plan (return IST formatted nicely)
 app.get('/getUserTravelPlan', (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ success: false, message: 
@@ -129,7 +126,7 @@ app.get('/getUserTravelPlan', (req, res) => {
 
   const query = `
     SELECT destination, DATE_FORMAT(CONVERT_TZ(time, '+00:00', '+05:30'), 
-'%Y-%m-%dT%H:%i:%s.000Z') AS time
+'%d/%m/%Y %H:%i') AS time
     FROM travel_plans
     WHERE user_id = ?
   `;
@@ -146,7 +143,7 @@ app.get('/getUserTravelPlan', (req, res) => {
   });
 });
 
-// Delete expired travel plans and fetch valid ones (always in IST)
+// Delete expired travel plans and fetch valid ones (IST only)
 app.get('/getTravelPlans', (req, res) => {
   const deleteQuery = `
     DELETE FROM travel_plans
@@ -167,7 +164,7 @@ failed` });
         users.college AS college,
         travel_plans.destination,
         DATE_FORMAT(CONVERT_TZ(travel_plans.time, '+00:00', '+05:30'), 
-'%Y-%m-%dT%H:%i:%s.000Z') AS time
+'%d/%m/%Y %H:%i') AS time
       FROM travel_plans
       INNER JOIN users ON travel_plans.user_id = users.id
       WHERE CONVERT_TZ(travel_plans.time, '+00:00', '+05:30') >= NOW()
