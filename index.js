@@ -98,6 +98,93 @@ app.get("/going-users", (req, res) => {
 });
 
 
+// ===================== CHAT =====================
+
+// Send a message
+app.post('/sendMessage', (req, res) => {
+  const { senderId, receiverId, message } = req.body;
+
+  if (!senderId || !receiverId || !message) {
+    return res.status(400).json({ success: false, message: `Missing 
+fields` });
+  }
+
+  const query = `INSERT INTO messages (sender_id, receiver_id, message) 
+VALUES (?, ?, ?)`;
+  db.query(query, [senderId, receiverId, message], (err, result) => {
+    if (err) {
+      console.error('DB Error (sendMessage):', err);
+      return res.status(500).json({ success: false, message: `Database 
+error` });
+    }
+    res.json({ success: true, message: 'Message sent', messageId: 
+result.insertId });
+  });
+});
+
+// Get messages between two users (chat history)
+app.get('/getMessages', (req, res) => {
+  const { senderId, receiverId } = req.query;
+
+  if (!senderId || !receiverId) {
+    return res.status(400).json({ success: false, message: `Missing 
+senderId or receiverId` });
+  }
+
+  const query = `
+    SELECT id, sender_id AS senderId, receiver_id AS receiverId, message,
+           DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp
+    FROM messages
+    WHERE (sender_id = ? AND receiver_id = ?)
+       OR (sender_id = ? AND receiver_id = ?)
+    ORDER BY timestamp ASC
+  `;
+
+  db.query(query, [senderId, receiverId, receiverId, senderId], (err, 
+results) => {
+    if (err) {
+      console.error('DB Error (getMessages):', err);
+      return res.status(500).json({ success: false, message: `Database 
+error` });
+    }
+    res.json({ success: true, messages: results });
+  });
+});
+
+// Fetch recent chats (for ChatListActivity)
+app.get('/getChatUsers', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ success: false, message: 'Missing userId' });
+  }
+
+  const query = `
+    SELECT u.id, u.name AS username,
+           (SELECT m.message FROM messages m
+            WHERE (m.sender_id = u.id AND m.receiver_id = ?)
+               OR (m.sender_id = ? AND m.receiver_id = u.id)
+            ORDER BY m.timestamp DESC LIMIT 1) AS lastMessage,
+           (SELECT m.timestamp FROM messages m
+            WHERE (m.sender_id = u.id AND m.receiver_id = ?)
+               OR (m.sender_id = ? AND m.receiver_id = u.id)
+            ORDER BY m.timestamp DESC LIMIT 1) AS timestamp
+    FROM users u
+    WHERE u.id != ?
+    HAVING lastMessage IS NOT NULL
+    ORDER BY timestamp DESC;
+  `;
+
+  db.query(query, [userId, userId, userId, userId, userId], (err, results) => {
+    if (err) {
+      console.error('DB Error (getChatUsers):', err);
+      return res.status(500).json({ success: false, message: 'Database error' });
+    }
+    res.json({ success: true, chats: results });
+  });
+});
+
+
+
 // ===================== TRAVEL PLANS =====================
 
 // Add or Update Travel Plan (store UTC, accept IST)
