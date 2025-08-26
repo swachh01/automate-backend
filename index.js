@@ -105,20 +105,16 @@ app.post('/sendMessage', (req, res) => {
   const { senderId, receiverId, message } = req.body;
 
   if (!senderId || !receiverId || !message) {
-    return res.status(400).json({ success: false, message: `Missing 
-fields` });
+    return res.status(400).json({ success: false, message: `Missing fields` });
   }
 
-  const query = `INSERT INTO messages (sender_id, receiver_id, message) 
-VALUES (?, ?, ?)`;
+  const query = `INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)`;
   db.query(query, [senderId, receiverId, message], (err, result) => {
     if (err) {
       console.error('DB Error (sendMessage):', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
+      return res.status(500).json({ success: false, message: `Database error` });
     }
-    res.json({ success: true, message: 'Message sent', messageId: 
-result.insertId });
+    res.json({ success: true, message: 'Message sent', messageId: result.insertId });
   });
 });
 
@@ -127,8 +123,7 @@ app.get('/getMessages', (req, res) => {
   const { senderId, receiverId } = req.query;
 
   if (!senderId || !receiverId) {
-    return res.status(400).json({ success: false, message: `Missing 
-senderId or receiverId` });
+    return res.status(400).json({ success: false, message: `Missing senderId or receiverId` });
   }
 
   const query = `
@@ -140,18 +135,16 @@ senderId or receiverId` });
     ORDER BY timestamp ASC
   `;
 
-  db.query(query, [senderId, receiverId, receiverId, senderId], (err, 
-results) => {
+  db.query(query, [senderId, receiverId, receiverId, senderId], (err, results) => {
     if (err) {
       console.error('DB Error (getMessages):', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
+      return res.status(500).json({ success: false, message: `Database error` });
     }
     res.json({ success: true, messages: results });
   });
 });
 
-// Fetch recent chats (for ChatListActivity)
+// Fetch recent chats (for ChatListActivity) → all past chats retained
 app.get('/getChatUsers', (req, res) => {
   const { userId } = req.query;
   if (!userId) {
@@ -180,6 +173,29 @@ app.get('/getChatUsers', (req, res) => {
       return res.status(500).json({ success: false, message: 'Database error' });
     }
     res.json({ success: true, chats: results });
+  });
+});
+
+// ✅ Delete an entire chat between two users
+app.delete('/deleteChat/:userId/:otherUserId', (req, res) => {
+  const { userId, otherUserId } = req.params;
+
+  if (!userId || !otherUserId) {
+    return res.status(400).json({ success: false, message: 'Missing userId or otherUserId' });
+  }
+
+  const query = `
+    DELETE FROM messages
+    WHERE (sender_id = ? AND receiver_id = ?)
+       OR (sender_id = ? AND receiver_id = ?)
+  `;
+
+  db.query(query, [userId, otherUserId, otherUserId, userId], (err, result) => {
+    if (err) {
+      console.error('DB Error (deleteChat):', err);
+      return res.status(500).json({ success: false, message: 'Database error' });
+    }
+    res.json({ success: true, message: 'Chat deleted successfully' });
   });
 });
 
