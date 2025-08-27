@@ -265,6 +265,23 @@ error` });
   });
 });
 
+// DELETE a single message
+app.delete("/deleteMessage/:messageId", (req, res) => {
+    const { messageId } = req.params;
+
+    db.query("DELETE FROM messages WHERE id = ?", [messageId], (err, result) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ success: false, message: "Database error" });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ success: false, message: "Message not found" });
+        }
+        res.json({ success: true, message: "Message deleted successfully" });
+    });
+});
+
+
 
 // ===================== TRAVEL PLANS =====================
 
@@ -283,4 +300,3 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
-
