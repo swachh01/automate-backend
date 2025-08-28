@@ -1,13 +1,13 @@
 const express = require('express');
+const bodyParser = require('body-parser');
 const mysql = require('mysql2');
 const cors = require('cors');
-require('dotenv').config();
 
 const app = express();
+app.use(bodyParser.json());
 app.use(cors());
-app.use(express.json());
 
-// ===================== DB CONNECTION =====================
+// MySQL connection
 const db = mysql.createPool({
   host: process.env.MYSQLHOST,
   user: process.env.MYSQLUSER,
@@ -16,229 +16,150 @@ const db = mysql.createPool({
   port: process.env.MYSQLPORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0,
+  queueLimit: 0
 });
 
-// ✅ Test DB connection
-db.getConnection((err, connection) => {
-  if (err) {
-    console.error('❌ Failed to connect to MySQL:', err.message);
-    process.exit(1);
-  } else {
-    console.log('✅ Connected to MySQL database');
-    connection.release();
-  }
-});
-
-// ===================== AUTH =====================
-// Signup
-app.post('/signup', (req, res) => {
+/* ---------------- AUTH ---------------- */
+app.post('/signup', async (req, res) => {
   const { name, college, password } = req.body;
-  if (!name || !college || !password) {
-    return res.status(400).json({ success: false, message: `Missing 
-fields` });
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    db.query(
+      `INSERT INTO users (name, college, password) VALUES (?, ?, ?)`,
+      [name, college, hashedPassword],
+      (err, result) => {
+        if (err) return res.json({ success: false, message: `Signup 
+failed` });
+        res.json({ success: true, userId: result.insertId });
+      }
+    );
+  } catch (err) {
+    res.json({ success: false, message: 'Error creating account' });
   }
-
-  const query = `INSERT INTO users (name, college, password) VALUES (?, ?, 
-?)`;
-  db.query(query, [name, college, password], (err) => {
-    if (err) {
-      console.error("DB Error:", err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
-    res.json({ success: true, message: 'User created' });
-  });
 });
 
-// Login
 app.post('/login', (req, res) => {
   const { name, password } = req.body;
-  if (!name || !password) {
-    return res.status(400).json({ success: false, message: `Missing 
+  db.query('SELECT * FROM users WHERE name = ?', [name], async (err, 
+results) => {
+    if (err || results.length === 0) {
+      return res.json({ success: false, message: 'Invalid credentials' });
+    }
+    const user = results[0];
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.json({ success: false, message: `Invalid 
 credentials` });
-  }
 
-  const query = 'SELECT * FROM users WHERE name = ? AND password = ?';
-  db.query(query, [name, password], (err, results) => {
-    if (err) {
-      console.error('DB Error:', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
-    if (results.length > 0) {
-      const user = results[0];
-      res.json({
-        success: true,
-        message: 'Login successful',
-        userId: user.id,
-        name: user.name
-      });
-    } else {
-      res.json({ success: false, message: 'Invalid username or password' 
-});
-    }
+    res.json({ success: true, userId: user.id, name: user.name, college: 
+user.college });
   });
 });
 
-// Get all travel plans with user details
-app.get("/going-users", (req, res) => {
-  const query = `
-    SELECT users.id AS userId, users.name AS username, users.college,
-           travel_plans.destination, travel_plans.time
-    FROM travel_plans
-    JOIN users ON travel_plans.user_id = users.id
-    ORDER BY travel_plans.time ASC
-  `;
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error("Error fetching going users:", err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
-    res.json({ success: true, users: results });
-  });
-});
-
-// ===================== CHAT =====================
-// Send a message
-app.post('/sendMessage', (req, res) => {
-  const { senderId, receiverId, message } = req.body;
-  if (!senderId || !receiverId || !message) {
-    return res.status(400).json({ success: false, message: `Missing 
-fields` });
-  }
-
-  const query = `INSERT INTO messages (sender_id, receiver_id, message, 
-is_read) VALUES (?, ?, ?, 0)`;
-  db.query(query, [senderId, receiverId, message], (err, result) => {
-    if (err) {
-      console.error('DB Error (sendMessage):', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
-    res.json({ success: true, message: 'Message sent', messageId: 
-result.insertId });
-  });
-});
-
-// Get messages between two users
-app.get('/getMessages', (req, res) => {
-  const { senderId, receiverId } = req.query;
-  if (!senderId || !receiverId) {
-    return res.status(400).json({ success: false, message: `Missing 
-senderId or receiverId` });
-  }
-
-  const query = `
-    SELECT id, sender_id AS senderId, receiver_id AS receiverId, message,
-           DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp, 
-is_read
-    FROM messages
-    WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND 
-receiver_id = ?)
-    ORDER BY timestamp ASC
-  `;
-  db.query(query, [senderId, receiverId, receiverId, senderId], (err, 
-results) => {
-    if (err) {
-      console.error('DB Error (getMessages):', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
-    res.json({ success: true, messages: results });
-  });
-});
-
-// Mark messages as read
-app.post('/markMessagesRead', (req, res) => {
-  const { userId, otherUserId } = req.body;
-  if (!userId || !otherUserId) {
-    return res.status(400).json({ success: false, message: `Missing userId 
-or otherUserId` });
-  }
-
-  const query = `UPDATE messages SET is_read = 1 WHERE sender_id = ? AND 
-receiver_id = ? AND is_read = 0`;
-  db.query(query, [otherUserId, userId], (err) => {
-    if (err) {
-      console.error('DB Error (markMessagesRead):', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
-    res.json({ success: true, message: 'Messages marked as read' });
-  });
-});
-
-// Get unread chats count
-app.get('/getUnreadChatsCount', (req, res) => {
-  const { userId } = req.query;
-  if (!userId) {
-    return res.status(400).json({ success: false, message: `Missing 
-userId` });
-  }
-
-  const query = `SELECT COUNT(DISTINCT sender_id) AS unreadChats FROM 
-messages WHERE receiver_id = ? AND is_read = 0`;
-  db.query(query, [userId], (err, results) => {
-    if (err) {
-      console.error('DB Error (getUnreadChatsCount):', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
-    res.json({ success: true, unreadChats: results[0].unreadChats });
-  });
-});
-
-// Fetch recent chats
-app.get('/getChatUsers', (req, res) => {
-  const { userId } = req.query;
-  if (!userId) {
-    return res.status(400).json({ success: false, message: `Missing 
-userId` });
-  }
-
-  const query = `
-    SELECT u.id, u.name AS username,
-      (SELECT m.message FROM messages m
-       WHERE (m.sender_id = u.id AND m.receiver_id = ?) OR (m.sender_id = 
-? AND m.receiver_id = u.id)
-       ORDER BY m.timestamp DESC LIMIT 1) AS lastMessage,
-      (SELECT m.timestamp FROM messages m
-       WHERE (m.sender_id = u.id AND m.receiver_id = ?) OR (m.sender_id = 
-? AND m.receiver_id = u.id)
-       ORDER BY m.timestamp DESC LIMIT 1) AS timestamp,
-      (SELECT COUNT(*) FROM messages m
-       WHERE m.sender_id = u.id AND m.receiver_id = ? AND m.is_read = 0) 
-AS unreadCount
+/* ---------------- CHATS ---------------- */
+// Fetch chat list (with unread count)
+app.get('/chats/:userId', (req, res) => {
+  const { userId } = req.params;
+  const sql = `
+    SELECT u.id, u.name, u.college,
+      (SELECT COUNT(*) FROM messages m 
+       WHERE m.receiver_id = ? AND m.sender_id = u.id AND m.is_read = 0) 
+AS unread_count
     FROM users u
-    WHERE u.id != ?
-    HAVING lastMessage IS NOT NULL
-    ORDER BY timestamp DESC
-  `;
-  db.query(query, [userId, userId, userId, userId, userId, userId], (err, 
-results) => {
-    if (err) {
-      console.error('DB Error (getChatUsers):', err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
-    }
+    WHERE u.id IN (
+      SELECT DISTINCT CASE 
+        WHEN sender_id = ? THEN receiver_id 
+        ELSE sender_id 
+      END AS chat_user
+      FROM messages
+      WHERE sender_id = ? OR receiver_id = ?
+    )`;
+  db.query(sql, [userId, userId, userId, userId], (err, results) => {
+    if (err) return res.json({ success: false, message: `Failed to load 
+chats` });
     res.json({ success: true, chats: results });
   });
 });
 
-// ===================== MISC =====================
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
+// Fetch messages between two users
+app.get('/messages/:userId/:otherUserId', (req, res) => {
+  const { userId, otherUserId } = req.params;
+  db.query(
+    `SELECT * FROM messages 
+     WHERE (sender_id = ? AND receiver_id = ?) 
+        OR (sender_id = ? AND receiver_id = ?) 
+     ORDER BY timestamp ASC`,
+    [userId, otherUserId, otherUserId, userId],
+    (err, results) => {
+      if (err) return res.json({ success: false, message: `Failed to load 
+messages` });
+
+      // mark as read
+      db.query(
+        `UPDATE messages SET is_read = 1 WHERE sender_id = ? AND 
+receiver_id = ?`,
+        [otherUserId, userId]
+      );
+
+      res.json({ success: true, messages: results });
+    }
+  );
 });
 
-app.get('/', (req, res) => {
-  res.send('✅ Backend is working!');
+// Send message
+app.post('/messages', (req, res) => {
+  const { sender_id, receiver_id, content } = req.body;
+  db.query(
+    `INSERT INTO messages (sender_id, receiver_id, content, is_read) 
+VALUES (?, ?, ?, 0)`,
+    [sender_id, receiver_id, content],
+    (err, result) => {
+      if (err) return res.json({ success: false, message: `Failed to send 
+message` });
+      res.json({ success: true, messageId: result.insertId });
+    }
+  );
 });
 
-// Start server
+/* ---------------- TRAVEL PLANS ---------------- */
+// Add or update travel plan
+app.post('/travel_plans', (req, res) => {
+  const { userId, destination, travel_time } = req.body;
+  db.query(
+    `INSERT INTO travel_plans (user_id, destination, travel_time) VALUES 
+(?, ?, ?) ON DUPLICATE KEY UPDATE destination = VALUES(destination), 
+travel_time = VALUES(travel_time)`,
+    [userId, destination, travel_time],
+    (err) => {
+      if (err) {
+        console.error(err);
+        return res.json({ success: false, message: `Failed to save travel 
+plan` });
+      }
+      res.json({ success: true, message: 'Travel plan saved' });
+    }
+  );
+});
+
+// Get all travel plans with user details
+app.get('/travel_plans', (req, res) => {
+  db.query(
+    `SELECT tp.id, tp.destination, tp.travel_time, u.name, u.college
+     FROM travel_plans tp
+     JOIN users u ON tp.user_id = u.id`,
+    (err, results) => {
+      if (err) {
+        console.error(err);
+        return res.json({ success: false, message: `Failed to fetch travel 
+plans` });
+      }
+      res.json({ success: true, plans: results });
+    }
+  );
+});
+
+/* ---------------- SERVER ---------------- */
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on ${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
 
