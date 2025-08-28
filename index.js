@@ -301,6 +301,22 @@ app.get('/', (req, res) => {
   res.send("✅ Backend is working!");
 });
 
+// Cleanup job to remove expired travel plans
+setInterval(async () => {
+  try {
+    const [result] = await db.query(
+      "DELETE FROM travel_plans WHERE travel_time <= NOW()"
+    );
+    if (result.affectedRows > 0) {
+      console.log(`Deleted ${result.affectedRows} expired travel 
+plan(s)`);
+    }
+  } catch (err) {
+    console.error("Error cleaning travel plans:", err);
+  }
+}, 60000); // runs every 1 minute
+
+
 // Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
