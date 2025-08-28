@@ -7,6 +7,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ===================== DB CONNECTION =====================
 const db = mysql.createPool({
   host: process.env.MYSQLHOST,
   user: process.env.MYSQLUSER,
@@ -15,7 +16,7 @@ const db = mysql.createPool({
   port: process.env.MYSQLPORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
 });
 
 // ✅ Test DB connection
@@ -30,7 +31,6 @@ db.getConnection((err, connection) => {
 });
 
 // ===================== AUTH =====================
-
 // Signup
 app.post('/signup', (req, res) => {
   const { name, college, password } = req.body;
@@ -66,11 +66,14 @@ credentials` });
       return res.status(500).json({ success: false, message: `Database 
 error` });
     }
-
     if (results.length > 0) {
       const user = results[0];
-      res.json({ success: true, message: 'Login successful', userId: 
-user.id, name: user.name });
+      res.json({
+        success: true,
+        message: 'Login successful',
+        userId: user.id,
+        name: user.name
+      });
     } else {
       res.json({ success: false, message: 'Invalid username or password' 
 });
@@ -87,7 +90,6 @@ app.get("/going-users", (req, res) => {
     JOIN users ON travel_plans.user_id = users.id
     ORDER BY travel_plans.time ASC
   `;
-
   db.query(query, (err, results) => {
     if (err) {
       console.error("Error fetching going users:", err);
@@ -98,51 +100,51 @@ error` });
   });
 });
 
-
-
 // ===================== CHAT =====================
-
-// Send a message (mark unread by default)
+// Send a message
 app.post('/sendMessage', (req, res) => {
   const { senderId, receiverId, message } = req.body;
   if (!senderId || !receiverId || !message) {
-    return res.status(400).json({ success: false, message: `Missing fields` });
+    return res.status(400).json({ success: false, message: `Missing 
+fields` });
   }
 
-  const query = `
-    INSERT INTO messages (sender_id, receiver_id, message, is_read, deleted_by)
-    VALUES (?, ?, ?, 0, JSON_ARRAY())
-  `;
+  const query = `INSERT INTO messages (sender_id, receiver_id, message, 
+is_read) VALUES (?, ?, ?, 0)`;
   db.query(query, [senderId, receiverId, message], (err, result) => {
     if (err) {
       console.error('DB Error (sendMessage):', err);
-      return res.status(500).json({ success: false, message: `Database error` });
+      return res.status(500).json({ success: false, message: `Database 
+error` });
     }
-    res.json({ success: true, message: 'Message sent', messageId: result.insertId });
+    res.json({ success: true, message: 'Message sent', messageId: 
+result.insertId });
   });
 });
 
-// Get messages between two users (excluding deleted_by current user)
+// Get messages between two users
 app.get('/getMessages', (req, res) => {
   const { senderId, receiverId } = req.query;
   if (!senderId || !receiverId) {
-    return res.status(400).json({ success: false, message: `Missing senderId or receiverId` });
+    return res.status(400).json({ success: false, message: `Missing 
+senderId or receiverId` });
   }
 
   const query = `
     SELECT id, sender_id AS senderId, receiver_id AS receiverId, message,
-           DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp,
-           is_read
+           DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp, 
+is_read
     FROM messages
-    WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-      AND NOT JSON_CONTAINS(COALESCE(deleted_by, JSON_ARRAY()), JSON_ARRAY(?))
+    WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND 
+receiver_id = ?)
     ORDER BY timestamp ASC
   `;
-
-  db.query(query, [senderId, receiverId, receiverId, senderId, senderId], (err, results) => {
+  db.query(query, [senderId, receiverId, receiverId, senderId], (err, 
+results) => {
     if (err) {
       console.error('DB Error (getMessages):', err);
-      return res.status(500).json({ success: false, message: `Database error` });
+      return res.status(500).json({ success: false, message: `Database 
+error` });
     }
     res.json({ success: true, messages: results });
   });
@@ -152,89 +154,78 @@ app.get('/getMessages', (req, res) => {
 app.post('/markMessagesRead', (req, res) => {
   const { userId, otherUserId } = req.body;
   if (!userId || !otherUserId) {
-    return res.status(400).json({ success: false, message: `Missing userId or otherUserId` });
+    return res.status(400).json({ success: false, message: `Missing userId 
+or otherUserId` });
   }
 
-  const query = `
-    UPDATE messages
-    SET is_read = 1
-    WHERE sender_id = ? AND receiver_id = ? AND is_read = 0
-  `;
+  const query = `UPDATE messages SET is_read = 1 WHERE sender_id = ? AND 
+receiver_id = ? AND is_read = 0`;
   db.query(query, [otherUserId, userId], (err) => {
     if (err) {
       console.error('DB Error (markMessagesRead):', err);
-      return res.status(500).json({ success: false, message: `Database error` });
+      return res.status(500).json({ success: false, message: `Database 
+error` });
     }
     res.json({ success: true, message: 'Messages marked as read' });
   });
 });
 
-// Delete a single message (soft delete)
-app.delete("/deleteMessage/:messageId/:userId", (req, res) => {
-  const { messageId, userId } = req.params;
-
-  const query = `
-    UPDATE messages
-    SET deleted_by = JSON_ARRAY_APPEND(COALESCE(deleted_by, JSON_ARRAY()), '$', ?)
-    WHERE id = ? AND NOT JSON_CONTAINS(COALESCE(deleted_by, JSON_ARRAY()), JSON_ARRAY(?))
-  `;
-
-  db.query(query, [userId, messageId, userId], (err, result) => {
-    if (err) {
-      console.error('DB Error (deleteMessage):', err);
-      return res.status(500).json({ success: false, message: "Database error" });
-    }
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: "Message not found or already deleted" });
-    }
-    res.json({ success: true, message: "Message deleted for user" });
-  });
-});
-
-// Delete entire chat (soft delete until both delete)
-app.delete('/deleteChat/:userId/:otherUserId', (req, res) => {
-  const { userId, otherUserId } = req.params;
-
-  if (!userId || !otherUserId) {
-    return res.status(400).json({ success: false, message: `Missing userId or otherUserId` });
+// Get unread chats count
+app.get('/getUnreadChatsCount', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ success: false, message: `Missing 
+userId` });
   }
 
-  // Step 1: Mark chat as deleted for this user
-  const query = `
-    UPDATE messages
-    SET deleted_by = JSON_ARRAY_APPEND(COALESCE(deleted_by, JSON_ARRAY()), '$', ?)
-    WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-      AND NOT JSON_CONTAINS(COALESCE(deleted_by, JSON_ARRAY()), JSON_ARRAY(?))
-  `;
-
-  db.query(query, [userId, userId, otherUserId, otherUserId, userId, userId], (err) => {
+  const query = `SELECT COUNT(DISTINCT sender_id) AS unreadChats FROM 
+messages WHERE receiver_id = ? AND is_read = 0`;
+  db.query(query, [userId], (err, results) => {
     if (err) {
-      console.error('DB Error (deleteChat):', err);
-      return res.status(500).json({ success: false, message: `Database error` });
+      console.error('DB Error (getUnreadChatsCount):', err);
+      return res.status(500).json({ success: false, message: `Database 
+error` });
     }
-
-    // Step 2: Permanently delete if BOTH have deleted
-    const cleanup = `
-      DELETE FROM messages
-      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-        AND JSON_CONTAINS(COALESCE(deleted_by, JSON_ARRAY()), JSON_ARRAY(?))
-        AND JSON_CONTAINS(COALESCE(deleted_by, JSON_ARRAY()), JSON_ARRAY(?))
-    `;
-    db.query(cleanup, [userId, otherUserId, otherUserId, userId, userId, otherUserId], (cleanupErr) => {
-      if (cleanupErr) {
-        console.error('DB Error (deleteChat cleanup):', cleanupErr);
-        return res.status(500).json({ success: false, message: `Database error` });
-      }
-      res.json({ success: true, message: 'Chat deleted for user (and cleaned if both deleted)' });
-    });
+    res.json({ success: true, unreadChats: results[0].unreadChats });
   });
 });
 
+// Fetch recent chats
+app.get('/getChatUsers', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ success: false, message: `Missing 
+userId` });
+  }
 
-
-// ===================== TRAVEL PLANS =====================
-
-// (your travel plan routes unchanged)
+  const query = `
+    SELECT u.id, u.name AS username,
+      (SELECT m.message FROM messages m
+       WHERE (m.sender_id = u.id AND m.receiver_id = ?) OR (m.sender_id = 
+? AND m.receiver_id = u.id)
+       ORDER BY m.timestamp DESC LIMIT 1) AS lastMessage,
+      (SELECT m.timestamp FROM messages m
+       WHERE (m.sender_id = u.id AND m.receiver_id = ?) OR (m.sender_id = 
+? AND m.receiver_id = u.id)
+       ORDER BY m.timestamp DESC LIMIT 1) AS timestamp,
+      (SELECT COUNT(*) FROM messages m
+       WHERE m.sender_id = u.id AND m.receiver_id = ? AND m.is_read = 0) 
+AS unreadCount
+    FROM users u
+    WHERE u.id != ?
+    HAVING lastMessage IS NOT NULL
+    ORDER BY timestamp DESC
+  `;
+  db.query(query, [userId, userId, userId, userId, userId, userId], (err, 
+results) => {
+    if (err) {
+      console.error('DB Error (getChatUsers):', err);
+      return res.status(500).json({ success: false, message: `Database 
+error` });
+    }
+    res.json({ success: true, chats: results });
+  });
+});
 
 // ===================== MISC =====================
 app.get('/health', (req, res) => {
@@ -245,7 +236,9 @@ app.get('/', (req, res) => {
   res.send('✅ Backend is working!');
 });
 
+// Start server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on ${PORT}`);
 });
+
