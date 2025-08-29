@@ -170,32 +170,19 @@ app.post("/sendOtp", (req, res) => {
 });
 
 // Stage 2: verify OTP
-app.post("/verifyOtp", async (req, res) => {
-  if (!needDB(res)) return;
+
+
+app.post("/verifyOtp", (req, res) => {
   const { phone, otp } = req.body;
-  if (!phone || !otp) return res.status(400).json({ success: false, 
-message: "Missing phone or otp" });
+  console.log(`Verifying OTP for ${phone}: entered=${otp}, 
+expected=${otpStore[phone]}`);
 
-  try {
-    const [rows] = await pool.query(`SELECT code, expires_at FROM otps 
-WHERE phone =?`, [phone]); 
-    if (!rows.length) return res.json({ success: false, message: `No OTP 
-found` });
-
-    const rec = rows[0];
-    if (rec.code !== otp) return res.json({ success: false, message: 
-"Invalid OTP" });
-    if (new Date(rec.expires_at) < new Date()) {
-      return res.json({ success: false, message: "OTP expired" });
-    }
-
-    await pool.query("DELETE FROM otps WHERE phone = ?", [phone]);
+  if (otpStore[phone] && otpStore[phone].toString() === otp.toString()) {
+    delete otpStore[phone]; // clear OTP after successful verification
     return res.json({ success: true, message: "OTP verified" });
-  } catch (e) {
-    console.error("verifyOtp error:", e);
-    return res.status(500).json({ success: false, message: `Database 
-error` });
   }
+
+  res.json({ success: false, message: "Invalid OTP" });
 });
 
 // Stage 3: save password
