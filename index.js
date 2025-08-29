@@ -126,32 +126,25 @@ app.get("/", (req, res) => res.send("Backend running fine 🚀"));
 
 // ===================== AUTH & OTP FLOW =====================
 // Stage 1: /signup (name, college, gender, phone)
-app.post("/signup", async (req, res) => {
-  if (!needDB(res)) return;
-  const { name, college, gender, phone } = req.body;
-  if (!name || !college || !gender || !phone) {
-    return res.status(400).json({ success: false, message: `Missing 
-fields` });
+
+app.post("/signup", (req, res) => {
+  const { name, college, password, phone } = req.body;
+
+  if (!name || !college || !password || !phone) {
+    return res.status(400).json({ success: false, message: "All fields are required" });
   }
-  try {
-    await pool.query(
-      `
-      INSERT INTO users (name, college, gender, phone)
-      VALUES (?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE name=VALUES(name), college=VALUES(college), 
-gender=VALUES(gender)
-      `,
-      [name, college, gender, phone]
-    );
-    const [rows] = await pool.query(`SELECT id FROM users WHERE phone = 
-?`, [phone]); 
-    return res.json({ success: true, userId: rows[0]?.id || null, message: 
-"Profile saved" });
-  } catch (e) {
-    console.error("signup error:", e);
-    return res.status(500).json({ success: false, message: `Database 
-error` });
-  }
+
+  pool.query(
+    "INSERT INTO users (name, college, password, phone) VALUES (?, ?, ?, ?)",
+    [name, college, password, phone],
+    (err, result) => {
+      if (err) {
+        console.error("Error inserting user:", err);
+        return res.status(500).json({ success: false, message: "DB error" });
+      }
+      res.json({ success: true, message: "User registered successfully", userId: result.insertId });
+    }
+  );
 });
 
 // Stage 2: send OTP
@@ -189,6 +182,7 @@ expected=${otpStore[phone]}`);
 });
 
 // Stage 3: save password
+
 app.post("/savePassword", (req, res) => {
   const { phone, password } = req.body;
 
@@ -196,7 +190,6 @@ app.post("/savePassword", (req, res) => {
     return res.status(400).json({ success: false, message: "Phone and password required" });
   }
 
-  // Example: Save to MySQL
   pool.query(
     "UPDATE users SET password = ? WHERE phone = ?",
     [password, phone],
@@ -207,8 +200,7 @@ app.post("/savePassword", (req, res) => {
       }
 
       if (result.affectedRows === 0) {
-        // user not found
-        return res.json({ success: false, message: "User not found" });
+        return res.json({ success: false, message: "User not found (phone missing in DB)" });
       }
 
       res.json({ success: true, message: "Password saved successfully" });
