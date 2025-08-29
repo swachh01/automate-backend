@@ -124,7 +124,7 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 app.get("/", (req, res) => res.send("Backend running fine 🚀"));
 
 // ===================== AUTH & OTP FLOW =====================
-// Stage 1: /signup (name, college, gender, phone) - upsert by phone
+// Stage 1: /signup (name, college, gender, phone)
 app.post("/signup", async (req, res) => {
   if (!needDB(res)) return;
   const { name, college, gender, phone } = req.body;
@@ -133,7 +133,6 @@ app.post("/signup", async (req, res) => {
 fields` });
   }
   try {
-    // insert or update minimal profile
     await pool.query(
       `
       INSERT INTO users (name, college, gender, phone)
@@ -143,7 +142,8 @@ gender=VALUES(gender)
       `,
       [name, college, gender, phone]
     );
-    const [rows] = await pool.query("SELECT id FROM users WHERE phone = ?", [phone]); 
+    const [rows] = await pool.query(`SELECT id FROM users WHERE phone = 
+?`, [phone]); 
     return res.json({ success: true, userId: rows[0]?.id || null, message: 
 "Profile saved" });
   } catch (e) {
@@ -173,7 +173,6 @@ expires_at=VALUES(expires_at)
       `,
       [phone, code, expiresAt]
     );
-    // NOTE: Integrate real SMS provider here.
     return res.json({ success: true, message: "OTP sent" });
   } catch (e) {
     console.error("sendOtp error:", e);
@@ -190,7 +189,8 @@ app.post("/verifyOtp", async (req, res) => {
 message: "Missing phone or otp" });
 
   try {
-    const [rows] = await pool.query("SELECT code, expires_at FROM otps WHERE phone =?", [phone]); 
+    const [rows] = await pool.query(`SELECT code, expires_at FROM otps 
+WHERE phone =?`, [phone]); 
     if (!rows.length) return res.json({ success: false, message: `No OTP 
 found` });
 
@@ -201,9 +201,7 @@ found` });
       return res.json({ success: false, message: "OTP expired" });
     }
 
-    // optional: delete otp after verify
     await pool.query("DELETE FROM otps WHERE phone = ?", [phone]);
-
     return res.json({ success: true, message: "OTP verified" });
   } catch (e) {
     console.error("verifyOtp error:", e);
@@ -221,7 +219,8 @@ app.post("/savePassword", async (req, res) => {
 or newPassword` });
   }
   try {
-    const [result] = await pool.query("UPDATE users SET password=? WHERE phone=?", [newPassword, phone]);
+    const [result] = await pool.query(`UPDATE users SET password=? WHERE 
+phone=?`, [newPassword, phone]);
     if (result.affectedRows === 0) return res.json({ success: false, 
 message: "User not found" });
     return res.json({ success: true, message: "Password saved" });
@@ -240,7 +239,8 @@ app.post("/login", async (req, res) => {
 message: "Missing credentials" });
 
   try {
-    const [rows] = await pool.query("SELECT id, name FROM users WHERE phone=? AND password=?", [phone, password]);
+    const [rows] = await pool.query(`SELECT id, name FROM users WHERE 
+phone=? AND password=?`, [phone, password]);
     if (!rows.length) return res.json({ success: false, message: `Invalid 
 phone or password` });
     const user = rows[0];
@@ -253,7 +253,7 @@ error` });
   }
 });
 
-// Stage 4: update profile (multipart)
+// Stage 4: update profile
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   if (!needDB(res)) return;
   const { userId, dob, degree, year } = req.body;
@@ -264,7 +264,8 @@ fields` });
   const picPath = req.file ? `/uploads/${req.file.filename}` : null;
   try {
     await pool.query(
-      "UPDATE users SET dob=?, degree=?, year=?, profile_pic=? WHERE id=?",
+      `UPDATE users SET dob=?, degree=?, year=?, profile_pic=? WHERE 
+id=?`,
       [dob, degree, year, picPath, userId]
     );
     return res.json({ success: true, message: "Profile updated" });
@@ -276,7 +277,6 @@ error` });
 });
 
 // ===================== TRAVEL PLANS =====================
-// Add or update plan (accept IST "yyyy-MM-dd HH:mm:ss", store UTC)
 app.post("/addTravelPlan", async (req, res) => {
   if (!needDB(res)) return;
   const { userId, destination, time } = req.body;
@@ -285,7 +285,8 @@ app.post("/addTravelPlan", async (req, res) => {
 fields` });
   }
   try {
-    const [existing] = await pool.query("SELECT id FROM travel_plans WHERE user_id=?", [userid]);
+    const [existing] = await pool.query(`SELECT id FROM travel_plans WHERE 
+user_id=?`, [userId]); // ✅ fixed
     if (existing.length) {
       await pool.query(
         `UPDATE travel_plans
@@ -311,7 +312,7 @@ error` });
   }
 });
 
-// Get a user's plan in IST
+// Get a user's plan
 app.get("/getUserTravelPlan", async (req, res) => {
   if (!needDB(res)) return;
   const { userId } = req.query;
@@ -333,15 +334,14 @@ error` });
   }
 });
 
-// List all going users (ascending by time)
+// List all going users
 app.get("/going-users", async (req, res) => {
   if (!needDB(res)) return;
   try {
     const [rows] = await pool.query(
       `SELECT u.id AS userId, u.name AS username, u.college,
               t.destination,
-              DATE_FORMAT(t.time, '%Y-%m-%dT%H:%i:%s.000Z') AS time  -- 
-return ISO-like UTC
+              DATE_FORMAT(t.time, '%Y-%m-%dT%H:%i:%s.000Z') AS time
        FROM travel_plans t
        JOIN users u ON t.user_id = u.id
        ORDER BY t.time ASC`
@@ -354,11 +354,12 @@ error` });
   }
 });
 
-// Cleanup expired (every 1 min, UTC compare)
+// Cleanup expired plans
 setInterval(async () => {
   if (!pool) return;
   try {
-    const [result] = await pool.query("DELETE FROM travel_plans WHERE time <= UTC_TIMESTAMP()");
+    const [result] = await pool.query(`DELETE FROM travel_plans WHERE time 
+<= UTC_TIMESTAMP()`);
     if (result.affectedRows > 0) {
       console.log(`🧹 Deleted ${result.affectedRows} expired travel 
 plan(s)`);
@@ -524,7 +525,7 @@ error` });
 });
 
 // ===================== START =====================
-const PORT = process.env.PORT || 3000;
-app.listen(PORT,"0.0.0.0", () => console.log(`🚀 Server listening on 
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server listening on 
 ${PORT}`));
 
