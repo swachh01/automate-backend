@@ -154,31 +154,19 @@ error` });
 });
 
 // Stage 2: send OTP
-app.post("/sendOtp", async (req, res) => {
-  if (!needDB(res)) return;
-  const { phone } = req.body;
-  if (!phone) return res.status(400).json({ success: false, message: 
-"Missing phone" });
 
-  try {
-    const code = ("" + Math.floor(100000 + Math.random() * 900000)); // 
-6-digit
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
-    await pool.query(
-      `
-      INSERT INTO otps (phone, code, expires_at)
-      VALUES (?, ?, ?)
-      ON DUPLICATE KEY UPDATE code=VALUES(code), 
-expires_at=VALUES(expires_at)
-      `,
-      [phone, code, expiresAt]
-    );
-    return res.json({ success: true, message: "OTP sent" });
-  } catch (e) {
-    console.error("sendOtp error:", e);
-    return res.status(500).json({ success: false, message: `Database 
-error` });
-  }
+app.post("/sendOtp", (req, res) => {
+  const { phone } = req.body;
+  const otp = Math.floor(1000 + Math.random() * 9000);
+
+  // (Optional) save otp to DB for verification later
+  console.log(`Generated OTP for ${phone}: ${otp}`);
+
+  res.json({
+    success: true,
+    message: "OTP generated",
+    otp: otp   // ⚡ return OTP in response (only for testing!)
+  });
 });
 
 // Stage 2: verify OTP
