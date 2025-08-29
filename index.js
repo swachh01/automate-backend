@@ -1,4 +1,5 @@
 // index.js
+const otpStore = {};
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -159,13 +160,15 @@ app.post("/sendOtp", (req, res) => {
   const { phone } = req.body;
   const otp = Math.floor(1000 + Math.random() * 9000);
 
-  // (Optional) save otp to DB for verification later
+  // save otp in memory
+  otpStore[phone] = otp;
+
   console.log(`Generated OTP for ${phone}: ${otp}`);
 
   res.json({
     success: true,
     message: "OTP generated",
-    otp: otp   // ⚡ return OTP in response (only for testing!)
+    otp: otp   // return for testing only
   });
 });
 
