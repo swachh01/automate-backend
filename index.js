@@ -5,6 +5,7 @@ const twilio = require("twilio");
 const accountSid = process.env.TWILIO_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = new twilio(accountSid, authToken);
+const otpStore = {};
 
 const express = require("express");
 const cors = require("cors");
@@ -146,41 +147,21 @@ app.post("/sendOtp", (req, res) => {
 });
 
 // Verify OTP: expects { phone, otp }
-app.post("/verifyOtp", async (req, res) => {
-  const { phone, otp } = req.body || {};
-  console.log("📩 /verifyOtp body:", req.body);
 
-  if (!phone || !otp) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Missing phone or otp" });
-  }
+app.post("/verifyOtp", (req, res) => {
+    const { phone, otp } = req.body;
 
-  const entry = otps[phone];
-  if (!entry || entry.expires < Date.now() || entry.code !== otp) {
-    return res.status(400).json({ success: false, message: "Invalid OTP" 
-});
-  }
-  delete otps[phone];
-
-  try {
-    const user = await getUserByPhone(phone);
-    if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found for this phone" 
-});
+    if (otpStore[phone] && otpStore[phone].toString() === otp.toString()) 
+{
+        delete otpStore[phone]; // OTP used, remove it
+        return res.json({ success: true, message: `OTP verified 
+successfully` });
     }
-    return res.json({
-      success: true,
-      message: "OTP verified",
-      userId: user.id,
-    });
-  } catch (err) {
-    console.error("❌ /verifyOtp error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
+
+    res.status(400).json({ success: false, message: `Invalid or expired 
+OTP` });
 });
+
 
 // ✅ Save password & return userId
 app.post("/savePassword", (req, res) => {
