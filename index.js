@@ -172,20 +172,24 @@ false, message: 'OTP expired' });
 
 app.post('/savePassword', async (req, res) => {
   if (!needDB(res)) return;
-  const { phone, newPassword, name, college } = req.body;
-  if (!phone || !newPassword) return res.status(400).json({ success: 
-false, message: 'Missing fields' });
+  const { phone, newPassword } = req.body;
+  if (!phone || !newPassword) 
+    return res.status(400).json({ success: false, message: `Missing 
+fields` });
 
   try {
-    const [result] = await db.query(
-      `INSERT INTO users (phone, password, name, college)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE password=VALUES(password), 
-name=VALUES(name), college=VALUES(college)`,
-      [phone, newPassword, name || 'User', college || '']
-    );
+    const [result] = await db.query(`UPDATE users SET password=? WHERE 
+phone=?`, [newPassword, phone]);
 
-    res.json({ success: true, message: 'Password saved' });
+    if (result.affectedRows === 0) 
+      return res.json({ success: false, message: 'User not found' });
+
+    // Fetch userId after saving password
+    const [rows] = await db.query('SELECT id FROM users WHERE phone=?', 
+[phone]);
+    const userId = rows[0]?.id;
+
+    res.json({ success: true, userId, message: 'Password saved' });
   } catch (err) {
     console.error("savePassword error:", err);
     res.status(500).json({ success: false, message: 'Database error' });
