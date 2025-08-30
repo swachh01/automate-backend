@@ -53,31 +53,34 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/', (req, res) => res.send('Backend running 🚀'));
 
 // ===================== AUTH =====================
-// Signup
-app.post('/signup', async (req, res) => {
-  if (!needDB(res)) return;
-  const { name, college, gender, phone } = req.body;
-  if (!name || !college || !gender || !phone)
-    return res.status(400).json({ success: false, message: `Missing 
-fields` });
 
-  try {
-    const [result] = await db.query(
-      `INSERT INTO users (name, college, gender, phone) VALUES (?, ?, ?, 
-?) 
-       ON DUPLICATE KEY UPDATE name=VALUES(name), college=VALUES(college), 
-gender=VALUES(gender)`,
-      [name, college, gender, phone]
-    );
-    const [rows] = await db.query('SELECT id FROM users WHERE phone = ?', 
-[phone]);
-    res.json({ success: true, userId: rows[0]?.id || null, message: 
-'Profile saved' });
-  } catch (err) {
-    console.error("signup error:", err);
-    res.status(500).json({ success: false, message: 'Database error' });
+// ✅ Signup - save name, college, gender, phone first
+app.post("/signup", (req, res) => {
+  const { name, college, gender, phone } = req.body;
+
+  if (!name || !college || !gender || !phone) {
+    return res.status(400).json({ success: false, message: `Missing 
+required fields` });
   }
+
+  const sql = `INSERT INTO users (name, college, gender, phone, password) 
+VALUES (?, ?, ?, ?, ?)`;
+  // temporary blank password until user sets it in Stage 3
+  pool.query(sql, [name, college, gender, phone, ""], (err, result) => {
+    if (err) {
+      console.error("❌ Signup error:", err);
+      return res.status(500).json({ success: false, message: `Database 
+error` });
+    }
+
+    res.json({
+      success: true,
+      message: "User registered successfully",
+      userId: result.insertId
+    });
+  });
 });
+
 
 // Login
 app.post('/login', async (req, res) => {
@@ -170,30 +173,30 @@ false, message: 'OTP expired' });
 });
 
 
-app.post('/savePassword', async (req, res) => {
-  if (!needDB(res)) return;
-  const { phone, newPassword } = req.body;
-  if (!phone || !newPassword) 
-    return res.status(400).json({ success: false, message: `Missing 
-fields` });
+// ✅ Save password after OTP
+app.post("/savePassword", (req, res) => {
+  const { phone, password } = req.body;
 
-  try {
-    const [result] = await db.query(`UPDATE users SET password=? WHERE 
-phone=?`, [newPassword, phone]);
-
-    if (result.affectedRows === 0) 
-      return res.json({ success: false, message: 'User not found' });
-
-    // Fetch userId after saving password
-    const [rows] = await db.query('SELECT id FROM users WHERE phone=?', 
-[phone]);
-    const userId = rows[0]?.id;
-
-    res.json({ success: true, userId, message: 'Password saved' });
-  } catch (err) {
-    console.error("savePassword error:", err);
-    res.status(500).json({ success: false, message: 'Database error' });
+  if (!phone || !password) {
+    return res.status(400).json({ success: false, message: `Phone and 
+password required` });
   }
+
+  const sql = "UPDATE users SET password = ? WHERE phone = ?";
+  pool.query(sql, [password, phone], (err, result) => {
+    if (err) {
+      console.error("❌ Save password error:", err);
+      return res.status(500).json({ success: false, message: `Database 
+error` });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: `User not 
+found` });
+    }
+
+    res.json({ success: true, message: "Password updated successfully" });
+  });
 });
 
 
