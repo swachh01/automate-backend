@@ -116,25 +116,21 @@ app.post("/sendOtp", (req, res) => {
 });
 
 // ---------- Verify OTP ----------
+
 app.post("/verifyOtp", async (req, res) => {
   const { phone, otp } = req.body;
-  console.log("📩 Verify request:", req.body, "Stored:", otpStore[phone]);
-
   const entry = otpStore[phone];
-  if (!entry) {
-    return res.status(400).json({ success: false, message: "No OTP found for this phone" });
-  }
 
+  console.log("📩 Verify request:", req.body, "Stored:", entry);
+
+  if (!entry) return res.status(400).json({ success: false, message: "No OTP found for this phone" });
   if (Date.now() > entry.expires) {
     delete otpStore[phone];
     return res.status(400).json({ success: false, message: "OTP expired" });
   }
-
   if (entry.otp !== otp.toString()) {
     return res.status(400).json({ success: false, message: "Invalid OTP" });
   }
-
-  // ✅ OTP verified -> insert user
   delete otpStore[phone];
   const signupData = signupStore[phone];
   if (!signupData) {
