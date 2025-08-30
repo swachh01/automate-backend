@@ -11,6 +11,7 @@ require('dotenv').config();
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -173,9 +174,10 @@ false, message: 'OTP expired' });
 });
 
 
-// ✅ Save password after OTP verification
 app.post("/savePassword", (req, res) => {
   const { phone, password } = req.body;
+
+  console.log("📩 SavePassword request body:", req.body);  // 👈 DEBUG
 
   if (!phone || !password) {
     return res.status(400).json({ success: false, message: `Phone and 
@@ -191,6 +193,7 @@ error` });
     }
 
     if (result.affectedRows === 0) {
+      console.log("⚠️ No rows updated. Phone not found:", phone);
       return res.status(404).json({ success: false, message: `User not 
 found` });
     }
