@@ -187,28 +187,25 @@ expected=${otpStore[phone]}`);
 
 // Stage 3: save password
 
-app.post("/savePassword", (req, res) => {
-  const { name, college, gender, phone, password } = req.body;
-
-  if (!name || !college || !gender || !phone || !password) {
-    return res.status(400).json({ success: false, message: "All fields 
-required" });
+// Stage 3: save password
+app.post("/savePassword", async (req, res) => {
+  if (!needDB(res)) return;
+  const { phone, password } = req.body;   // ⬅️ changed
+  if (!phone || !password) {
+    return res.status(400).json({ success: false, message: `Missing phone 
+or password` });
   }
-
-  pool.query(
-    "INSERT INTO users (name, college, gender, phone, password) VALUES (?, 
-?, ?, ?, ?)",
-    [name, college, gender, phone, password],
-    (err, result) => {
-      if (err) {
-        console.error("Error saving password:", err);
-        return res.status(500).json({ success: false, message: "DB error" 
-});
-      }
-      res.json({ success: true, message: "Password saved successfully", 
-userId: result.insertId });
-    }
-  );
+  try {
+    const [result] = await pool.query("UPDATE users SET password=? WHERE 
+phone=?", [password, phone]);
+    if (result.affectedRows === 0) return res.json({ success: false, 
+message: "User not found" });
+    return res.json({ success: true, message: "Password saved" });
+  } catch (e) {
+    console.error("savePassword error:", e);
+    return res.status(500).json({ success: false, message: `Database 
+error` });
+  }
 });
 
 // Login (phone + password)
