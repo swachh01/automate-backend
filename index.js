@@ -107,23 +107,26 @@ app.post('/sendOtp', async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ success: false, message: 'Missing phone' });
 
-  try {
-    const code = ("" + Math.floor(100000 + Math.random() * 900000));
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
+  const code = "" + Math.floor(100000 + Math.random() * 900000);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
+  try {
     // Save OTP in DB
     await db.query(
-      `INSERT INTO otps (phone, code, expires_at) VALUES (?, ?, ?) 
+      `INSERT INTO otps (phone, code, expires_at) VALUES (?, ?, ?)
        ON DUPLICATE KEY UPDATE code=VALUES(code), expires_at=VALUES(expires_at)`,
       [phone, code, expiresAt]
     );
 
     // Send OTP via Twilio
-    await client.messages.create({
+    const toNumber = phone.startsWith('+') ? phone : `+91${phone}`;
+    const message = await client.messages.create({
       body: `Your OTP code is ${code}`,
       from: process.env.TWILIO_PHONE_NUMBER,
-      to: phone.startsWith('+') ? phone : `+91${phone}` // add country code if missing
+      to: toNumber
     });
+
+    console.log("OTP sent via Twilio:", message.sid);
 
     res.json({ success: true, message: 'OTP sent' });
   } catch (err) {
