@@ -90,62 +90,64 @@ app.post("/signup", async (req, res) => {
 });
 
 
-// Send OTP: expects { phone }
-
+// ---------- Send OTP ----------
 app.post("/sendOtp", (req, res) => {
   const { phone } = req.body;
-  if (!phone) return res.status(400).json({ success: false, message: 
-"Phone required" });
+  if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
 
-  const otp = Math.floor(100000 + Math.random() * 900000);
+  const otp = Math.floor(1000 + Math.random() * 9000); // 4-digit OTP for simplicity
 
-  otpStore[phone] = { otp, expires: Date.now() + 5 * 60 * 1000 }; // 5 min 
-  console.log(`📩 OTP for ${phone}: ${otp}`);
+  otpStore[phone] = { otp: otp.toString(), expires: Date.now() + 5 * 60 * 1000 }; // store as string
+  console.log(`📩 Generated OTP for ${phone}: ${otp}`);
 
   client.messages
     .create({
       body: `Your OTP is ${otp}`,
       from: process.env.TWILIO_PHONE_NUMBER,
-      to: `+91${phone}`
+      to: `+91${phone}` // keep consistent format
     })
     .then(() => {
-      res.json({ success: true, message: "OTP sent successfully" });
+      res.json({ success: true, message: "OTP sent successfully", otp });
     })
     .catch(err => {
       console.error("❌ SMS Error:", err);
-      res.status(500).json({ success: false, message: "Failed to send SMS" 
-});
+      res.status(500).json({ success: false, message: "Failed to send SMS" });
     });
 });
 
-// Verify OTP: expects { phone, otp }
-
+// ---------- Verify OTP ----------
 app.post("/verifyOtp", async (req, res) => {
   const { phone, otp } = req.body;
+  console.log("📩 Verify request:", req.body, "Stored:", otpStore[phone]);
 
   const entry = otpStore[phone];
-  if (!entry || entry.otp.toString() !== otp.toString()) {
-    return res.status(400).json({ success: false, message: `Invalid or 
-expired OTP` });
+  if (!entry) {
+    return res.status(400).json({ success: false, message: "No OTP found for this phone" });
   }
 
-  delete otpStore[phone]; // OTP used, remove it
+  if (Date.now() > entry.expires) {
+    delete otpStore[phone];
+    return res.status(400).json({ success: false, message: "OTP expired" });
+  }
 
-  // 🔥 Now insert into DB
+  if (entry.otp !== otp.toString()) {
+    return res.status(400).json({ success: false, message: "Invalid OTP" });
+  }
+
+  // ✅ OTP verified -> insert user
+  delete otpStore[phone];
   const signupData = signupStore[phone];
   if (!signupData) {
-    return res.status(400).json({ success: false, message: `No signup data 
-found. Please restart signup.` });
+    return res.status(400).json({ success: false, message: "Signup data missing, restart signup" });
   }
 
   try {
     const [result] = await db.query(
-      `INSERT INTO users (name, college, password, phone, gender) VALUES 
-(?, ?, ?, ?, ?)`,
+      `INSERT INTO users (name, college, password, phone, gender) VALUES (?, ?, ?, ?, ?)`,
       [signupData.name, signupData.college, "", phone, signupData.gender]
     );
 
-    delete signupStore[phone]; // cleanup
+    delete signupStore[phone];
 
     return res.json({
       success: true,
@@ -154,10 +156,11 @@ found. Please restart signup.` });
     });
   } catch (err) {
     console.error("❌ Error inserting user:", err);
-    return res.status(500).json({ success: false, message: `Database 
-error` });
+    return res.status(500).json({ success: false, message: "Database error" });
   }
 });
+
+
 
 // ✅ Save password & return userId
 app.post("/savePassword", (req, res) => {
