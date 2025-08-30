@@ -133,7 +133,7 @@ app.post("/sendOtp", (req, res) => {
   client.messages
     .create({
       body: `Your OTP is ${otp}`,
-      from: process.env.TWILIO_PHONE, 
+      from: process.env.TWILIO_PHONE_NUMBER, 
       to: `+91${phone}`, // full E.164 format for Indian numbers
     })
     .then(() => {
