@@ -60,8 +60,6 @@ profile_pic FROM users WHERE phone = ?`,
   return rows && rows[0] ? rows[0] : null;
 }
 
-// In-memory OTP store (replace with DB table if you want)
-const otps = {}; // { [phone]: { code, expires } }
 
 // ---------- Routes ----------
 
@@ -122,46 +120,47 @@ name/college/gender/phone` });
 // Send OTP: expects { phone }
 
 app.post("/sendOtp", (req, res) => {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ success: false, message: 
+"Phone required" });
 
-    const otp = Math.floor(100000 + Math.random() * 900000);
+  const otp = Math.floor(100000 + Math.random() * 900000);
 
-    // Save OTP in memory or DB (for now just memory)
-    otpStore[phone] = otp;
+  // Save OTP with 5-minute expiry
+  otpStore[phone] = { code: otp, expires: Date.now() + 5 * 60 * 1000 };
 
-    // ✅ Send via Twilio
-    client.messages
-        .create({
-            body: `Your OTP is ${otp}`,
-            from: process.env.TWILIO_PHONE, // Twilio number
-            to: `+91${phone}` // assuming Indian numbers
-        })
-        .then(() => {
-            res.json({ success: true, message: "OTP sent successfully" });
-        })
-        .catch(err => {
-            console.error("❌ SMS Error:", err);
-            res.status(500).json({ success: false, message: "Failed to send SMS" });
-        });
+  // ✅ Use Twilio number or Messaging Service
+  client.messages
+    .create({
+      body: `Your OTP is ${otp}`,
+      from: process.env.TWILIO_PHONE, 
+      to: `+91${phone}`, // full E.164 format for Indian numbers
+    })
+    .then(() => {
+      console.log(`📩 OTP ${otp} sent to ${phone}`);
+      res.json({ success: true, message: "OTP sent successfully", otp }); 
+// return OTP for testing
+    })
+    .catch((err) => {
+      console.error("❌ SMS Error:", err);
+      res.status(500).json({ success: false, message: "Failed to send SMS" 
+});
+    });
 });
 
 // Verify OTP: expects { phone, otp }
 
 app.post("/verifyOtp", (req, res) => {
-    const { phone, otp } = req.body;
+  const { phone, otp } = req.body;
 
-    if (otpStore[phone] && otpStore[phone].toString() === otp.toString()) 
-{
-        delete otpStore[phone]; // OTP used, remove it
-        return res.json({ success: true, message: `OTP verified 
-successfully` });
-    }
+  const record = otpStore[phone];
+  if (record && record.code.toString() === otp.toString() && Date.now() < record.expires) {
+    delete otpStore[phone]; // OTP used
+    return res.json({ success: true, message: "OTP verified successfully" });
+  }
 
-    res.status(400).json({ success: false, message: `Invalid or expired 
-OTP` });
+  res.status(400).json({ success: false, message: "Invalid or expired OTP" });
 });
-
 
 // ✅ Save password & return userId
 app.post("/savePassword", (req, res) => {
