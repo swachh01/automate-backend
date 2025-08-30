@@ -6,6 +6,7 @@ const accountSid = process.env.TWILIO_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = new twilio(accountSid, authToken);
 const otpStore = {};
+const signupStore = {};
 
 const express = require("express");
 const cors = require("cors");
@@ -67,55 +68,27 @@ profile_pic FROM users WHERE phone = ?`,
 app.get("/health", (_req, res) => res.sendStatus(200));
 
 // Signup: expects { name, college, gender, phone }
+
 app.post("/signup", async (req, res) => {
   try {
     const { name, college, gender, phone } = req.body || {};
     console.log("📩 /signup body:", req.body);
 
     if (!name || !college || !gender || !phone) {
-      return res
-        .status(400)
-        .json({ success: false, message: `Missing 
-name/college/gender/phone` });
+      return res.status(400).json({ success: false, message: "Missing name/college/gender/phone" });
     }
 
-    // Does user already exist?
-    const [exists] = await db.query(`SELECT id FROM users WHERE phone = 
-?`, [
-      phone,
-    ]);
-    if (exists.length) {
-      // Update details if already exists
-      await db.query(
-        `UPDATE users SET name = ?, college = ?, gender = ? WHERE phone = 
-?`,
-        [name, college, gender, phone]
-      );
-      return res.json({
-        success: true,
-        message: "User updated",
-        userId: exists[0].id,
-      });
-    }
+    // Save details in memory until OTP verified
+    signupStore[phone] = { name, college, gender };
+    console.log("✅ Stored signup data for", phone, signupStore[phone]);
 
-    // NOTE: your schema has `password` NOT NULL.
-    // If password is set later (Stage 3), insert a temporary placeholder.
-    const [result] = await db.query(
-      `INSERT INTO users (name, college, password, phone, gender) VALUES 
-(?, ?, ?, ?, ?)`,
-      [name, college, "", phone, gender]
-    );
-
-    return res.json({
-      success: true,
-      message: "User created",
-      userId: result.insertId,
-    });
+    return res.json({ success: true, message: "Signup data received. Please verify OTP." });
   } catch (err) {
     console.error("❌ /signup error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
 
 // Send OTP: expects { phone }
 
@@ -126,22 +99,19 @@ app.post("/sendOtp", (req, res) => {
 
   const otp = Math.floor(100000 + Math.random() * 900000);
 
-  // Save OTP with 5-minute expiry
-  otpStore[phone] = { code: otp, expires: Date.now() + 5 * 60 * 1000 };
+  otpStore[phone] = { otp, expires: Date.now() + 5 * 60 * 1000 }; // 5 min 
+  console.log(`📩 OTP for ${phone}: ${otp}`);
 
-  // ✅ Use Twilio number or Messaging Service
   client.messages
     .create({
       body: `Your OTP is ${otp}`,
-      from: process.env.TWILIO_PHONE_NUMBER, 
-      to: `+91${phone}`, // full E.164 format for Indian numbers
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: `+91${phone}`
     })
     .then(() => {
-      console.log(`📩 OTP ${otp} sent to ${phone}`);
-      res.json({ success: true, message: "OTP sent successfully" }); 
-// return OTP for testing
+      res.json({ success: true, message: "OTP sent successfully" });
     })
-    .catch((err) => {
+    .catch(err => {
       console.error("❌ SMS Error:", err);
       res.status(500).json({ success: false, message: "Failed to send SMS" 
 });
@@ -150,16 +120,43 @@ app.post("/sendOtp", (req, res) => {
 
 // Verify OTP: expects { phone, otp }
 
-app.post("/verifyOtp", (req, res) => {
+app.post("/verifyOtp", async (req, res) => {
   const { phone, otp } = req.body;
 
-  const record = otpStore[phone];
-  if (record && record.code.toString() === otp.toString() && Date.now() < record.expires) {
-    delete otpStore[phone]; // OTP used
-    return res.json({ success: true, message: "OTP verified successfully" });
+  const entry = otpStore[phone];
+  if (!entry || entry.otp.toString() !== otp.toString()) {
+    return res.status(400).json({ success: false, message: `Invalid or 
+expired OTP` });
   }
 
-  res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+  delete otpStore[phone]; // OTP used, remove it
+
+  // 🔥 Now insert into DB
+  const signupData = signupStore[phone];
+  if (!signupData) {
+    return res.status(400).json({ success: false, message: `No signup data 
+found. Please restart signup.` });
+  }
+
+  try {
+    const [result] = await db.query(
+      `INSERT INTO users (name, college, password, phone, gender) VALUES 
+(?, ?, ?, ?, ?)`,
+      [signupData.name, signupData.college, "", phone, signupData.gender]
+    );
+
+    delete signupStore[phone]; // cleanup
+
+    return res.json({
+      success: true,
+      message: "OTP verified and user created",
+      userId: result.insertId
+    });
+  } catch (err) {
+    console.error("❌ Error inserting user:", err);
+    return res.status(500).json({ success: false, message: `Database 
+error` });
+  }
 });
 
 // ✅ Save password & return userId
