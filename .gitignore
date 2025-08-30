@@ -1,11 +1,7 @@
 node_modules/
-*.log
-.env
-.DS_Store
 .railway/
+.DS_Store
+.env
 
-node_modules/
-.railway/
-.DS_Store
-.env
-.env
+
+
