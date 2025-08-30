@@ -54,7 +54,7 @@ app.get('/', (req, res) => res.send('Backend running 🚀'));
 
 // ===================== AUTH =====================
 
-// ✅ Signup - save name, college, gender, phone first
+// ✅ Signup - save name, college, gender, phone (blank password first)
 app.post("/signup", (req, res) => {
   const { name, college, gender, phone } = req.body;
 
@@ -65,7 +65,6 @@ required fields` });
 
   const sql = `INSERT INTO users (name, college, gender, phone, password) 
 VALUES (?, ?, ?, ?, ?)`;
-  // temporary blank password until user sets it in Stage 3
   pool.query(sql, [name, college, gender, phone, ""], (err, result) => {
     if (err) {
       console.error("❌ Signup error:", err);
@@ -173,7 +172,7 @@ false, message: 'OTP expired' });
 });
 
 
-// ✅ Save password after OTP
+// ✅ Save password after OTP verification
 app.post("/savePassword", (req, res) => {
   const { phone, password } = req.body;
 
@@ -202,7 +201,7 @@ found` });
 
 // ===================== PROFILE =====================
 
-// ✅ Update Profile
+// ✅ Update Profile (dob, degree, year, profile_pic)
 app.post("/updateProfile", upload.single("profile_pic"), (req, res) => {
   const { userId, dob, degree, year } = req.body;
   const profilePic = req.file ? req.file.filename : null;
@@ -212,28 +211,29 @@ app.post("/updateProfile", upload.single("profile_pic"), (req, res) => {
 userId` });
   }
 
-  // Build dynamic SQL query
-  let sql = "UPDATE users SET dob=?, degree=?, year=?";
-  let params = [dob, degree, year];
+  let sql = "UPDATE users SET ";
+  let fields = [];
+  let values = [];
 
-  if (profilePic) {
-    sql += ", profile_pic=?";
-    params.push(profilePic);
+  if (dob) { fields.push("dob = ?"); values.push(dob); }
+  if (degree) { fields.push("degree = ?"); values.push(degree); }
+  if (year) { fields.push("year = ?"); values.push(year); }
+  if (profilePic) { fields.push("profile_pic = ?"); 
+values.push(profilePic); }
+
+  if (fields.length === 0) {
+    return res.status(400).json({ success: false, message: `No fields to 
+update` });
   }
 
-  sql += " WHERE id=?";
-  params.push(userId);
+  sql += fields.join(", ") + " WHERE id = ?";
+  values.push(userId);
 
-  pool.query(sql, params, (err, result) => {
+  pool.query(sql, values, (err, result) => {
     if (err) {
-      console.error("❌ Error updating profile:", err);
+      console.error("❌ Update profile error:", err);
       return res.status(500).json({ success: false, message: `Database 
 error` });
-    }
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: `User not 
-found` });
     }
 
     res.json({ success: true, message: "Profile updated successfully" });
