@@ -104,36 +104,41 @@ phone or password` });
 
 app.post('/sendOtp', async (req, res) => {
   if (!needDB(res)) return;
-  const { phone } = req.body;
-  if (!phone) return res.status(400).json({ success: false, message: 'Missing phone' });
 
-  const code = "" + Math.floor(100000 + Math.random() * 900000);
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ success: false, message: 
+'Missing phone' });
 
   try {
+    // Generate OTP
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes 
+
     // Save OTP in DB
     await db.query(
       `INSERT INTO otps (phone, code, expires_at) VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE code=VALUES(code), expires_at=VALUES(expires_at)`,
+       ON DUPLICATE KEY UPDATE code=VALUES(code), 
+expires_at=VALUES(expires_at)`,
       [phone, code, expiresAt]
     );
 
     // Send OTP via Twilio
-    const toNumber = phone.startsWith('+') ? phone : `+91${phone}`;
     const message = await client.messages.create({
       body: `Your OTP code is ${code}`,
       from: process.env.TWILIO_PHONE_NUMBER,
-      to: toNumber
+      to: phone.startsWith('+') ? phone : `+91${phone}`
     });
 
-    console.log("OTP sent via Twilio:", message.sid);
-
+    console.log('OTP sent, SID:', message.sid);
     res.json({ success: true, message: 'OTP sent' });
+
   } catch (err) {
-    console.error("sendOtp error:", err);
-    res.status(500).json({ success: false, message: 'Failed to send OTP' });
+    console.error('sendOtp error:', err);
+    res.status(500).json({ success: false, message: 'Failed to send OTP' 
+});
   }
 });
+
 
 app.post('/verifyOtp', async (req, res) => {
   if (!needDB(res)) return;
