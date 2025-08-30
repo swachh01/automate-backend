@@ -175,31 +175,29 @@ false, message: 'OTP expired' });
 
 
 app.post("/savePassword", (req, res) => {
-  const { phone, password } = req.body;
+    const { phone, password, newPassword } = req.body;
+    const finalPassword = password || newPassword; // accept both keys
 
-  console.log("📩 SavePassword request body:", req.body);  // 👈 DEBUG
+    console.log("📩 SavePassword request body:", req.body);
 
-  if (!phone || !password) {
-    return res.status(400).json({ success: false, message: `Phone and 
-password required` });
-  }
-
-  const sql = "UPDATE users SET password = ? WHERE phone = ?";
-  pool.query(sql, [password, phone], (err, result) => {
-    if (err) {
-      console.error("❌ Save password error:", err);
-      return res.status(500).json({ success: false, message: `Database 
-error` });
+    if (!phone || !finalPassword) {
+        return res.status(400).json({ success: false, message: `Missing 
+phone or password` });
     }
 
-    if (result.affectedRows === 0) {
-      console.log("⚠️ No rows updated. Phone not found:", phone);
-      return res.status(404).json({ success: false, message: `User not 
-found` });
-    }
-
-    res.json({ success: true, message: "Password updated successfully" });
-  });
+    pool.query(
+        "UPDATE users SET password = ? WHERE phone = ?",
+        [finalPassword, phone],
+        (err, result) => {
+            if (err) {
+                console.error("❌ Error saving password:", err);
+                return res.status(500).json({ success: false, message: 
+"Failed to save password" });
+            }
+            res.json({ success: true, message: `Password updated 
+successfully` });
+        }
+    );
 });
 
 
