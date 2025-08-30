@@ -198,21 +198,45 @@ phone=?`, [newPassword, phone]);
 
 
 // ===================== PROFILE =====================
-app.post('/updateProfile', upload.single('profile_pic'), async (req, res) => {
-  if (!needDB(res)) return;
+
+// ✅ Update Profile
+app.post("/updateProfile", upload.single("profile_pic"), (req, res) => {
   const { userId, dob, degree, year } = req.body;
-  if (!userId || !dob || !degree || !year) return res.status(400).json({ 
-success: false, message: 'Missing fields' });
-  const profilePic = req.file ? `/uploads/${req.file.filename}` : null;
-  try {
-    await db.query(`UPDATE users SET dob=?, degree=?, year=?, 
-profile_pic=? WHERE id=?`, [dob, degree, year, profilePic, userId]);
-    res.json({ success: true, message: 'Profile updated' });
-  } catch (err) {
-    console.error("updateProfile error:", err);
-    res.status(500).json({ success: false, message: 'Database error' });
+  const profilePic = req.file ? req.file.filename : null;
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: `Missing 
+userId` });
   }
+
+  // Build dynamic SQL query
+  let sql = "UPDATE users SET dob=?, degree=?, year=?";
+  let params = [dob, degree, year];
+
+  if (profilePic) {
+    sql += ", profile_pic=?";
+    params.push(profilePic);
+  }
+
+  sql += " WHERE id=?";
+  params.push(userId);
+
+  pool.query(sql, params, (err, result) => {
+    if (err) {
+      console.error("❌ Error updating profile:", err);
+      return res.status(500).json({ success: false, message: `Database 
+error` });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: `User not 
+found` });
+    }
+
+    res.json({ success: true, message: "Profile updated successfully" });
+  });
 });
+
 
 // ===================== TRAVEL PLANS =====================
 app.post('/addTravelPlan', async (req, res) => {
