@@ -1,6 +1,11 @@
 // index.js
 require("dotenv").config();
 
+const twilio = require("twilio");
+const accountSid = process.env.TWILIO_SID;
+const authToken = process.env.TWILIO_AUTH_TOKEN;
+const client = new twilio(accountSid, authToken);
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -114,21 +119,30 @@ name/college/gender/phone` });
 });
 
 // Send OTP: expects { phone }
+
 app.post("/sendOtp", (req, res) => {
-  const { phone } = req.body || {};
-  console.log("📩 /sendOtp body:", req.body);
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
 
-  if (!phone) {
-    return res.status(400).json({ success: false, message: "Missing phone" 
-});
-  }
+    const otp = Math.floor(100000 + Math.random() * 900000);
 
-  const code = String(Math.floor(100000 + Math.random() * 900000));
-  otps[phone] = { code, expires: Date.now() + 5 * 60 * 1000 };
-  console.log(`🔐 OTP for ${phone}: ${code}`);
-  // Send via SMS provider here in real life.
+    // Save OTP in memory or DB (for now just memory)
+    otpStore[phone] = otp;
 
-  res.json({ success: true, message: "OTP sent" });
+    // ✅ Send via Twilio
+    client.messages
+        .create({
+            body: `Your OTP is ${otp}`,
+            from: process.env.TWILIO_PHONE, // Twilio number
+            to: `+91${phone}` // assuming Indian numbers
+        })
+        .then(() => {
+            res.json({ success: true, message: "OTP sent successfully" });
+        })
+        .catch(err => {
+            console.error("❌ SMS Error:", err);
+            res.status(500).json({ success: false, message: "Failed to send SMS" });
+        });
 });
 
 // Verify OTP: expects { phone, otp }
