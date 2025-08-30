@@ -7,3 +7,5 @@ node_modules/
 node_modules/
 .railway/
 .DS_Store
+.env
+.env
