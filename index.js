@@ -168,36 +168,56 @@ app.post("/verifyOtp", async (req, res) => {
   }
 });
 
-// Save password: expects { phone, newPassword }
-app.post("/savePassword", async (req, res) => {
-  const { phone, newPassword } = req.body || {};
-  console.log("📩 /savePassword body:", req.body);
+// ✅ Save password & return userId
+app.post("/savePassword", (req, res) => {
+    const { phone, newPassword } = req.body;
 
-  if (!phone || !newPassword) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Missing phone or password" });
-  }
-
-  try {
-    const [result] = await db.query(
-      "UPDATE users SET password = ? WHERE phone = ?",
-      [newPassword, phone]
-    );
-
-    if (result.affectedRows === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
+    if (!phone || !newPassword) {
+        return res.status(400).json({ success: false, message: `Phone and 
+password required` });
     }
 
-    res.json({ success: true, message: "Password updated successfully" });
-  } catch (err) {
-    console.error("❌ /savePassword error:", err);
-    res.status(500).json({ success: false, message: `Failed to save 
-password` });
-  }
+    // Hash the password (recommended in production, but keeping plain 
+    const sql = "UPDATE users SET password = ? WHERE phone = ?";
+    pool.query(sql, [newPassword, phone], (err, result) => {
+        if (err) {
+            console.error("❌ Error saving password:", err);
+            return res.status(500).json({ success: false, message: 
+"Database error" });
+        }
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ success: false, message: `User 
+not found` });
+        }
+
+        // ✅ Fetch userId after updating
+        pool.query("SELECT id FROM users WHERE phone = ?", [phone], (err2, 
+rows) => {
+            if (err2) {
+                console.error("❌ Error fetching userId:", err2);
+                return res.status(500).json({ success: false, message: 
+"Database error" });
+            }
+
+            if (rows.length === 0) {
+                return res.status(404).json({ success: false, message: 
+"User not found" });
+            }
+
+            const userId = rows[0].id;
+            console.log(`✅ Password updated for phone:", phone, "-> 
+userId:`, userId);
+
+            return res.json({
+                success: true,
+                message: "Password updated successfully",
+                userId: userId
+            });
+        });
+    });
 });
+
 
 // Login: expects { phone, password }
 app.post("/login", async (req, res) => {
