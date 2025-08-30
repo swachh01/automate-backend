@@ -104,15 +104,13 @@ phone or password` });
 
 app.post('/sendOtp', async (req, res) => {
   if (!needDB(res)) return;
-
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ success: false, message: 
 'Missing phone' });
 
   try {
-    // Generate OTP
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes 
+    const code = ("" + Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
     // Save OTP in DB
     await db.query(
@@ -123,17 +121,22 @@ expires_at=VALUES(expires_at)`,
     );
 
     // Send OTP via Twilio
-    const message = await client.messages.create({
+    await client.messages.create({
       body: `Your OTP code is ${code}`,
       from: process.env.TWILIO_PHONE_NUMBER,
       to: phone.startsWith('+') ? phone : `+91${phone}`
     });
 
-    console.log('OTP sent, SID:', message.sid);
-    res.json({ success: true, message: 'OTP sent' });
+    // Optionally create user if not exists
+    await db.query(
+      `INSERT IGNORE INTO users (phone, name, college) VALUES (?, 'User', 
+'')`,
+      [phone]
+    );
 
+    res.json({ success: true, message: 'OTP sent' });
   } catch (err) {
-    console.error('sendOtp error:', err);
+    console.error("sendOtp error:", err);
     res.status(500).json({ success: false, message: 'Failed to send OTP' 
 });
   }
@@ -147,16 +150,18 @@ app.post('/verifyOtp', async (req, res) => {
 message: 'Missing phone or otp' });
 
   try {
-    const [rows] = await db.query(`SELECT code, expires_at FROM otps WHERE 
-phone=?`, [phone]);
+    const [rows] = await db.query('SELECT code, expires_at FROM otps WHERE phone=?', [phone]); 
     if (!rows.length) return res.json({ success: false, message: `No OTP 
 found` });
+
     const rec = rows[0];
     if (rec.code !== otp) return res.json({ success: false, message: 
 'Invalid OTP' });
     if (new Date(rec.expires_at) < new Date()) return res.json({ success: 
 false, message: 'OTP expired' });
+
     await db.query('DELETE FROM otps WHERE phone=?', [phone]);
+
     res.json({ success: true, message: 'OTP verified' });
   } catch (err) {
     console.error("verifyOtp error:", err);
@@ -164,21 +169,29 @@ false, message: 'OTP expired' });
   }
 });
 
+
 app.post('/savePassword', async (req, res) => {
   if (!needDB(res)) return;
-  const { phone, newPassword } = req.body;
+  const { phone, newPassword, name, college } = req.body;
   if (!phone || !newPassword) return res.status(400).json({ success: 
 false, message: 'Missing fields' });
+
   try {
-    const [result] = await db.query('UPDATE users SET password=? WHERE phone=?', [newPassword, phone]); 
-    if (result.affectedRows === 0) return res.json({ success: false, 
-message: 'User not found' });
+    const [result] = await db.query(
+      `INSERT INTO users (phone, password, name, college)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE password=VALUES(password), 
+name=VALUES(name), college=VALUES(college)`,
+      [phone, newPassword, name || 'User', college || '']
+    );
+
     res.json({ success: true, message: 'Password saved' });
   } catch (err) {
     console.error("savePassword error:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
+
 
 // ===================== PROFILE =====================
 app.post('/updateProfile', upload.single('profile_pic'), async (req, res) => {
