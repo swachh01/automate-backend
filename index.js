@@ -138,7 +138,7 @@ app.post("/sendOtp", (req, res) => {
     })
     .then(() => {
       console.log(`📩 OTP ${otp} sent to ${phone}`);
-      res.json({ success: true, message: "OTP sent successfully", otp }); 
+      res.json({ success: true, message: "OTP sent successfully" }); 
 // return OTP for testing
     })
     .catch((err) => {
