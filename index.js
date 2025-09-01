@@ -436,26 +436,33 @@ ${rows[0].id})`);
   }
 });
 
-// Submit travel plan
+// In /addTravelPlan endpoint, add more detailed logging:
 app.post("/addTravelPlan", async (req, res) => {
   try {
+    console.log("📩 /addTravelPlan request:", req.body);
+    
     const { userId, destination, datetime } = req.body;
 
     if (!userId || !destination || !datetime) {
+      console.log("❌ Missing fields:", { userId, destination, datetime 
+});
       return res.json({ success: false, message: "Missing fields" });
     }
 
     const [result] = await db.query(
-      `INSERT INTO travel_plans (user_id, destination, time) VALUES 
-(?, ?, ?)`,
+      `INSERT INTO travel_plans (user_id, destination, time) VALUES (?, ?, 
+?)`,
       [userId, destination, datetime]
     );
     
+    console.log("✅ Plan inserted successfully, ID:", result.insertId);
     res.json({ success: true, message: "Plan submitted successfully", id: 
 result.insertId });
+    
   } catch (err) {
     console.error("❌ Error inserting travel plan:", err);
-    res.json({ success: false, message: "Database error" });
+    res.json({ success: false, message: "Database error: " + err.message 
+});
   }
 });
 
