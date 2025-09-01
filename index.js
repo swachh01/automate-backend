@@ -483,23 +483,23 @@ undefined
 
 // Get all travel plans (with user info)
 
-// ✅ ADD this missing endpoint
-app.get("/getUserTravelPlan", async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT tp.id, tp.destination, 
-       DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
-       u.name, u.college
-       FROM travel_plans tp
-       JOIN users u ON tp.user_id = u.id
-       ORDER BY tp.time ASC`
-    );
-    
-    res.json({ success: true, users: rows });
-  } catch (err) {
-    console.error("❌ Error fetching travel plans:", err);
-    res.json({ success: false, message: "Database error" });
-  }
+// Get all travel plans (with user info)
+app.get("/getUserTravelPlan", (req, res) => {
+  pool.query(
+    `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college
+     FROM travel_plans tp
+     JOIN users u ON tp.user_id = u.id
+     ORDER BY tp.datetime ASC`,
+    (err, results) => {
+      if (err) {
+        console.error("❌ Error fetching travel plans:", err);
+        return res.json({ success: false, message: "Database error", 
+users: [] });
+      }
+      // ✅ Always return an array
+      res.json({ success: true, users: results || [] });
+    }
+  );
 });
 
 // ✅ UPDATED /going-users endpoint to ensure it always returns an array
