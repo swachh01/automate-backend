@@ -1,4 +1,4 @@
-// index.js - Complete Fixed Version
+// index.js - Complete Fixed Version with Debug Support
 require("dotenv").config();
 
 const twilio = require("twilio");
@@ -44,7 +44,8 @@ const db = pool.promise();
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
+    const ext = path.extname(file.originalname || "").toLowerCase() || 
+".jpg";
     cb(null, `profile_${Date.now()}${ext}`);
   },
 });
@@ -53,7 +54,8 @@ const upload = multer({ storage });
 // ---------- Helpers ----------
 async function getUserByPhone(phone) {
   const [rows] = await db.query(
-    `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ?`,
+    `SELECT id, name, college, phone, gender, dob, degree, year, 
+profile_pic FROM users WHERE phone = ?`,
     [phone]
   );
   return rows && rows[0] ? rows[0] : null;
@@ -69,17 +71,46 @@ app.get("/health", async (_req, res) => {
     res.json({ status: "OK", timestamp: new Date().toISOString() });
   } catch (err) {
     console.error("❌ Health check failed:", err);
-    res.status(500).json({ status: "ERROR", message: "Database connection failed" });
+    res.status(500).json({ status: "ERROR", message: `Database connection 
+failed` });
   }
+});
+
+// Debug endpoint to check memory stores
+app.get("/debug/stores", (req, res) => {
+  // Only enable in development
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ message: "Not available in production" 
+});
+  }
+  
+  res.json({
+    otpStore: Object.keys(otpStore).map(phone => ({
+      phone,
+      hasOtp: !!otpStore[phone].otp,
+      expires: new Date(otpStore[phone].expires)
+    })),
+    signupStore: Object.keys(signupStore).map(phone => ({
+      phone,
+      data: signupStore[phone]
+    }))
+  });
 });
 
 // Signup: expects { name, college, gender, phone }
 app.post("/signup", async (req, res) => {
   try {
     const { name, college, gender, phone } = req.body || {};
-    console.log("📩 /signup body:", { name, college, gender, phone });
+    console.log("📩 /signup RAW body:", req.body);
+    console.log("📩 /signup PARSED:", { name, college, gender, phone });
 
     if (!name || !college || !gender || !phone) {
+      console.log("❌ Missing fields:", { 
+        hasName: !!name, 
+        hasCollege: !!college, 
+        hasGender: !!gender, 
+        hasPhone: !!phone 
+      });
       return res.status(400).json({ 
         success: false, 
         message: "Missing required fields: name, college, gender, phone" 
@@ -101,6 +132,7 @@ app.post("/signup", async (req, res) => {
     );
     
     if (existingUser.length > 0) {
+      console.log("❌ User already exists for phone:", phone);
       return res.status(400).json({ 
         success: false, 
         message: "User with this phone number already exists" 
@@ -108,12 +140,17 @@ app.post("/signup", async (req, res) => {
     }
 
     // Save details in memory until OTP verified
-    signupStore[phone] = { 
+    const signupData = { 
       name: name.trim(), 
       college: college.trim(), 
       gender 
     };
-    console.log("✅ Stored signup data for", phone, signupStore[phone]);
+    
+    signupStore[phone] = signupData;
+    
+    console.log("✅ Stored signup data for phone:", phone);
+    console.log("✅ Signup data:", signupData);
+    console.log("✅ Current signupStore keys:", Object.keys(signupStore));
 
     return res.json({ 
       success: true, 
@@ -132,7 +169,8 @@ app.post("/sendOtp", (req, res) => {
   console.log("📩 /sendOtp request:", { phone });
   
   if (!phone) {
-    return res.status(400).json({ success: false, message: "Phone required" });
+    return res.status(400).json({ success: false, message: `Phone 
+required` });
   }
 
   const otp = Math.floor(1000 + Math.random() * 9000);
@@ -144,7 +182,8 @@ app.post("/sendOtp", (req, res) => {
     expires: expiresAt 
   };
   
-  console.log(`📩 Generated OTP for ${phone}: ${otp}, expires: ${new Date(expiresAt)}`);
+  console.log(`📩 Generated OTP for ${phone}: ${otp}, expires: ${new 
+Date(expiresAt)}`);
 
   client.messages
     .create({
@@ -163,7 +202,8 @@ app.post("/sendOtp", (req, res) => {
     })
     .catch(err => {
       console.error("❌ SMS Error:", err);
-      res.status(500).json({ success: false, message: "Failed to send SMS" });
+      res.status(500).json({ success: false, message: "Failed to send SMS" 
+});
     });
 });
 
@@ -171,55 +211,82 @@ app.post("/sendOtp", (req, res) => {
 app.post("/verifyOtp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
-    console.log("📩 /verifyOtp request:", { phone, otp: otp ? "****" : "missing" });
+    console.log("📩 /verifyOtp request:", { phone, otp: otp ? "****" : 
+"missing" });
     
     if (!phone || !otp) {
-      return res.status(400).json({ success: false, message: "Phone and OTP required" });
+      return res.status(400).json({ success: false, message: `Phone and 
+OTP required` });
     }
     
+    // Check OTP first
     const entry = otpStore[phone];
-    console.log("📊 Stored OTP entry:", entry ? { hasOtp: !!entry.otp, expires: new Date(entry.expires), now: new Date() } : "not found");
+    console.log("📊 Stored OTP entry:", entry ? { hasOtp: !!entry.otp, 
+expires: new Date(entry.expires), now: new Date() } : "not found");
 
     if (!entry) {
-      return res.status(400).json({ success: false, message: "No OTP found for this phone" });
+      return res.status(400).json({ success: false, message: `No OTP found 
+for this phone. Please request a new OTP.` });
     }
     
     if (Date.now() > entry.expires) {
       delete otpStore[phone];
-      return res.status(400).json({ success: false, message: "OTP expired" });
+      return res.status(400).json({ success: false, message: `OTP expired. 
+Please request a new OTP.` });
     }
     
     // Convert both to strings for comparison
     if (entry.otp !== otp.toString()) {
-      console.log(`❌ OTP mismatch: stored=${entry.otp}, received=${otp}`);
-      return res.status(400).json({ success: false, message: "Invalid OTP" });
+      console.log(`❌ OTP mismatch: stored="${entry.otp}", 
+received="${otp}"`);
+      return res.status(400).json({ success: false, message: "Invalid OTP" 
+});
     }
 
-    // Clear OTP after successful verification
-    delete otpStore[phone];
-    
+    // Check signup data BEFORE clearing OTP
     const signupData = signupStore[phone];
-    console.log("📊 Signup data:", signupData);
+    console.log("📊 Signup data for phone", phone, ":", signupData);
+    console.log("📊 All signupStore keys:", Object.keys(signupStore));
     
     if (!signupData) {
-      return res.status(400).json({ success: false, message: "Signup data missing, restart signup" });
+      // DON'T clear OTP here - let user retry with proper signup data
+      console.log("❌ No signup data found for phone:", phone);
+      return res.status(400).json({ 
+        success: false, 
+        message: `Signup data missing. Please complete signup process 
+first.` 
+      });
     }
 
+    // Validate signup data
+    if (!signupData.name || !signupData.college || !signupData.gender) {
+      console.log("❌ Invalid signup data:", signupData);
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid signup data. Please restart signup process." 
+      });
+    }
+
+    // Clear OTP after successful verification AND valid signup data
+    delete otpStore[phone];
+
     // Insert user into database
-    // Table structure: id, name, college, password, created_at, phone, gender, dob, degree, year, profile_pic
+    console.log("🔄 Creating user with data:", signupData);
     const [result] = await db.query(
-      `INSERT INTO users (name, college, password, phone, gender, created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
+      `INSERT INTO users (name, college, password, phone, gender, 
+created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
       [signupData.name, signupData.college, "", phone, signupData.gender]
     );
 
-    // Clear signup data
+    // Clear signup data after successful creation
     delete signupStore[phone];
 
-    console.log(`✅ User created: ID=${result.insertId}, Name=${signupData.name}, Phone=${phone}`);
+    console.log(`✅ User created: ID=${result.insertId}, 
+Name="${signupData.name}", Phone=${phone}`);
 
     return res.json({
       success: true,
-      message: "OTP verified and user created",
+      message: "OTP verified and user created successfully",
       userId: result.insertId,
       user: {
         id: result.insertId,
@@ -232,7 +299,8 @@ app.post("/verifyOtp", async (req, res) => {
     
   } catch (err) {
     console.error("❌ Error in /verifyOtp:", err);
-    return res.status(500).json({ success: false, message: "Database error" });
+    return res.status(500).json({ success: false, message: `Database 
+error: ` + err.message });
   }
 });
 
@@ -241,7 +309,8 @@ app.post("/savePassword", async (req, res) => {
     try {
         const { phone, newPassword } = req.body;
         
-        console.log("📩 /savePassword request:", { phone: phone ? "***" + phone.slice(-4) : "missing", hasPassword: !!newPassword });
+        console.log("📩 /savePassword request:", { phone: phone ? "***" + 
+phone.slice(-4) : "missing", hasPassword: !!newPassword });
 
         if (!phone || !newPassword) {
             return res.status(400).json({ 
@@ -287,7 +356,8 @@ app.post("/savePassword", async (req, res) => {
         }
 
         const userId = userRows[0].id;
-        console.log(`✅ Password updated for phone: ***${phone.slice(-4)} -> userId: ${userId}`);
+        console.log(`✅ Password updated for phone: ***${phone.slice(-4)} 
+-> userId: ${userId}`);
 
         return res.json({
             success: true,
@@ -300,7 +370,8 @@ app.post("/savePassword", async (req, res) => {
         return res.status(500).json({ 
             success: false, 
             message: "Database error",
-            error: process.env.NODE_ENV === 'development' ? err.message : undefined
+            error: process.env.NODE_ENV === 'development' ? err.message : 
+undefined
         });
     }
 });
@@ -318,7 +389,8 @@ app.post("/login", async (req, res) => {
 
   try {
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND password = ?`,
+      `SELECT id, name, college, phone, gender, dob, degree, year, 
+profile_pic FROM users WHERE phone = ? AND password = ?`,
       [phone, password]
     );
     
@@ -328,7 +400,8 @@ app.post("/login", async (req, res) => {
         .json({ success: false, message: "Invalid credentials" });
     }
     
-    console.log(`✅ Login successful for user: ${rows[0].name} (ID: ${rows[0].id})`);
+    console.log(`✅ Login successful for user: ${rows[0].name} (ID: 
+${rows[0].id})`);
     
     res.json({
       success: true,
@@ -348,7 +421,8 @@ app.get("/getUserByPhone", async (req, res) => {
   console.log("📩 /getUserByPhone query:", req.query);
   
   if (!phone) {
-    return res.status(400).json({ success: false, message: "Missing phone" });
+    return res.status(400).json({ success: false, message: "Missing phone" 
+});
   }
 
   try {
@@ -373,7 +447,8 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     const { userId, dob, degree, year } = req.body || {};
     const file = req.file;
     console.log("📩 /updateProfile fields:", req.body);
-    console.log("📎 /updateProfile file:", !!file ? file.filename : "none");
+    console.log("📎 /updateProfile file:", !!file ? file.filename : 
+"none");
 
     if (!userId) {
       return res
@@ -423,7 +498,8 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     }
 
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`,
+      `SELECT id, name, college, phone, gender, dob, degree, year, 
+profile_pic FROM users WHERE id = ?`,
       [userId]
     );
 
