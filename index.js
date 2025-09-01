@@ -1,3 +1,4 @@
+// index.js - Fixed Database Connection Version
 require("dotenv").config();
 
 const twilio = require("twilio");
@@ -36,9 +37,24 @@ const pool = mysql.createPool({
   database: process.env.MYSQLDATABASE || "yourdbname",
   port: process.env.MYSQLPORT ? Number(process.env.MYSQLPORT) : 3306,
   connectionLimit: 10,
+  waitForConnections: true,
+  acquireTimeout: 60000,
+  timeout: 60000,
+  reconnect: true
 });
 
-module.exports = pool;
+// Create a promise-based wrapper for the pool
+const db = pool.promise();
+
+// Test database connection on startup
+pool.getConnection((err, connection) => {
+  if (err) {
+    console.error('❌ Database connection failed:', err.message);
+  } else {
+    console.log('✅ Database connected successfully');
+    connection.release();
+  }
+});
 
 // ---------- Multer (profile image) ----------
 const storage = multer.diskStorage({
@@ -53,12 +69,17 @@ const upload = multer({ storage });
 
 // ---------- Helpers ----------
 async function getUserByPhone(phone) {
-  const [rows] = await db.query(
-    `SELECT id, name, college, phone, gender, dob, degree, year, 
-profile_pic FROM users WHERE phone = ?`,
-    [phone]
-  );
-  return rows && rows[0] ? rows[0] : null;
+  try {
+    const [rows] = await db.query(
+      `SELECT id, name, college, phone, gender, dob, degree, year, 
+      profile_pic FROM users WHERE phone = ?`,
+      [phone]
+    );
+    return rows && rows[0] ? rows[0] : null;
+  } catch (error) {
+    console.error("Error in getUserByPhone:", error);
+    return null;
+  }
 }
 
 // ---------- Routes ----------
@@ -72,7 +93,7 @@ app.get("/health", async (_req, res) => {
   } catch (err) {
     console.error("❌ Health check failed:", err);
     res.status(500).json({ status: "ERROR", message: `Database connection 
-failed` });
+failed: ${err.message}` });
   }
 });
 
@@ -390,7 +411,7 @@ app.post("/login", async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT id, name, college, phone, gender, dob, degree, year, 
-profile_pic FROM users WHERE phone = ? AND password = ?`,
+      profile_pic FROM users WHERE phone = ? AND password = ?`,
       [phone, password]
     );
     
@@ -415,71 +436,73 @@ ${rows[0].id})`);
   }
 });
 
-
 // Submit travel plan
-app.post("/addTravelPlan", (req, res) => {
-  const { userId, destination, datetime } = req.body;
+app.post("/addTravelPlan", async (req, res) => {
+  try {
+    const { userId, destination, datetime } = req.body;
 
-  if (!userId || !destination || !datetime) {
-    return res.json({ success: false, message: "Missing fields" });
-  }
-
-  pool.query(
-    `INSERT INTO travel_plans (user_id, destination, datetime) VALUES (?, 
-?, ?)`,
-    [userId, destination, datetime],
-    (err, result) => {
-      if (err) {
-        console.error("❌ Error inserting travel plan:", err);
-        return res.json({ success: false, message: "Database error" });
-      }
-      res.json({ success: true, message: "Plan submitted successfully", 
-id: result.insertId });
+    if (!userId || !destination || !datetime) {
+      return res.json({ success: false, message: "Missing fields" });
     }
-  );
+
+    const [result] = await db.query(
+      `INSERT INTO travel_plans (user_id, destination, datetime) VALUES 
+(?, ?, ?)`,
+      [userId, destination, datetime]
+    );
+    
+    res.json({ success: true, message: "Plan submitted successfully", id: 
+result.insertId });
+  } catch (err) {
+    console.error("❌ Error inserting travel plan:", err);
+    res.json({ success: false, message: "Database error" });
+  }
 });
 
 // Get all travel plans (with user info)
-app.get("/getUserTravelPlan", (req, res) => {
-  pool.query(
-    `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college
-     FROM travel_plans tp
-     JOIN users u ON tp.user_id = u.id
-     ORDER BY tp.datetime ASC`,
-    (err, rows) => {
-      if (err) {
-        console.error("❌ Error fetching travel plans:", err);
-        return res.json({ success: false, message: "Database error" });
-      }
-      res.json({ success: true, users: rows });
-    }
-  );
+app.get("/getUserTravelPlan", async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college
+       FROM travel_plans tp
+       JOIN users u ON tp.user_id = u.id
+       ORDER BY tp.datetime ASC`
+    );
+    
+    res.json({ success: true, users: rows });
+  } catch (err) {
+    console.error("❌ Error fetching travel plans:", err);
+    res.json({ success: false, message: "Database error" });
+  }
 });
 
 // Fetch user by phone
-app.get("/getUserByPhone", (req, res) => {
+app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
   console.log("📩 /getUserByPhone query:", req.query);
 
   if (!phone) {
-    return res.status(400).json({ success: false, message: "Missing phone" });
+    return res.status(400).json({ success: false, message: "Missing phone" 
+});
   }
 
-  pool.query(
-    "SELECT * FROM users WHERE phone = ?",
-    [phone],
-    (err, results) => {
-      if (err) {
-        console.error("❌ /getUserByPhone error:", err);
-        return res.status(500).json({ success: false, message: "Server error" });
-      }
-      if (results.length === 0) {
-        return res.status(404).json({ success: false, message: "User not found" });
-      }
-      const user = results[0];
-      res.json({ success: true, userId: user.id, user });
+  try {
+    const [results] = await db.query(
+      "SELECT * FROM users WHERE phone = ?",
+      [phone]
+    );
+    
+    if (results.length === 0) {
+      return res.status(404).json({ success: false, message: `User not 
+found` });
     }
-  );
+    
+    const user = results[0];
+    res.json({ success: true, userId: user.id, user });
+  } catch (err) {
+    console.error("❌ /getUserByPhone error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
 
 // Update profile (multipart form-data):
@@ -542,7 +565,7 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
 
     const [rows] = await db.query(
       `SELECT id, name, college, phone, gender, dob, degree, year, 
-profile_pic FROM users WHERE id = ?`,
+      profile_pic FROM users WHERE id = ?`,
       [userId]
     );
 
