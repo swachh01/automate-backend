@@ -476,6 +476,24 @@ app.get("/getUserTravelPlan", async (req, res) => {
   }
 });
 
+// Get all users who are going somewhere (alternative to 
+/getUserTravelPlan)
+app.get("/going-users", async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT tp.id, tp.destination, tp.time, u.name, u.college
+       FROM travel_plans tp
+       JOIN users u ON tp.user_id = u.id
+       ORDER BY tp.time ASC`
+    );
+    
+    res.json({ success: true, users: rows });
+  } catch (err) {
+    console.error("❌ Error fetching going users:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
+});
+
 // Fetch user by phone
 app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
