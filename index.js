@@ -39,6 +39,8 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
+module.exports = pool;
+
 // ---------- Multer (profile image) ----------
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
