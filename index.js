@@ -436,33 +436,47 @@ ${rows[0].id})`);
   }
 });
 
-// In /addTravelPlan endpoint, add more detailed logging:
+// Submit travel plan - FIXED VERSION
 app.post("/addTravelPlan", async (req, res) => {
   try {
-    console.log("📩 /addTravelPlan request:", req.body);
-    
-    const { userId, destination, datetime } = req.body;
+    // Accept both 'time' and 'datetime' for flexibility
+    const { userId, destination, datetime, time } = req.body;
+    const actualTime = datetime || time; // Use datetime if provided, 
 
-    if (!userId || !destination || !datetime) {
-      console.log("❌ Missing fields:", { userId, destination, datetime 
-});
-      return res.json({ success: false, message: "Missing fields" });
+    console.log("📩 /addTravelPlan request:", req.body);
+
+    if (!userId || !destination || !actualTime) {
+      console.log("❌ Missing fields:", { userId, destination, datetime, 
+time, actualTime });
+      return res.json({ 
+        success: false, 
+        message: `Missing required fields: userId, destination, and 
+time/datetime` 
+      });
     }
 
     const [result] = await db.query(
       `INSERT INTO travel_plans (user_id, destination, time) VALUES (?, ?, 
 ?)`,
-      [userId, destination, datetime]
+      [userId, destination, actualTime]
     );
     
-    console.log("✅ Plan inserted successfully, ID:", result.insertId);
-    res.json({ success: true, message: "Plan submitted successfully", id: 
-result.insertId });
+    console.log(`✅ Travel plan created: ID=${result.insertId} for 
+userId=${userId} to ${destination}`);
     
+    res.json({ 
+      success: true, 
+      message: "Plan submitted successfully", 
+      id: result.insertId 
+    });
   } catch (err) {
     console.error("❌ Error inserting travel plan:", err);
-    res.json({ success: false, message: "Database error: " + err.message 
-});
+    res.status(500).json({ 
+      success: false, 
+      message: "Database error",
+      error: process.env.NODE_ENV === 'development' ? err.message : 
+undefined
+    });
   }
 });
 
