@@ -446,7 +446,7 @@ app.post("/addTravelPlan", async (req, res) => {
     }
 
     const [result] = await db.query(
-      `INSERT INTO travel_plans (user_id, destination, datetime) VALUES 
+      `INSERT INTO travel_plans (user_id, destination, time) VALUES 
 (?, ?, ?)`,
       [userId, destination, datetime]
     );
@@ -463,7 +463,7 @@ result.insertId });
 app.get("/getUserTravelPlan", async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college
+      `SELECT tp.id, tp.destination, tp.time, u.name, u.college
        FROM travel_plans tp
        JOIN users u ON tp.user_id = u.id
        ORDER BY tp.datetime ASC`
