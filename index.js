@@ -1,4 +1,3 @@
-// index.js - Complete Fixed Version with Debug Support
 require("dotenv").config();
 
 const twilio = require("twilio");
