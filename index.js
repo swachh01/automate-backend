@@ -477,7 +477,6 @@ app.get("/getUserTravelPlan", async (req, res) => {
 });
 
 // Get all users who are going somewhere (alternative to 
-/getUserTravelPlan)
 app.get("/going-users", async (req, res) => {
   try {
     const [rows] = await db.query(
