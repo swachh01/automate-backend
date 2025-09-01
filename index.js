@@ -13,7 +13,7 @@ const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
-const mysql = require("mysql2/promise");
+const mysql = require("mysql2");
 
 const app = express();
 
@@ -416,64 +416,69 @@ ${rows[0].id})`);
 
 
 // Submit travel plan
-app.post("/addTravelPlan", async (req, res) => {
+app.post("/addTravelPlan", (req, res) => {
   const { userId, destination, datetime } = req.body;
 
   if (!userId || !destination || !datetime) {
     return res.json({ success: false, message: "Missing fields" });
   }
 
-  try {
-    await pool.query(
-      "INSERT INTO travel_plans (user_id, destination, datetime) VALUES (?, ?, ?)",
-      [userId, destination, datetime]
-    );
-    res.json({ success: true, message: "Plan submitted successfully" });
-  } catch (err) {
-    console.error("❌ Error inserting travel plan:", err);
-    res.json({ success: false, message: "Database error" });
-  }
+  pool.query(
+    `INSERT INTO travel_plans (user_id, destination, datetime) VALUES (?, 
+?, ?)`,
+    [userId, destination, datetime],
+    (err, result) => {
+      if (err) {
+        console.error("❌ Error inserting travel plan:", err);
+        return res.json({ success: false, message: "Database error" });
+      }
+      res.json({ success: true, message: "Plan submitted successfully", 
+id: result.insertId });
+    }
+  );
 });
 
 // Get all travel plans (with user info)
-app.get("/getUserTravelPlan", async (req, res) => {
-  try {
-    const [rows] = await pool.query(
-      `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college 
-       FROM travel_plans tp 
-       JOIN users u ON tp.user_id = u.id
-       ORDER BY tp.datetime ASC`
-    );
-    res.json({ success: true, users: rows });
-  } catch (err) {
-    console.error("❌ Error fetching travel plans:", err);
-    res.json({ success: false, message: "Database error" });
-  }
+app.get("/getUserTravelPlan", (req, res) => {
+  pool.query(
+    `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college
+     FROM travel_plans tp
+     JOIN users u ON tp.user_id = u.id
+     ORDER BY tp.datetime ASC`,
+    (err, rows) => {
+      if (err) {
+        console.error("❌ Error fetching travel plans:", err);
+        return res.json({ success: false, message: "Database error" });
+      }
+      res.json({ success: true, users: rows });
+    }
+  );
 });
 
-
-// For Android Stage 4 to fetch the userId by phone when needed
-app.get("/getUserByPhone", async (req, res) => {
+// Fetch user by phone
+app.get("/getUserByPhone", (req, res) => {
   const phone = req.query.phone;
   console.log("📩 /getUserByPhone query:", req.query);
-  
+
   if (!phone) {
-    return res.status(400).json({ success: false, message: "Missing phone" 
-});
+    return res.status(400).json({ success: false, message: "Missing phone" });
   }
 
-  try {
-    const user = await getUserByPhone(phone);
-    if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
+  pool.query(
+    "SELECT * FROM users WHERE phone = ?",
+    [phone],
+    (err, results) => {
+      if (err) {
+        console.error("❌ /getUserByPhone error:", err);
+        return res.status(500).json({ success: false, message: "Server error" });
+      }
+      if (results.length === 0) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+      const user = results[0];
+      res.json({ success: true, userId: user.id, user });
     }
-    res.json({ success: true, userId: user.id, user });
-  } catch (err) {
-    console.error("❌ /getUserByPhone error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
+  );
 });
 
 // Update profile (multipart form-data):
