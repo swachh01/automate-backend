@@ -466,7 +466,7 @@ app.get("/getUserTravelPlan", async (req, res) => {
       `SELECT tp.id, tp.destination, tp.time, u.name, u.college
        FROM travel_plans tp
        JOIN users u ON tp.user_id = u.id
-       ORDER BY tp.datetime ASC`
+       ORDER BY tp.time ASC`
     );
     
     res.json({ success: true, users: rows });
