@@ -13,7 +13,7 @@ const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
-const mysql = require("mysql2");
+const mysql = require("mysql2/promise");
 
 const app = express();
 
