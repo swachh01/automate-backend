@@ -436,84 +436,69 @@ ${rows[0].id})`);
   }
 });
 
-// ✅ UPDATED /addTravelPlan endpoint with better error handling
+// Submit travel plan - FIXED VERSION
 app.post("/addTravelPlan", async (req, res) => {
   try {
-    console.log("📩 /addTravelPlan request:", req.body);
-    
-    const { userId, destination, datetime } = req.body;
+    // Accept both 'time' and 'datetime' for flexibility
+    const { userId, destination, datetime, time } = req.body;
+    const actualTime = datetime || time; // Use datetime if provided, 
 
-    if (!userId || !destination || !datetime) {
-      console.log("❌ Missing fields:", { userId, destination, datetime 
-});
-      return res.status(400).json({ 
+    console.log("📩 /addTravelPlan request:", req.body);
+
+    if (!userId || !destination || !actualTime) {
+      console.log("❌ Missing fields:", { userId, destination, datetime, 
+time, actualTime });
+      return res.json({ 
         success: false, 
-        message: "Missing required fields: userId, destination, datetime" 
+        message: `Missing required fields: userId, destination, and 
+time/datetime` 
       });
     }
 
     const [result] = await db.query(
       `INSERT INTO travel_plans (user_id, destination, time) VALUES (?, ?, 
 ?)`,
-      [userId, destination, datetime]
+      [userId, destination, actualTime]
     );
     
-    console.log("✅ Plan inserted successfully, ID:", result.insertId);
+    console.log(`✅ Travel plan created: ID=${result.insertId} for 
+userId=${userId} to ${destination}`);
+    
     res.json({ 
       success: true, 
       message: "Plan submitted successfully", 
       id: result.insertId 
     });
-    
   } catch (err) {
     console.error("❌ Error inserting travel plan:", err);
     res.status(500).json({ 
       success: false, 
-      message: "Database error: " + err.message 
+      message: "Database error",
+      error: process.env.NODE_ENV === 'development' ? err.message : 
+undefined
     });
   }
 });
+
 
 // Get all travel plans (with user info)
 
 // ✅ ADD this missing endpoint
 app.get("/getUserTravelPlan", async (req, res) => {
   try {
-    const userId = req.query.userId;
-    
-    if (!userId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Missing userId parameter" 
-      });
-    }
-
     const [rows] = await db.query(
-      `SELECT destination, time FROM travel_plans WHERE user_id = ? ORDER 
-BY time DESC LIMIT 1`,
-      [userId]
+      `SELECT tp.id, tp.destination, 
+       DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
+       u.name, u.college
+       FROM travel_plans tp
+       JOIN users u ON tp.user_id = u.id
+       ORDER BY tp.time ASC`
     );
     
-    if (rows.length === 0) {
-      return res.json({ 
-        success: true, 
-        destination: "",
-        time: ""
-      });
-    }
-    
-    res.json({ 
-      success: true, 
-      destination: rows[0].destination,
-      time: rows[0].time
-    });
-    
+    res.json({ success: true, users: rows });
   } catch (err) {
-    console.error("❌ Error fetching user travel plan:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Database error" 
-    });
+    console.error("❌ Error fetching travel plans:", err);
+    res.json({ success: false, message: "Database error" });
   }
 });
 
@@ -521,29 +506,21 @@ BY time DESC LIMIT 1`,
 app.get("/going-users", async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT tp.id, tp.destination, tp.time, u.name, u.college
+      `SELECT tp.id, tp.destination, 
+       DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
+       u.name, u.college
        FROM travel_plans tp
        JOIN users u ON tp.user_id = u.id
        ORDER BY tp.time ASC`
     );
     
-    // ✅ Ensure we always return an array, not null
-    const users = rows || [];
-    
-    res.json({ 
-      success: true, 
-      users: users 
-    });
-    
+    res.json({ success: true, users: rows });
   } catch (err) {
     console.error("❌ Error fetching going users:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Database error",
-      users: [] // ✅ Return empty array on error
-    });
+    res.status(500).json({ success: false, message: "Database error" });
   }
 });
+
 
 // Fetch user by phone
 app.get("/getUserByPhone", async (req, res) => {
