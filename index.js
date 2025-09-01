@@ -38,7 +38,6 @@ const pool = mysql.createPool({
   port: process.env.MYSQLPORT ? Number(process.env.MYSQLPORT) : 3306,
   connectionLimit: 10,
 });
-const db = pool.promise();
 
 // ---------- Multer (profile image) ----------
 const storage = multer.diskStorage({
