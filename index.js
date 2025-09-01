@@ -415,6 +415,44 @@ ${rows[0].id})`);
   }
 });
 
+
+// Submit travel plan
+app.post("/going-somewhere", async (req, res) => {
+  const { userId, destination, datetime } = req.body;
+
+  if (!userId || !destination || !datetime) {
+    return res.json({ success: false, message: "Missing fields" });
+  }
+
+  try {
+    await pool.query(
+      "INSERT INTO travel_plans (user_id, destination, datetime) VALUES (?, ?, ?)",
+      [userId, destination, datetime]
+    );
+    res.json({ success: true, message: "Plan submitted successfully" });
+  } catch (err) {
+    console.error("❌ Error inserting travel plan:", err);
+    res.json({ success: false, message: "Database error" });
+  }
+});
+
+// Get all travel plans (with user info)
+app.get("/see-whos-going", async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college 
+       FROM travel_plans tp 
+       JOIN users u ON tp.user_id = u.id
+       ORDER BY tp.datetime ASC`
+    );
+    res.json({ success: true, users: rows });
+  } catch (err) {
+    console.error("❌ Error fetching travel plans:", err);
+    res.json({ success: false, message: "Database error" });
+  }
+});
+
+
 // For Android Stage 4 to fetch the userId by phone when needed
 app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
