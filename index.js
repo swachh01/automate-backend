@@ -1,4 +1,4 @@
-// index.js
+// index.js - Complete Fixed Version
 require("dotenv").config();
 
 const twilio = require("twilio");
@@ -44,8 +44,7 @@ const db = pool.promise();
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase() || 
-".jpg";
+    const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
     cb(null, `profile_${Date.now()}${ext}`);
   },
 });
@@ -54,60 +53,113 @@ const upload = multer({ storage });
 // ---------- Helpers ----------
 async function getUserByPhone(phone) {
   const [rows] = await db.query(
-    `SELECT id, name, college, phone, gender, dob, degree, year, 
-profile_pic FROM users WHERE phone = ?`,
+    `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ?`,
     [phone]
   );
   return rows && rows[0] ? rows[0] : null;
 }
 
-
 // ---------- Routes ----------
 
 // Health
-app.get("/health", (_req, res) => res.sendStatus(200));
+app.get("/health", async (_req, res) => {
+  try {
+    // Test database connection
+    await db.query('SELECT 1');
+    res.json({ status: "OK", timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error("❌ Health check failed:", err);
+    res.status(500).json({ status: "ERROR", message: "Database connection failed" });
+  }
+});
 
 // Signup: expects { name, college, gender, phone }
-
 app.post("/signup", async (req, res) => {
   try {
     const { name, college, gender, phone } = req.body || {};
-    console.log("📩 /signup body:", req.body);
+    console.log("📩 /signup body:", { name, college, gender, phone });
 
     if (!name || !college || !gender || !phone) {
-      return res.status(400).json({ success: false, message: "Missing name/college/gender/phone" });
+      return res.status(400).json({ 
+        success: false, 
+        message: "Missing required fields: name, college, gender, phone" 
+      });
+    }
+
+    // Validate input
+    if (name.trim().length < 2) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Name must be at least 2 characters long" 
+      });
+    }
+
+    // Check if user already exists
+    const [existingUser] = await db.query(
+      `SELECT id FROM users WHERE phone = ?`, 
+      [phone]
+    );
+    
+    if (existingUser.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "User with this phone number already exists" 
+      });
     }
 
     // Save details in memory until OTP verified
-    signupStore[phone] = { name, college, gender };
+    signupStore[phone] = { 
+      name: name.trim(), 
+      college: college.trim(), 
+      gender 
+    };
     console.log("✅ Stored signup data for", phone, signupStore[phone]);
 
-    return res.json({ success: true, message: "Signup data received. Please verify OTP." });
+    return res.json({ 
+      success: true, 
+      message: "Signup data received. Please verify OTP." 
+    });
+    
   } catch (err) {
     console.error("❌ /signup error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
-
 // ---------- Send OTP ----------
 app.post("/sendOtp", (req, res) => {
   const { phone } = req.body;
-  if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
+  console.log("📩 /sendOtp request:", { phone });
+  
+  if (!phone) {
+    return res.status(400).json({ success: false, message: "Phone required" });
+  }
 
-  const otp = Math.floor(1000 + Math.random() * 9000); // 4-digit OTP for simplicity
+  const otp = Math.floor(1000 + Math.random() * 9000);
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
 
-  otpStore[phone] = { otp: otp.toString(), expires: Date.now() + 5 * 60 * 1000 }; // store as string
-  console.log(`📩 Generated OTP for ${phone}: ${otp}`);
+  // Store OTP as string for consistent comparison
+  otpStore[phone] = { 
+    otp: otp.toString(), 
+    expires: expiresAt 
+  };
+  
+  console.log(`📩 Generated OTP for ${phone}: ${otp}, expires: ${new Date(expiresAt)}`);
 
   client.messages
     .create({
       body: `Your OTP is ${otp}`,
       from: process.env.TWILIO_PHONE_NUMBER,
-      to: `+91${phone}` // keep consistent format
+      to: `+91${phone}`
     })
     .then(() => {
-      res.json({ success: true, message: "OTP sent successfully", otp });
+      console.log(`✅ SMS sent successfully to ${phone}`);
+      res.json({ 
+        success: true, 
+        message: "OTP sent successfully",
+        // Remove OTP from response in production for security
+        ...(process.env.NODE_ENV === 'development' && { otp })
+      });
     })
     .catch(err => {
       console.error("❌ SMS Error:", err);
@@ -116,48 +168,73 @@ app.post("/sendOtp", (req, res) => {
 });
 
 // ---------- Verify OTP ----------
-
 app.post("/verifyOtp", async (req, res) => {
-  const { phone, otp } = req.body;
-  const entry = otpStore[phone];
-
-  console.log("📩 Verify request:", req.body, "Stored:", entry);
-
-  if (!entry) return res.status(400).json({ success: false, message: "No OTP found for this phone" });
-  if (Date.now() > entry.expires) {
-    delete otpStore[phone];
-    return res.status(400).json({ success: false, message: "OTP expired" });
-  }
-  if (entry.otp !== otp.toString()) {
-    return res.status(400).json({ success: false, message: "Invalid OTP" });
-  }
-  delete otpStore[phone];
-  const signupData = signupStore[phone];
-  if (!signupData) {
-    return res.status(400).json({ success: false, message: "Signup data missing, restart signup" });
-  }
-
   try {
+    const { phone, otp } = req.body;
+    console.log("📩 /verifyOtp request:", { phone, otp: otp ? "****" : "missing" });
+    
+    if (!phone || !otp) {
+      return res.status(400).json({ success: false, message: "Phone and OTP required" });
+    }
+    
+    const entry = otpStore[phone];
+    console.log("📊 Stored OTP entry:", entry ? { hasOtp: !!entry.otp, expires: new Date(entry.expires), now: new Date() } : "not found");
+
+    if (!entry) {
+      return res.status(400).json({ success: false, message: "No OTP found for this phone" });
+    }
+    
+    if (Date.now() > entry.expires) {
+      delete otpStore[phone];
+      return res.status(400).json({ success: false, message: "OTP expired" });
+    }
+    
+    // Convert both to strings for comparison
+    if (entry.otp !== otp.toString()) {
+      console.log(`❌ OTP mismatch: stored=${entry.otp}, received=${otp}`);
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+
+    // Clear OTP after successful verification
+    delete otpStore[phone];
+    
+    const signupData = signupStore[phone];
+    console.log("📊 Signup data:", signupData);
+    
+    if (!signupData) {
+      return res.status(400).json({ success: false, message: "Signup data missing, restart signup" });
+    }
+
+    // Insert user into database
+    // Table structure: id, name, college, password, created_at, phone, gender, dob, degree, year, profile_pic
     const [result] = await db.query(
-      `INSERT INTO users (name, college, password, phone, gender) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO users (name, college, password, phone, gender, created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
       [signupData.name, signupData.college, "", phone, signupData.gender]
     );
 
+    // Clear signup data
     delete signupStore[phone];
+
+    console.log(`✅ User created: ID=${result.insertId}, Name=${signupData.name}, Phone=${phone}`);
 
     return res.json({
       success: true,
       message: "OTP verified and user created",
-      userId: result.insertId
+      userId: result.insertId,
+      user: {
+        id: result.insertId,
+        name: signupData.name,
+        college: signupData.college,
+        phone: phone,
+        gender: signupData.gender
+      }
     });
+    
   } catch (err) {
-    console.error("❌ Error inserting user:", err);
+    console.error("❌ Error in /verifyOtp:", err);
     return res.status(500).json({ success: false, message: "Database error" });
   }
 });
-
-
-
 
 // ✅ Save password & return userId - FIXED VERSION
 app.post("/savePassword", async (req, res) => {
@@ -170,6 +247,14 @@ app.post("/savePassword", async (req, res) => {
             return res.status(400).json({ 
                 success: false, 
                 message: "Phone and password required" 
+            });
+        }
+
+        // Validate password strength
+        if (newPassword.length < 4) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Password must be at least 4 characters long" 
             });
         }
 
@@ -220,11 +305,10 @@ app.post("/savePassword", async (req, res) => {
     }
 });
 
-
 // Login: expects { phone, password }
 app.post("/login", async (req, res) => {
   const { phone, password } = req.body || {};
-  console.log("📩 /login body:", req.body);
+  console.log("📩 /login body:", { phone, hasPassword: !!password });
 
   if (!phone || !password) {
     return res
@@ -234,15 +318,18 @@ app.post("/login", async (req, res) => {
 
   try {
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender FROM users WHERE phone = ? 
-AND password = ?`,
+      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND password = ?`,
       [phone, password]
     );
+    
     if (!rows.length) {
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
     }
+    
+    console.log(`✅ Login successful for user: ${rows[0].name} (ID: ${rows[0].id})`);
+    
     res.json({
       success: true,
       message: "Login successful",
@@ -259,10 +346,9 @@ AND password = ?`,
 app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
   console.log("📩 /getUserByPhone query:", req.query);
-
+  
   if (!phone) {
-    return res.status(400).json({ success: false, message: "Missing phone" 
-});
+    return res.status(400).json({ success: false, message: "Missing phone" });
   }
 
   try {
@@ -281,14 +367,13 @@ app.get("/getUserByPhone", async (req, res) => {
 
 // Update profile (multipart form-data):
 // Fields: userId, dob, degree, year
-// File:   profile_pic
+// File: profile_pic
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     const { userId, dob, degree, year } = req.body || {};
     const file = req.file;
     console.log("📩 /updateProfile fields:", req.body);
-    console.log("📎 /updateProfile file:", !!file ? file.filename : 
-"none");
+    console.log("📎 /updateProfile file:", !!file ? file.filename : "none");
 
     if (!userId) {
       return res
@@ -338,10 +423,11 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     }
 
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, 
-profile_pic FROM users WHERE id = ?`,
+      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`,
       [userId]
     );
+
+    console.log(`✅ Profile updated for userId: ${userId}`);
 
     res.json({
       success: true,
@@ -361,4 +447,3 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
 });
-
