@@ -481,12 +481,11 @@ undefined
 });
 
 
-// Get all travel plans (with user info)
 
 // Get all travel plans (with user info)
 app.get("/getUserTravelPlan", (req, res) => {
   pool.query(
-    `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college
+    `SELECT tp.id, tp.destination, tp.time, u.name, u.college
      FROM travel_plans tp
      JOIN users u ON tp.user_id = u.id
      ORDER BY tp.datetime ASC`,
