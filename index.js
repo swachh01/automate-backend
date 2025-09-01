@@ -495,6 +495,7 @@ app.get("/getUserTravelPlan", (req, res) => {
         return res.json({ success: false, message: "Database error", 
 users: [] });
       }
+      console.log("Travel Plan fetched:", results);
       // ✅ Always return an array
       res.json({ success: true, users: results || [] });
     }
