@@ -417,7 +417,7 @@ ${rows[0].id})`);
 
 
 // Submit travel plan
-app.post("/going-somewhere", async (req, res) => {
+app.post("/addTravelPlan", async (req, res) => {
   const { userId, destination, datetime } = req.body;
 
   if (!userId || !destination || !datetime) {
@@ -437,7 +437,7 @@ app.post("/going-somewhere", async (req, res) => {
 });
 
 // Get all travel plans (with user info)
-app.get("/see-whos-going", async (req, res) => {
+app.get("/getUserTravelPlan", async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT tp.id, tp.destination, tp.datetime, u.name, u.college 
