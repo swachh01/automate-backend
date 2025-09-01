@@ -158,54 +158,66 @@ app.post("/verifyOtp", async (req, res) => {
 
 
 
-// ✅ Save password & return userId
-app.post("/savePassword", (req, res) => {
-    const { phone, newPassword } = req.body;
 
-    if (!phone || !newPassword) {
-        return res.status(400).json({ success: false, message: `Phone and 
-password required` });
-    }
+// ✅ Save password & return userId - FIXED VERSION
+app.post("/savePassword", async (req, res) => {
+    try {
+        const { phone, newPassword } = req.body;
+        
+        console.log("📩 /savePassword request:", { phone: phone ? "***" + phone.slice(-4) : "missing", hasPassword: !!newPassword });
 
-    // Hash the password (recommended in production, but keeping plain 
-    const sql = "UPDATE users SET password = ? WHERE phone = ?";
-    pool.query(sql, [newPassword, phone], (err, result) => {
-        if (err) {
-            console.error("❌ Error saving password:", err);
-            return res.status(500).json({ success: false, message: 
-"Database error" });
+        if (!phone || !newPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Phone and password required" 
+            });
         }
 
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ success: false, message: `User 
-not found` });
+        // Use the promise-based db connection for consistency
+        const [updateResult] = await db.query(
+            "UPDATE users SET password = ? WHERE phone = ?", 
+            [newPassword, phone]
+        );
+
+        console.log("📊 Update result:", updateResult);
+
+        if (updateResult.affectedRows === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "User not found" 
+            });
         }
 
         // ✅ Fetch userId after updating
-        pool.query("SELECT id FROM users WHERE phone = ?", [phone], (err2, 
-rows) => {
-            if (err2) {
-                console.error("❌ Error fetching userId:", err2);
-                return res.status(500).json({ success: false, message: 
-"Database error" });
-            }
+        const [userRows] = await db.query(
+            "SELECT id FROM users WHERE phone = ?", 
+            [phone]
+        );
 
-            if (rows.length === 0) {
-                return res.status(404).json({ success: false, message: 
-"User not found" });
-            }
-
-            const userId = rows[0].id;
-            console.log(`✅ Password updated for phone:", phone, "-> 
-userId:`, userId);
-
-            return res.json({
-                success: true,
-                message: "Password updated successfully",
-                userId: userId
+        if (userRows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "User not found after update" 
             });
+        }
+
+        const userId = userRows[0].id;
+        console.log(`✅ Password updated for phone: ***${phone.slice(-4)} -> userId: ${userId}`);
+
+        return res.json({
+            success: true,
+            message: "Password updated successfully",
+            userId: userId
         });
-    });
+
+    } catch (err) {
+        console.error("❌ Error in /savePassword:", err);
+        return res.status(500).json({ 
+            success: false, 
+            message: "Database error",
+            error: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+    }
 });
 
 
