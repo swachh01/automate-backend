@@ -503,7 +503,6 @@ users: [] });
   );
 });
 
-// Replace your existing /going-users endpoint with this:
 app.get("/getUsersGoing", async (req, res) => {
   try {
     const [rows] = await db.query(
@@ -516,19 +515,24 @@ app.get("/getUsersGoing", async (req, res) => {
        ORDER BY tp.time ASC`
     );
 
-    // Map to match GoingUser structure
+    console.log("Raw query results:", rows);
+
+    // Map to match your GoingUser class structure
     const usersGoing = rows.map(row => ({
-      userId: row.user_id,
+      userId: row.user_id,  // Make sure this field exists
       name: row.name,
       destination: row.destination,
       time: row.time,
       college: row.college
     }));
 
+    console.log("Mapped usersGoing:", usersGoing);
+
     res.json({ 
       success: true, 
-      usersGoing: usersGoing 
+      usersGoing: usersGoing  // This should match your UsersGoingResponse 
     });
+    
   } catch (err) {
     console.error("❌ Error fetching users going:", err);
     res.status(500).json({ 
