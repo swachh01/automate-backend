@@ -651,6 +651,259 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   }
 });
 
+// 💬 Chat Routes
+
+// Send a message
+app.post('/sendMessage', async (req, res) => {
+    try {
+        const { senderId, receiverId, message } = req.body;
+        
+        if (!senderId || !receiverId || !message) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'senderId, receiverId, and message are required' 
+            });
+        }
+
+        const query = `
+            INSERT INTO messages (sender_id, reciever_id, message) 
+            VALUES (?, ?, ?)
+        `;
+        
+        await db.run(query, [senderId, receiverId, message]);
+        
+        res.json({ success: true, message: 'Message sent successfully' });
+    } catch (error) {
+        console.error('Error sending message:', error);
+        res.status(500).json({ success: false, message: `Failed to send 
+message` });
+    }
+});
+
+// Get messages between two users
+app.get('/getMessages', async (req, res) => {
+    try {
+        const { senderId, receiverId } = req.query;
+        
+        if (!senderId || !receiverId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'senderId and receiverId are required' 
+            });
+        }
+
+        const query = `
+            SELECT id, sender_id as senderId, reciever_id as receiverId, 
+                   message, created_at as timestamp
+            FROM messages 
+            WHERE (sender_id = ? AND reciever_id = ?) 
+               OR (sender_id = ? AND reciever_id = ?)
+            ORDER BY created_at ASC
+        `;
+        
+        const rows = await db.all(query, [senderId, receiverId, 
+receiverId, senderId]);
+        
+        res.json({
+            success: true,
+            messages: rows || []
+        });
+    } catch (error) {
+        console.error('Error fetching messages:', error);
+        res.status(500).json({ success: false, message: `Failed to fetch 
+messages` });
+    }
+});
+
+// Get chat users (users who have chatted with the current user)
+app.get('/getChatUsers', async (req, res) => {
+    try {
+        const { userId } = req.query;
+        
+        if (!userId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'userId is required' 
+            });
+        }
+
+        const query = `
+            SELECT DISTINCT 
+                u.id,
+                u.name as username,
+                u.college,
+                u.profile_pic,
+                m.last_message,
+                m.last_timestamp as timestamp,
+                COALESCE(unread.unread_count, 0) as unreadCount
+            FROM users u
+            INNER JOIN (
+                SELECT 
+                    CASE 
+                        WHEN sender_id = ? THEN reciever_id 
+                        ELSE sender_id 
+                    END as other_user_id,
+                    message as last_message,
+                    created_at as last_timestamp,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CASE 
+                            WHEN sender_id = ? THEN reciever_id 
+                            ELSE sender_id 
+                        END 
+                        ORDER BY created_at DESC
+                    ) as rn
+                FROM messages 
+                WHERE sender_id = ? OR reciever_id = ?
+            ) m ON u.id = m.other_user_id AND m.rn = 1
+            LEFT JOIN (
+                SELECT 
+                    sender_id as other_user_id,
+                    COUNT(*) as unread_count
+                FROM messages 
+                WHERE reciever_id = ? AND id NOT IN (
+                    SELECT message_id FROM read_messages WHERE user_id = ?
+                )
+                GROUP BY sender_id
+            ) unread ON u.id = unread.other_user_id
+            ORDER BY m.last_timestamp DESC
+        `;
+        
+        const rows = await db.all(query, [userId, userId, userId, userId, 
+userId, userId]);
+        
+        res.json({
+            success: true,
+            chats: rows || []
+        });
+    } catch (error) {
+        console.error('Error fetching chat users:', error);
+        res.status(500).json({ success: false, message: `Failed to fetch 
+chat users` });
+    }
+});
+
+// Mark messages as read
+app.post('/markMessagesRead', async (req, res) => {
+    try {
+        const { userId, otherUserId } = req.body;
+        
+        if (!userId || !otherUserId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'userId and otherUserId are required' 
+            });
+        }
+
+        // Get all unread messages from otherUserId to userId
+        const getUnreadQuery = `
+            SELECT id FROM messages 
+            WHERE sender_id = ? AND reciever_id = ?
+            AND id NOT IN (
+                SELECT message_id FROM read_messages WHERE user_id = ?
+            )
+        `;
+        
+        const unreadMessages = await db.all(getUnreadQuery, [otherUserId, 
+userId, userId]);
+        
+        // Mark each message as read
+        for (const msg of unreadMessages) {
+            await db.run(
+                `INSERT OR IGNORE INTO read_messages (user_id, message_id) 
+VALUES (?, ?)`,
+                [userId, msg.id]
+            );
+        }
+        
+        res.json({ success: true, message: 'Messages marked as read' });
+    } catch (error) {
+        console.error('Error marking messages as read:', error);
+        res.status(500).json({ success: false, message: `Failed to mark 
+messages as read` });
+    }
+});
+
+// Get unread count for a user
+app.get('/unreadCount/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const query = `
+            SELECT COUNT(*) as unreadCount
+            FROM messages 
+            WHERE reciever_id = ? 
+            AND id NOT IN (
+                SELECT message_id FROM read_messages WHERE user_id = ?
+            )
+        `;
+        
+        const result = await db.get(query, [userId, userId]);
+        
+        res.json({
+            success: true,
+            unreadCount: result.unreadCount || 0
+        });
+    } catch (error) {
+        console.error('Error getting unread count:', error);
+        res.status(500).json({ success: false, message: `Failed to get 
+unread count` });
+    }
+});
+
+// Delete entire chat between two users
+app.delete('/deleteChat/:userId/:receiverId', async (req, res) => {
+    try {
+        const { userId, receiverId } = req.params;
+        
+        // Delete all messages between these two users
+        const deleteQuery = `
+            DELETE FROM messages 
+            WHERE (sender_id = ? AND reciever_id = ?) 
+               OR (sender_id = ? AND reciever_id = ?)
+        `;
+        
+        await db.run(deleteQuery, [userId, receiverId, receiverId, 
+userId]);
+        
+        // Also delete read_messages entries for these messages
+        const deleteReadQuery = `
+            DELETE FROM read_messages 
+            WHERE user_id IN (?, ?) 
+            AND message_id NOT IN (SELECT id FROM messages)
+        `;
+        
+        await db.run(deleteReadQuery, [userId, receiverId]);
+        
+        res.json({ success: true, message: 'Chat deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting chat:', error);
+        res.status(500).json({ success: false, message: `Failed to delete 
+chat` });
+    }
+});
+
+// Delete a specific message
+app.delete('/deleteMessage/:messageId', async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        
+        // Delete the message
+        await db.run('DELETE FROM messages WHERE id = ?', [messageId]);
+        
+        // Delete corresponding read_messages entries
+        await db.run('DELETE FROM read_messages WHERE message_id = ?', 
+[messageId]);
+        
+        res.json({ success: true, message: 'Message deleted successfully' 
+});
+    } catch (error) {
+        console.error('Error deleting message:', error);
+        res.status(500).json({ success: false, message: `Failed to delete 
+message` });
+    }
+});
+
+
 // ---------- Start ----------
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
