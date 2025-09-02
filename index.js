@@ -665,7 +665,7 @@ app.post('/sendMessage', async (req, res) => {
         }
 
         const query = `
-            INSERT INTO messages (sender_id, reciever_id, message) 
+            INSERT INTO messages (sender_id, receiver_id, message) 
             VALUES (?, ?, ?)
         `;
         
@@ -692,7 +692,7 @@ app.get('/getMessages', async (req, res) => {
         }
 
         const query = `
-            SELECT id, sender_id as senderId, reciever_id as receiverId, 
+            SELECT id, sender_id as senderId, receiver_id as receiverId, 
                    message, created_at as timestamp
             FROM messages 
             WHERE (sender_id = ? AND reciever_id = ?) 
@@ -739,20 +739,20 @@ app.get('/getChatUsers', async (req, res) => {
             INNER JOIN (
                 SELECT 
                     CASE 
-                        WHEN sender_id = ? THEN reciever_id 
+                        WHEN sender_id = ? THEN receiver_id 
                         ELSE sender_id 
                     END as other_user_id,
                     message as last_message,
                     created_at as last_timestamp,
                     ROW_NUMBER() OVER (
                         PARTITION BY CASE 
-                            WHEN sender_id = ? THEN reciever_id 
+                            WHEN sender_id = ? THEN receiver_id 
                             ELSE sender_id 
                         END 
                         ORDER BY created_at DESC
                     ) as rn
                 FROM messages 
-                WHERE sender_id = ? OR reciever_id = ?
+                WHERE sender_id = ? OR receiver_id = ?
             ) latest ON u.id = latest.other_user_id AND latest.rn = 1
             ORDER BY latest.last_timestamp DESC
         `;
@@ -803,8 +803,8 @@ app.delete('/deleteChat/:userId/:receiverId', async (req, res) => {
         
         const deleteQuery = `
             DELETE FROM messages 
-            WHERE (sender_id = ? AND reciever_id = ?) 
-               OR (sender_id = ? AND reciever_id = ?)
+            WHERE (sender_id = ? AND receiver_id = ?) 
+               OR (sender_id = ? AND receiver_id = ?)
         `;
         
         await db.execute(deleteQuery, [userId, receiverId, receiverId, 
