@@ -1,3 +1,4 @@
+//see this 
 // index.js - Fixed Database Connection Version
 require("dotenv").config();
 
@@ -502,25 +503,41 @@ users: [] });
   );
 });
 
-// ✅ UPDATED /going-users endpoint to ensure it always returns an array
-app.get("/going-users", async (req, res) => {
+// Replace your existing /going-users endpoint with this:
+app.get("/getUsersGoing", async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT tp.id, tp.destination, 
+      `SELECT tp.user_id, tp.destination,
        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
        u.name, u.college
        FROM travel_plans tp
        JOIN users u ON tp.user_id = u.id
+       WHERE tp.time > NOW()
        ORDER BY tp.time ASC`
     );
-    
-    res.json({ success: true, users: rows });
+
+    // Map to match GoingUser structure
+    const usersGoing = rows.map(row => ({
+      userId: row.user_id,
+      name: row.name,
+      destination: row.destination,
+      time: row.time,
+      college: row.college
+    }));
+
+    res.json({ 
+      success: true, 
+      usersGoing: usersGoing 
+    });
   } catch (err) {
-    console.error("❌ Error fetching going users:", err);
-    res.status(500).json({ success: false, message: "Database error" });
+    console.error("❌ Error fetching users going:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Database error",
+      usersGoing: []
+    });
   }
 });
-
 
 // Fetch user by phone
 app.get("/getUserByPhone", async (req, res) => {
