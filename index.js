@@ -119,6 +119,16 @@ app.get("/debug/stores", (req, res) => {
   });
 });
 
+// Debug endpoint to check users
+app.get('/debug/users', async (req, res) => {
+    try {
+        const [rows] = await db.execute('SELECT id, name FROM users LIMIT 10');
+        res.json({ users: rows });
+    } catch (error) {
+        res.json({ error: error.message });
+    }
+});
+
 // Signup: expects { name, college, gender, phone }
 app.post("/signup", async (req, res) => {
   try {
@@ -657,10 +667,36 @@ app.post('/sendMessage', async (req, res) => {
     try {
         const { senderId, receiverId, message } = req.body;
         
+        console.log('Received sendMessage request:', {
+            senderId: senderId,
+            receiverId: receiverId,
+            message: message,
+            senderIdType: typeof senderId,
+            receiverIdType: typeof receiverId
+        });
+        
         if (!senderId || !receiverId || !message) {
             return res.status(400).json({
                 success: false,   
                 message: 'senderId, receiverId, and message are required'
+            });
+        }
+
+        // First, let's verify these users exist
+        const userCheckQuery = `
+            SELECT id FROM users WHERE id IN (?, ?)
+        `;
+        
+        const [userCheck] = await db.execute(userCheckQuery, [senderId, 
+receiverId]);
+        console.log('User check results:', userCheck);
+        
+        if (userCheck.length !== 2) {
+            console.log('Missing users - Found:', userCheck.length, 
+'Expected: 2');
+            return res.status(400).json({
+                success: false,
+                message: 'One or both users do not exist'
             });
         }
       
