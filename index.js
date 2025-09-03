@@ -658,24 +658,32 @@ app.post('/sendMessage', async (req, res) => {
         const { senderId, receiverId, message } = req.body;
         
         if (!senderId || !receiverId || !message) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'senderId, receiverId, and message are required' 
+            return res.status(400).json({
+                success: false,   
+                message: 'senderId, receiverId, and message are required'
             });
         }
-
+      
         const query = `
-            INSERT INTO messages (sender_id, receiver_id, message) 
-            VALUES (?, ?, ?)
+            INSERT INTO messages (sender_id, receiver_id, message, 
+created_at)
+            VALUES (?, ?, ?, NOW())
         `;
-        
-        await db.execute(query, [senderId, receiverId, message]);
-        
-        res.json({ success: true, message: 'Message sent successfully' });
+      
+        const [result] = await db.execute(query, [senderId, receiverId, 
+message]);
+      
+        res.json({ 
+            success: true, 
+            message: 'Message sent successfully',
+            messageId: result.insertId
+        });
     } catch (error) {
         console.error('Error sending message:', error);
-        res.status(500).json({ success: false, message: `Failed to send 
-message` });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to send message' 
+        });
     }
 });
 
@@ -683,25 +691,26 @@ message` });
 app.get('/getMessages', async (req, res) => {
     try {
         const { senderId, receiverId } = req.query;
-        
+    
         if (!senderId || !receiverId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'senderId and receiverId are required' 
+            return res.status(400).json({
+                success: false,
+                message: 'senderId and receiverId are required'
             });
         }
-
+               
         const query = `
-            SELECT id, sender_id as senderId, receiver_id as receiverId, 
-                   message, created_at as timestamp
-            FROM messages 
-            WHERE (sender_id = ? AND reciever_id = ?) 
-               OR (sender_id = ? AND reciever_id = ?)
+            SELECT id, sender_id as senderId, receiver_id as receiverId,
+                   message, created_at as timestamp, 
+                   CASE WHEN receiver_id = ? THEN 0 ELSE 1 END as isRead
+            FROM messages
+            WHERE (sender_id = ? AND receiver_id = ?)
+               OR (sender_id = ? AND receiver_id = ?)
             ORDER BY created_at ASC
         `;
-        
-        const [rows] = await db.execute(query, [senderId, receiverId, 
-receiverId, senderId]);
+      
+        const [rows] = await db.execute(query, [senderId, senderId, 
+receiverId, receiverId, senderId]);
         
         res.json({
             success: true,
@@ -714,20 +723,19 @@ messages` });
     }
 });
 
-// Get chat users (simplified - users who have chatted with current user)
 app.get('/getChatUsers', async (req, res) => {
     try {
         const { userId } = req.query;
-        
+         
         if (!userId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'userId is required' 
+            return res.status(400).json({
+                success: false,
+                message: 'userId is required'
             });
         }
-
+               
         const query = `
-            SELECT DISTINCT 
+            SELECT DISTINCT
                 u.id,
                 u.name as username,
                 u.college,
@@ -737,26 +745,26 @@ app.get('/getChatUsers', async (req, res) => {
                 0 as unreadCount
             FROM users u
             INNER JOIN (
-                SELECT 
-                    CASE 
-                        WHEN sender_id = ? THEN receiver_id 
-                        ELSE sender_id 
+                SELECT
+                    CASE
+                        WHEN sender_id = ? THEN receiver_id
+                        ELSE sender_id
                     END as other_user_id,
                     message as last_message,
                     created_at as last_timestamp,
                     ROW_NUMBER() OVER (
-                        PARTITION BY CASE 
-                            WHEN sender_id = ? THEN receiver_id 
-                            ELSE sender_id 
-                        END 
+                        PARTITION BY CASE
+                            WHEN sender_id = ? THEN receiver_id
+                            ELSE sender_id
+                        END
                         ORDER BY created_at DESC
                     ) as rn
-                FROM messages 
+                FROM messages
                 WHERE sender_id = ? OR receiver_id = ?
             ) latest ON u.id = latest.other_user_id AND latest.rn = 1
             ORDER BY latest.last_timestamp DESC
         `;
-        
+            
         const [rows] = await db.execute(query, [userId, userId, userId, 
 userId]);
         
@@ -764,10 +772,12 @@ userId]);
             success: true,
             chats: rows || []
         });
-    } catch (error) {
+    } catch (error) {   
         console.error('Error fetching chat users:', error);
-        res.status(500).json({ success: false, message: `Failed to fetch 
-chat users` });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch chat users' 
+        });
     }
 });
 
