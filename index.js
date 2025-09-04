@@ -526,24 +526,73 @@ undefined
   }
 });
 
-// Get all travel plans (with user info)
-app.get("/getUserTravelPlan", (req, res) => {
-  pool.query(
-    `SELECT tp.id, tp.destination, tp.time, u.name, u.college
-     FROM travel_plans tp
-     JOIN users u ON tp.user_id = u.id
-     ORDER BY tp.time ASC`,
-    (err, results) => {
-      if (err) {
-        console.error("❌ Error fetching travel plans:", err);
-        return res.json({ success: false, message: "Database error", 
-users: [] });
-      }
-      console.log("Travel Plan fetched:", results);
-      // ✅ Always return an array
-      res.json({ success: true, users: results || [] });
+// Add this new route to your backend
+// Get travel plan for a specific user
+app.get("/getUserTravelPlan/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    
+    console.log(`📩 /getUserTravelPlan/${userId} request`);
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required"
+      });
     }
-  );
+
+    const [results] = await db.query(
+      `SELECT tp.id, tp.destination, tp.time, u.name, u.college
+       FROM travel_plans tp
+       JOIN users u ON tp.user_id = u.id
+       WHERE tp.user_id = ? AND tp.time > NOW()
+       ORDER BY tp.time ASC`,
+      [userId]
+    );
+    
+    console.log(`Travel Plan fetched for user ${userId}:`, results);
+    
+    res.json({ 
+      success: true, 
+      users: results || [] 
+    });
+    
+  } catch (err) {
+    console.error(`❌ Error fetching travel plan for user ${userId}:`, 
+err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Database error",
+      users: [] 
+    });
+  }
+});
+
+// Keep your existing route for getting ALL travel plans (used in other 
+app.get("/getUserTravelPlan", async (req, res) => {
+  try {
+    // Clean up expired plans first
+    await db.query('DELETE FROM travel_plans WHERE time < NOW()');
+    
+    const [results] = await db.query(
+      `SELECT tp.id, tp.destination, tp.time, u.name, u.college
+       FROM travel_plans tp
+       JOIN users u ON tp.user_id = u.id
+       WHERE tp.time > NOW()
+       ORDER BY tp.time ASC`
+    );
+    
+    console.log("All Travel Plans fetched:", results);
+    res.json({ success: true, users: results || [] });
+    
+  } catch (err) {
+    console.error("❌ Error fetching all travel plans:", err);
+    res.json({ 
+      success: false, 
+      message: "Database error",
+      users: [] 
+    });
+  }
 });
 
 app.get("/getUsersGoing", async (req, res) => {
