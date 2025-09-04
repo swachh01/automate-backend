@@ -908,30 +908,119 @@ userId]);
     }
 });
 
-// Mark messages as read (placeholder for now)
 app.post('/markMessagesRead', async (req, res) => {
     try {
-        res.json({ success: true, message: 'Messages marked as read' });
+        const { userId, otherUserId } = req.body;
+
+        if (!userId || !otherUserId) {
+            return res.status(400).json({
+                success: false,
+                message: 'userId and otherUserId are required'
+            });
+        }
+
+        // Mark all messages from otherUserId to userId as read
+        const query = `
+            UPDATE messages 
+            SET is_read = 1 
+            WHERE sender_id = ? AND receiver_id = ? AND is_read = 0
+        `;
+
+        const [result] = await db.execute(query, [otherUserId, userId]);
+        
+        console.log(`Marked ${result.affectedRows} messages as read for 
+user ${userId} from user ${otherUserId}`);
+
+        res.json({ 
+            success: true, 
+            message: 'Messages marked as read',
+            markedCount: result.affectedRows
+        });
     } catch (error) {
         console.error('Error marking messages as read:', error);
-        res.status(500).json({ success: false, message: `Failed to mark 
-messages as read` });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to mark messages as read' 
+        });
     }
 });
 
-// Get unread count (return 0 for now)
-app.get('/unreadCount/:userId', async (req, res) => {
+// Get unread count between two specific users
+app.get('/getUnreadCount', async (req, res) => {
     try {
+        const { userId, otherUserId } = req.query;
+
+        if (!userId || !otherUserId) {
+            return res.status(400).json({
+                success: false,
+                message: 'userId and otherUserId are required'
+            });
+        }
+
+        // Count unread messages from otherUserId to userId
+        const query = `
+            SELECT COUNT(*) as unreadCount
+            FROM messages
+            WHERE sender_id = ? AND receiver_id = ? AND is_read = 0
+        `;
+
+        const [rows] = await db.execute(query, [otherUserId, userId]);
+        const unreadCount = rows[0].unreadCount;
+
+        console.log(`Unread count for user ${userId} from user 
+${otherUserId}: ${unreadCount}`);
+
         res.json({
             success: true,
-            unreadCount: 0
+            unreadCount: unreadCount
         });
     } catch (error) {
         console.error('Error getting unread count:', error);
-        res.status(500).json({ success: false, message: `Failed to get 
-unread count` });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to get unread count' 
+        });
     }
 });
+
+// Get total unread count for a user (for home badge)
+app.get('/getTotalUnreadCount/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                message: 'userId is required'
+            });
+        }
+
+        // Count all unread messages for this user
+        const query = `
+            SELECT COUNT(*) as totalUnreadCount
+            FROM messages
+            WHERE receiver_id = ? AND is_read = 0
+        `;
+
+        const [rows] = await db.execute(query, [userId]);
+        const totalUnreadCount = rows[0].totalUnreadCount;
+
+        console.log(`Total unread count for user ${userId}: 
+${totalUnreadCount}`);
+
+        res.json({
+            success: true,
+            totalUnreadCount: totalUnreadCount
+        });
+    } catch (error) {
+        console.error('Error getting total unread count:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to get total unread count' 
+        });
+    }
+});
+
 
 // Delete entire chat between two users
 app.delete('/deleteChat/:userId/:receiverId', async (req, res) => {
