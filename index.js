@@ -447,51 +447,65 @@ ${rows[0].id})`);
   }
 });
 
-// Submit travel plan - FIXED VERSION
+
+// In your backend server file
+
+// Submit/Update a travel plan (Handles both creating and updating)
 app.post("/addTravelPlan", async (req, res) => {
   try {
-    // Accept both 'time' and 'datetime' for flexibility
-    const { userId, destination, datetime, time } = req.body;
-    const actualTime = datetime || time; // Use datetime if provided, 
+    const { userId, destination, time } = req.body;
+    const actualTime = time; // Assuming 'time' is the correct field name 
+from your Android app
 
     console.log("📩 /addTravelPlan request:", req.body);
 
     if (!userId || !destination || !actualTime) {
-      console.log("❌ Missing fields:", { userId, destination, datetime, 
-time, actualTime });
-      return res.json({ 
-        success: false, 
-        message: `Missing required fields: userId, destination, and 
-time/datetime` 
+      console.log("❌ Missing fields");
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: userId, destination, and time"
       });
     }
 
-    const [result] = await db.query(
-      `INSERT INTO travel_plans (user_id, destination, time) VALUES (?, ?, 
-?)`,
-      [userId, destination, actualTime]
-    );
-    
-    console.log(`✅ Travel plan created: ID=${result.insertId} for 
-userId=${userId} to ${destination}`);
-    
-    res.json({ 
-      success: true, 
-      message: "Plan submitted successfully", 
-      id: result.insertId 
+    // This is the key change. It will INSERT a new row, but if a row
+    // with the same user_id (the UNIQUE key) already exists, it will
+    // UPDATE that row instead.
+    const query = `
+      INSERT INTO travel_plans (user_id, destination, time)
+      VALUES (?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        destination = VALUES(destination),
+        time = VALUES(time)
+    `;
+
+    const [result] = await db.query(query, [userId, destination, 
+actualTime]);
+
+    // The 'affectedRows' will be 1 for a new insert, and 2 for an update.
+    // We can use this to send a more specific message.
+    let message = "Plan submitted successfully";
+    if (result.affectedRows > 1) {
+        message = "Plan updated successfully";
+    }
+
+    console.log(`✅ Travel plan saved for userId=${userId} to 
+${destination}`);
+
+    res.json({
+      success: true,
+      message: message,
+      id: result.insertId // Will be the ID of the new or existing row
     });
   } catch (err) {
-    console.error("❌ Error inserting travel plan:", err);
-    res.status(500).json({ 
-      success: false, 
+    console.error("❌ Error saving travel plan:", err);
+    res.status(500).json({
+      success: false,
       message: "Database error",
       error: process.env.NODE_ENV === 'development' ? err.message : 
 undefined
     });
   }
 });
-
-
 
 // Get all travel plans (with user info)
 app.get("/getUserTravelPlan", (req, res) => {
