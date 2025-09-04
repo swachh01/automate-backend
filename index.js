@@ -723,39 +723,48 @@ message]);
     }
 });
 
-// Get messages between two users
 app.get('/getMessages', async (req, res) => {
     try {
         const { senderId, receiverId } = req.query;
-    
+
         if (!senderId || !receiverId) {
             return res.status(400).json({
                 success: false,
                 message: 'senderId and receiverId are required'
             });
         }
-               
+
         const query = `
             SELECT id, sender_id as senderId, receiver_id as receiverId,
-                   message, created_at as timestamp, 
-                   CASE WHEN receiver_id = ? THEN 0 ELSE 1 END as isRead
+                   message, created_at as timestamp,
+                   CASE WHEN receiver_id = ? THEN 0 ELSE 1 END as 
+isReadInt
             FROM messages
             WHERE (sender_id = ? AND receiver_id = ?)
                OR (sender_id = ? AND receiver_id = ?)
             ORDER BY created_at ASC
         `;
-      
+
         const [rows] = await db.execute(query, [senderId, senderId, 
 receiverId, receiverId, senderId]);
-        
+
+        // Convert isReadInt to boolean
+        const messages = rows.map(row => ({
+            ...row,
+            isRead: row.isReadInt === 1,
+            isReadInt: undefined // Remove the integer field
+        }));
+
         res.json({
             success: true,
-            messages: rows || []
+            messages: messages || []
         });
     } catch (error) {
         console.error('Error fetching messages:', error);
-        res.status(500).json({ success: false, message: `Failed to fetch 
-messages` });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch messages' 
+        });
     }
 });
 
