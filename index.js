@@ -873,20 +873,40 @@ chat` });
     }
 });
 
-// Delete a specific message
+// In your backend server file
+
+// SECURELY Delete a specific message
 app.delete('/deleteMessage/:messageId', async (req, res) => {
     try {
         const { messageId } = req.params;
+        // The ID of the user trying to delete the message
+        const { userId } = req.body; 
+
+        if (!userId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'userId is required in the request body' 
+            });
+        }
+
+        // The query now checks both the message ID AND the sender's ID
+        const query = 'DELETE FROM messages WHERE id = ? AND sender_id = ?';
         
-        await db.execute('DELETE FROM messages WHERE id = ?', 
-[messageId]);
-        
-        res.json({ success: true, message: 'Message deleted successfully' 
-});
+        const [result] = await db.execute(query, [messageId, userId]);
+
+        // Check if a row was actually deleted
+        if (result.affectedRows > 0) {
+            res.json({ success: true, message: 'Message deleted successfully' });
+        } else {
+            // This happens if the message doesn't exist or the user is not the sender
+            res.status(403).json({ 
+                success: false, 
+                message: 'Forbidden: You can only delete your own messages' 
+            });
+        }
     } catch (error) {
         console.error('Error deleting message:', error);
-        res.status(500).json({ success: false, message: `Failed to delete 
-message` });
+        res.status(500).json({ success: false, message: 'Failed to delete message' });
     }
 });
 
