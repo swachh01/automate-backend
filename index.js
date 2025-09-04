@@ -408,6 +408,8 @@ undefined
     }
 });
 
+// In your Node.js server file
+
 // Login: expects { phone, password }
 app.post("/login", async (req, res) => {
   const { phone, password } = req.body || {};
@@ -420,33 +422,51 @@ app.post("/login", async (req, res) => {
   }
 
   try {
+    // Select all user fields
     const [rows] = await db.query(
       `SELECT id, name, college, phone, gender, dob, degree, year, 
-      profile_pic FROM users WHERE phone = ? AND password = ?`,
+profile_pic FROM users WHERE phone = ? AND password = ?`,
       [phone, password]
     );
-    
+
     if (!rows.length) {
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
     }
-    
-    console.log(`✅ Login successful for user: ${rows[0].name} (ID: 
-${rows[0].id})`);
-    
+
+    const user = rows[0]; // The raw user data from the database
+    console.log(`✅ Login successful for user: ${user.name} (ID: 
+${user.id})`);
+
+    // ✅ **CRITICAL FIX STARTS HERE**
+    // Create a clean user object for the response.
+    // This step ensures that any null numeric values from the database 
+    const userResponseObject = {
+      id: user.id,
+      name: user.name,
+      college: user.college,
+      phone: user.phone,
+      gender: user.gender,
+      dob: user.dob,
+      degree: user.degree,
+      year: user.year || 0, // ⬅️ This is the key change. If user.year is 
+      profile_pic: user.profile_pic
+    };
+    // ✅ **CRITICAL FIX ENDS HERE**
+
+    // Send the clean, predictable user object in the response
     res.json({
       success: true,
       message: "Login successful",
-      userId: rows[0].id,
-      user: rows[0],
+      user: userResponseObject, // Send the cleaned object, not the raw 
     });
+    
   } catch (err) {
     console.error("❌ /login error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
 
 // In your backend server file
 
@@ -455,7 +475,6 @@ app.post("/addTravelPlan", async (req, res) => {
   try {
     const { userId, destination, time } = req.body;
     const actualTime = time; // Assuming 'time' is the correct field name 
-from your Android app
 
     console.log("📩 /addTravelPlan request:", req.body);
 
