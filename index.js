@@ -599,38 +599,42 @@ app.get("/getUsersGoing", async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT tp.user_id, tp.destination,
-       DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
-       u.name, u.college
-       FROM travel_plans tp
-       JOIN users u ON tp.user_id = u.id
-       WHERE tp.time > NOW()
-       ORDER BY tp.time ASC`
+        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
+        u.name, u.college,
+        u.profile_pic  -- 1. ADD THIS LINE TO YOUR QUERY
+        FROM travel_plans tp
+        JOIN users u ON tp.user_id = u.id
+        WHERE tp.time > NOW()
+        ORDER BY tp.time ASC`
     );
 
     console.log("Raw query results:", rows);
 
-    // Map to match your GoingUser class structure
     const usersGoing = rows.map(row => ({
-      userId: row.user_id,  // Make sure this field exists
+      userId: row.user_id,
       name: row.name,
       destination: row.destination,
       time: row.time,
-      college: row.college
+      college: row.college,
+      profilePic: row.profile_pic 
     }));
 
     console.log("Mapped usersGoing:", usersGoing);
 
-    res.json({ 
-      success: true, 
-      usersGoing: usersGoing  // This should match your UsersGoingResponse 
+    // IMPORTANT: The key here "usersGoing" must match what your Android 
+    // If your Android GSON/Moshi class expects "users", change it here.
+    // Based on your SeeWhosGoingActivity, it looks for "users", not 
+    res.json({
+      success: true,
+      users: usersGoing  // Changed key to "users" to match your Android 
     });
-    
+
   } catch (err) {
     console.error("❌ Error fetching users going:", err);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Database error",
-      usersGoing: []
+      users: [] // Changed key to "users"
     });
   }
 });
