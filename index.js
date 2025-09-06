@@ -542,28 +542,42 @@ message` });
   }
 });
 
+
 app.get('/getMessages', async (req, res) => {
-  try {
-    const { senderId, receiverId } = req.query;
-    if (!senderId || !receiverId) {
-      return res.status(400).json({ success: false, message: `senderId and 
-receiverId are required` });
-    }
-    const query = `SELECT id, sender_id as senderId, receiver_id as 
-receiverId, message, created_at as timestamp, CASE WHEN receiver_id = ? 
-THEN 0 ELSE 1 END as isReadInt FROM messages WHERE (sender_id = ? AND 
-receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY 
-created_at ASC`;
-    const [rows] = await db.execute(query, [senderId, senderId, 
-receiverId, receiverId, senderId]);
-    const messages = rows.map(row => ({ ...row, isRead: row.isReadInt === 
-1, isReadInt: undefined }));
-    res.json({ success: true, messages: messages || [] });
-  } catch (error) {
-    console.error('Error fetching messages:', error);
-    res.status(500).json({ success: false, message: `Failed to fetch 
+    try {
+        const { senderId, receiverId } = req.query; 
+
+        if (!senderId || !receiverId) {
+            return res.status(400).json({ success: false, message: 
+'senderId and receiverId are required' });
+        }
+
+        const query = `
+            SELECT id, sender_id as senderId, receiver_id as receiverId,
+                   message, created_at as timestamp
+            FROM messages
+            WHERE 
+                ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND 
+receiver_id = ?))
+            AND 
+                NOT (sender_id = ? AND deleted_by_sender = TRUE)
+            AND 
+                NOT (receiver_id = ? AND deleted_by_receiver = TRUE)
+            ORDER BY created_at ASC
+        `;
+
+        const [rows] = await db.execute(query, [senderId, receiverId, 
+receiverId, senderId, senderId, senderId]);
+
+        res.json({
+            success: true,
+            messages: rows || []
+        });
+    } catch (error) {
+        console.error('Error fetching messages:', error);
+        res.status(500).json({ success: false, message: `Failed to fetch 
 messages` });
-  }
+    }
 });
 
 app.get('/getChatUsers', async (req, res) => {
@@ -589,6 +603,46 @@ userId]);
     console.error('Error fetching chat users:', error);
     res.status(500).json({ success: false, message: `Failed to fetch chat 
 users` });
+  }
+});
+
+
+app.post("/deleteMessageForMe", async (req, res) => {
+  try {
+    const { messageId, userId } = req.body;
+
+    if (!messageId || !userId) {
+      return res.status(400).json({ success: false, message: `messageId 
+and userId are required` });
+    }
+
+    const [messages] = await db.query(`SELECT sender_id, receiver_id FROM 
+messages WHERE id = ?`, [messageId]);
+    if (messages.length === 0) {
+      return res.status(404).json({ success: false, message: `Message not 
+found` });
+    }
+    const message = messages[0];
+
+    let updateQuery;
+    if (userId == message.sender_id) {
+      updateQuery = `UPDATE messages SET deleted_by_sender = TRUE WHERE id 
+= ?`;
+    } else if (userId == message.receiver_id) {
+      updateQuery = `UPDATE messages SET deleted_by_receiver = TRUE WHERE 
+id = ?`;
+    } else {
+      return res.status(403).json({ success: false, message: `You can only 
+delete messages from your own chats.` });
+    }
+
+    await db.query(updateQuery, [messageId]);
+
+    res.json({ success: true, message: "Message hidden successfully" });
+
+  } catch (error) {
+    console.error('Error in /deleteMessageForMe:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
