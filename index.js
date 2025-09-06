@@ -580,6 +580,8 @@ messages` });
     }
 });
 
+// in index.js
+
 app.get('/getChatUsers', async (req, res) => {
   try {
     const { userId } = req.query;
@@ -587,18 +589,45 @@ app.get('/getChatUsers', async (req, res) => {
       return res.status(400).json({ success: false, message: `userId is 
 required` });
     }
-    const query = `SELECT DISTINCT u.id, u.name as username, u.college, 
-u.profile_pic, latest.last_message as lastMessage, latest.last_timestamp 
-as timestamp, 0 as unreadCount FROM users u INNER JOIN ( SELECT CASE WHEN 
-sender_id = ? THEN receiver_id ELSE sender_id END as other_user_id, 
-message as last_message, created_at as last_timestamp, ROW_NUMBER() OVER ( 
-PARTITION BY CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END 
-ORDER BY created_at DESC ) as rn FROM messages WHERE sender_id = ? OR 
-receiver_id = ? ) latest ON u.id = latest.other_user_id AND latest.rn = 1 
-ORDER BY latest.last_timestamp DESC`;
+
+    const query = `
+        SELECT DISTINCT
+            u.id,
+            u.name as username,
+            u.college,
+            u.profile_pic,
+            latest.last_message as lastMessage,
+            latest.last_timestamp as timestamp,
+            0 as unreadCount
+        FROM users u
+        INNER JOIN (
+            SELECT
+                CASE
+                    WHEN sender_id = ? THEN receiver_id
+                    ELSE sender_id
+                END as other_user_id,
+                message as last_message,
+                created_at as last_timestamp,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CASE
+                        WHEN sender_id = ? THEN receiver_id
+                        ELSE sender_id
+                    END
+                    ORDER BY created_at DESC
+                ) as rn
+            FROM messages
+            WHERE 
+              (sender_id = ? OR receiver_id = ?)
+              AND NOT (sender_id = ? AND deleted_by_sender = TRUE)
+              AND NOT (receiver_id = ? AND deleted_by_receiver = TRUE)
+        ) latest ON u.id = latest.other_user_id AND latest.rn = 1
+        ORDER BY latest.last_timestamp DESC
+    `;
+
     const [rows] = await db.execute(query, [userId, userId, userId, 
-userId]);
+userId, userId, userId]);
     res.json({ success: true, chats: rows || [] });
+
   } catch (error) {
     console.error('Error fetching chat users:', error);
     res.status(500).json({ success: false, message: `Failed to fetch chat 
@@ -710,18 +739,37 @@ unread count` });
   }
 });
 
-app.delete('/deleteChat/:userId/:receiverId', async (req, res) => {
+
+
+app.post("/hideChat", async (req, res) => {
   try {
-    const { userId, receiverId } = req.params;
-    const deleteQuery = `DELETE FROM messages WHERE (sender_id = ? AND 
-receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`;
-    await db.execute(deleteQuery, [userId, receiverId, receiverId, 
-userId]);
-    res.json({ success: true, message: 'Chat deleted successfully' });
+    const { userId, otherUserId } = req.body;
+
+    if (!userId || !otherUserId) {
+      return res.status(400).json({ success: false, message: `userId and 
+otherUserId are required` });
+    }
+
+    const hideSentQuery = `
+      UPDATE messages 
+      SET deleted_by_sender = TRUE 
+      WHERE sender_id = ? AND receiver_id = ?
+    `;
+    await db.execute(hideSentQuery, [userId, otherUserId]);
+
+    const hideReceivedQuery = `
+      UPDATE messages 
+      SET deleted_by_receiver = TRUE 
+      WHERE receiver_id = ? AND sender_id = ?
+    `;
+    await db.execute(hideReceivedQuery, [userId, otherUserId]);
+
+    res.json({ success: true, message: 'Chat hidden successfully' });
+
   } catch (error) {
-    console.error('Error deleting chat:', error);
-    res.status(500).json({ success: false, message: `Failed to delete 
-chat` });
+    console.error('Error in /hideChat:', error);
+    res.status(500).json({ success: false, message: 'Failed to hide chat' 
+});
   }
 });
 
