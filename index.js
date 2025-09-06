@@ -601,10 +601,10 @@ app.get("/getUsersGoing", async (req, res) => {
       `SELECT tp.user_id, tp.destination,
         DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
         u.name, u.college,
-        u.profile_pic  -- 1. ADD THIS LINE TO YOUR QUERY
+        u.profile_pic
         FROM travel_plans tp
         JOIN users u ON tp.user_id = u.id
-        WHERE tp.time > NOW()
+        WHERE tp.time >= CURDATE()
         ORDER BY tp.time ASC`
     );
 
@@ -616,17 +616,14 @@ app.get("/getUsersGoing", async (req, res) => {
       destination: row.destination,
       time: row.time,
       college: row.college,
-      profilePic: row.profile_pic 
+      profilePic: row.profile_pic
     }));
 
     console.log("Mapped usersGoing:", usersGoing);
 
-    // IMPORTANT: The key here "usersGoing" must match what your Android 
-    // If your Android GSON/Moshi class expects "users", change it here.
-    // Based on your SeeWhosGoingActivity, it looks for "users", not 
     res.json({
       success: true,
-      users: usersGoing  // Changed key to "users" to match your Android 
+      users: usersGoing
     });
 
   } catch (err) {
@@ -634,7 +631,7 @@ app.get("/getUsersGoing", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Database error",
-      users: [] // Changed key to "users"
+      users: []
     });
   }
 });
