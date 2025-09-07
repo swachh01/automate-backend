@@ -45,7 +45,7 @@ const pool = mysql.createPool({
   timeout: 60000
 });
 
-module.exports = pool.promise();
+const db = pool.promise();
 
 pool.getConnection((err, connection) => {
   if (err) {
