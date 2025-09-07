@@ -39,13 +39,13 @@ const pool = mysql.createPool({
   password: process.env.MYSQLPASSWORD || "",
   database: process.env.MYSQLDATABASE || "yourdbname",
   port: process.env.MYSQLPORT ? Number(process.env.MYSQLPORT) : 3306,
-  connectionLimit: 10,
+  connectionLimit: 20,
   waitForConnections: true,
   acquireTimeout: 60000,
   timeout: 60000
 });
 
-const db = pool.promise();
+module.exports = pool.promise();
 
 pool.getConnection((err, connection) => {
   if (err) {
