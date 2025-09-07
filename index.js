@@ -425,6 +425,37 @@ app.get("/getUserTravelPlan", async (req, res) => {
   }
 });
 
+// It has been corrected to get the other user's name and profile picture.
+app.get("/getChatUsers/:userId", async (req, res) => {
+    const currentUserId = req.params.userId;
+    try {
+        const query = `
+            SELECT
+                u.id,
+                u.name AS username,
+                u.profile_pic,
+                m.message AS lastMessage,
+                m.timestamp
+            FROM
+                (SELECT
+                    LEAST(sender_id, receiver_id) as user1,
+                    GREATEST(sender_id, receiver_id) as user2,
+                    MAX(id) as max_id
+                FROM messages
+                WHERE sender_id = ? OR receiver_id = ?
+                GROUP BY user1, user2) AS latest
+            JOIN messages m ON m.id = latest.max_id
+            JOIN users u ON u.id = IF(latest.user1 = ?, latest.user2, latest.user1)
+            ORDER BY m.timestamp DESC;
+        `;
+        const [chats] = await db.query(query, [currentUserId, currentUserId, currentUserId]);
+        res.json({ success: true, chats: chats });
+    } catch (err) {
+        console.error("❌ Error fetching chat users:", err);
+        res.status(500).json({ success: false, message: "Database error" });
+    }
+});
+
 
 app.get("/getUsersGoing", async (req, res) => {
   try {
@@ -448,7 +479,9 @@ app.get("/getUsersGoing", async (req, res) => {
       destination: row.destination,
       time: row.time,
       college: row.college,
-      profilePic: row.profile_pic,
+      // --- THIS IS THE FIX ---
+      // The key is now "profile_pic" to match the Android model
+      profile_pic: row.profile_pic, 
       gender: row.gender
     }));
     res.json({ success: true, users: usersGoing });
