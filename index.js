@@ -581,7 +581,7 @@ receiverId, and message are required` });
 users do not exist` });
     }
     const [result] = await db.execute(`INSERT INTO messages (sender_id, 
-receiver_id, message, created_at) VALUES (?, ?, ?, NOW())`, [senderId, 
+receiver_id, message, timestamp) VALUES (?, ?, ?, NOW())`, [senderId, 
 receiverId, message]);
     res.json({ success: true, message: 'Message sent successfully', 
 messageId: result.insertId });
@@ -604,7 +604,7 @@ app.get('/getMessages', async (req, res) => {
 
         const query = `
             SELECT id, sender_id as senderId, receiver_id as receiverId,
-                   message, created_at as timestamp
+                   message, timestamp as timestamp
             FROM messages
             WHERE 
                 ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND 
@@ -613,7 +613,7 @@ receiver_id = ?))
                 NOT (sender_id = ? AND deleted_by_sender = TRUE)
             AND 
                 NOT (receiver_id = ? AND deleted_by_receiver = TRUE)
-            ORDER BY created_at ASC
+            ORDER BY timestamp ASC
         `;
 
         const [rows] = await db.execute(query, [senderId, receiverId, 
