@@ -845,10 +845,12 @@ message` });
 });
 
 
+// ----------------------------------------------------
+// --- WebSocket Server Setup (Final Version) ---
+// ----------------------------------------------------
+
 const server = http.createServer(app);
-
 const wss = new WebSocket.Server({ server });
-
 const clients = new Map();
 
 wss.on('connection', (ws, req) => {
@@ -870,19 +872,23 @@ wss.on('connection', (ws, req) => {
             console.log(`📩 Raw message received from user ${userId}: ${message}`);
             data = JSON.parse(message);
 
+            // This query now matches the database table structure exactly.
             const [result] = await db.query(
                 'INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)',
                 [data.senderId, data.receiverId, data.message]
             );
             console.log(`💽 Message saved with ID: ${result.insertId}`);
             
+            // Get the full message object with the new ID and timestamp from the database
             const [rows] = await db.query('SELECT *, sender_id as senderId, receiver_id as receiverId, is_read as isRead FROM messages WHERE id = ?', [result.insertId]);
             const fullMessageObject = rows[0];
 
+            // Find the receiver and sender sockets
             const receiverSocket = clients.get(data.receiverId);
             const senderSocket = clients.get(data.senderId);
             const messageString = JSON.stringify(fullMessageObject);
 
+            // Send to the receiver if they are online
             if (receiverSocket && receiverSocket.readyState === WebSocket.OPEN) {
                 receiverSocket.send(messageString);
                 console.log(`🚀 Sent message to receiver: ${data.receiverId}`);
@@ -890,13 +896,14 @@ wss.on('connection', (ws, req) => {
                 console.log(`- Receiver ${data.receiverId} is not online.`);
             }
 
+            // Send the confirmed message back to the sender
             if (senderSocket && senderSocket.readyState === WebSocket.OPEN) {
                 senderSocket.send(messageString);
                 console.log(`🚀 Sent message back to sender: ${data.senderId}`);
             }
 
         } catch (err) {
-            console.error('❌ CRITICAL ERROR processing WebSocket message:', err);
+            console.error('❌❌❌ CRITICAL ERROR processing WebSocket message:', err);
         }
     });
 
@@ -907,6 +914,7 @@ wss.on('connection', (ws, req) => {
 });
 
 
+// --- Start Server ---
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
