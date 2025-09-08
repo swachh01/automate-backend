@@ -3,6 +3,11 @@ require("dotenv").config();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
+const http = require('http');
+const WebSocket = require('ws');
+const url = require('url');
+
+
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -571,27 +576,19 @@ app.post('/sendMessage', async (req, res) => {
   try {
     const { senderId, receiverId, message } = req.body;
     if (!senderId || !receiverId || !message) {
-      return res.status(400).json({ success: false, message: `senderId, 
-receiverId, and message are required` });
+      return res.status(400).json({ success: false, message: `senderId, receiverId, and message are required` });
     }
-    const [userCheck] = await db.execute(`SELECT id FROM users WHERE id IN 
-(?, ?)`, [senderId, receiverId]);
+    const [userCheck] = await db.execute(`SELECT id FROM users WHERE id IN (?, ?)`, [senderId, receiverId]);
     if (userCheck.length !== 2) {
-      return res.status(400).json({ success: false, message: `One or both 
-users do not exist` });
+      return res.status(400).json({ success: false, message: `One or both users do not exist` });
     }
-    const [result] = await db.execute(`INSERT INTO messages (sender_id, 
-receiver_id, message, timestamp) VALUES (?, ?, ?, NOW())`, [senderId, 
-receiverId, message]);
-    res.json({ success: true, message: 'Message sent successfully', 
-messageId: result.insertId });
+    const [result] = await db.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp) VALUES (?, ?, ?, NOW())`, [senderId, receiverId, message]);
+    res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
   } catch (error) {
     console.error('Error sending message:', error);
-    res.status(500).json({ success: false, message: `Failed to send 
-message` });
+    res.status(500).json({ success: false, message: `Failed to send message` });
   }
 });
-
 
 app.get('/getMessages', async (req, res) => {
     try {
@@ -846,6 +843,75 @@ only delete your own messages` });
 message` });
   }
 });
+
+const server = http.createServer(app);
+
+const wss = new WebSocket.Server({ server });
+
+const clients = new Map();
+
+wss.on('connection', (ws, req) => {
+    const parameters = new URLSearchParams(url.parse(req.url).search);
+    const userId = parseInt(parameters.get('userId'), 10);
+
+    if (!userId) {
+        console.log(` Client connected without userId. Closing 
+connection.`);
+        ws.close();
+        return;
+    }
+
+    clients.set(userId, ws);
+    console.log(`✅ Client connected with userId: ${userId}. Total 
+clients: ${clients.size}`);
+
+    ws.on('message', async (message) => {
+        try {
+            const data = JSON.parse(message);
+            console.log(`📩 WebSocket message from ${data.senderId} to 
+${data.receiverId}:`, data.message);
+
+            const [result] = await db.query(
+                `INSERT INTO messages (sender_id, receiver_id, message) 
+VALUES (?, ?, ?)`,
+                [data.senderId, data.receiverId, data.message]
+            );
+            
+            const [rows] = await db.query(`SELECT *, sender_id as 
+senderId, receiver_id as receiverId, is_read as isRead FROM messages WHERE 
+id = ?`, [result.insertId]);
+            const fullMessageObject = rows[0];
+
+            const receiverSocket = clients.get(data.receiverId);
+            const senderSocket = clients.get(data.senderId);
+            const messageString = JSON.stringify(fullMessageObject);
+
+            if (receiverSocket && receiverSocket.readyState === 
+WebSocket.OPEN) {
+                receiverSocket.send(messageString);
+                console.log(`🚀 Sent message to receiver: 
+${data.receiverId}`);
+            }
+
+            if (senderSocket && senderSocket.readyState === 
+WebSocket.OPEN) {
+                senderSocket.send(messageString);
+                console.log(`🚀 Sent message back to sender: 
+${data.senderId}`);
+            }
+
+        } catch (err) {
+            console.error('❌ Error processing WebSocket message:', err);
+        }
+    });
+
+    ws.on('close', () => {
+        clients.delete(userId);
+        console.log(`🔌 Client disconnected with userId: ${userId}. Total 
+clients: ${clients.size}`);
+    });
+});
+
 
 
 // ---------- Start Server ----------
