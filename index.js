@@ -869,10 +869,14 @@ wss.on('connection', (ws, req) => {
     ws.on('message', async (message) => {
         let data;
         try {
-            console.log(`📩 Raw message received from user ${userId}: ${message}`);
-            data = JSON.parse(message);
+            // --- THIS IS THE FIX ---
+            // Explicitly convert the incoming message buffer to a string
+            const messageString = message.toString();
+            
+            console.log(`📩 Raw message received from user ${userId}: ${messageString}`);
+            data = JSON.parse(messageString);
 
-            // This query now matches the database table structure exactly.
+            // Save the message to the database
             const [result] = await db.query(
                 'INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)',
                 [data.senderId, data.receiverId, data.message]
@@ -886,11 +890,11 @@ wss.on('connection', (ws, req) => {
             // Find the receiver and sender sockets
             const receiverSocket = clients.get(data.receiverId);
             const senderSocket = clients.get(data.senderId);
-            const messageString = JSON.stringify(fullMessageObject);
+            const finalMessageString = JSON.stringify(fullMessageObject);
 
             // Send to the receiver if they are online
             if (receiverSocket && receiverSocket.readyState === WebSocket.OPEN) {
-                receiverSocket.send(messageString);
+                receiverSocket.send(finalMessageString);
                 console.log(`🚀 Sent message to receiver: ${data.receiverId}`);
             } else {
                 console.log(`- Receiver ${data.receiverId} is not online.`);
@@ -898,7 +902,7 @@ wss.on('connection', (ws, req) => {
 
             // Send the confirmed message back to the sender
             if (senderSocket && senderSocket.readyState === WebSocket.OPEN) {
-                senderSocket.send(messageString);
+                senderSocket.send(finalMessageString);
                 console.log(`🚀 Sent message back to sender: ${data.senderId}`);
             }
 
