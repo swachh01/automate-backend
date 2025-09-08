@@ -844,6 +844,7 @@ message` });
   }
 });
 
+
 const server = http.createServer(app);
 
 const wss = new WebSocket.Server({ server });
@@ -855,67 +856,58 @@ wss.on('connection', (ws, req) => {
     const userId = parseInt(parameters.get('userId'), 10);
 
     if (!userId) {
-        console.log(` Client connected without userId. Closing 
-connection.`);
+        console.log('🔌 Client connected without userId. Closing connection.');
         ws.close();
         return;
     }
 
     clients.set(userId, ws);
-    console.log(`✅ Client connected with userId: ${userId}. Total 
-clients: ${clients.size}`);
+    console.log(`✅ Client connected with userId: ${userId}. Total clients: ${clients.size}`);
 
     ws.on('message', async (message) => {
+        let data;
         try {
-            const data = JSON.parse(message);
-            console.log(`📩 WebSocket message from ${data.senderId} to 
-${data.receiverId}:`, data.message);
+            console.log(`📩 Raw message received from user ${userId}: ${message}`);
+            data = JSON.parse(message);
 
             const [result] = await db.query(
-                `INSERT INTO messages (sender_id, receiver_id, message) 
-VALUES (?, ?, ?)`,
+                'INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)',
                 [data.senderId, data.receiverId, data.message]
             );
+            console.log(`💽 Message saved with ID: ${result.insertId}`);
             
-            const [rows] = await db.query(`SELECT *, sender_id as 
-senderId, receiver_id as receiverId, is_read as isRead FROM messages WHERE 
-id = ?`, [result.insertId]);
+            const [rows] = await db.query('SELECT *, sender_id as senderId, receiver_id as receiverId, is_read as isRead FROM messages WHERE id = ?', [result.insertId]);
             const fullMessageObject = rows[0];
 
             const receiverSocket = clients.get(data.receiverId);
             const senderSocket = clients.get(data.senderId);
             const messageString = JSON.stringify(fullMessageObject);
 
-            if (receiverSocket && receiverSocket.readyState === 
-WebSocket.OPEN) {
+            if (receiverSocket && receiverSocket.readyState === WebSocket.OPEN) {
                 receiverSocket.send(messageString);
-                console.log(`🚀 Sent message to receiver: 
-${data.receiverId}`);
+                console.log(`🚀 Sent message to receiver: ${data.receiverId}`);
+            } else {
+                console.log(`- Receiver ${data.receiverId} is not online.`);
             }
 
-            if (senderSocket && senderSocket.readyState === 
-WebSocket.OPEN) {
+            if (senderSocket && senderSocket.readyState === WebSocket.OPEN) {
                 senderSocket.send(messageString);
-                console.log(`🚀 Sent message back to sender: 
-${data.senderId}`);
+                console.log(`🚀 Sent message back to sender: ${data.senderId}`);
             }
 
         } catch (err) {
-            console.error('❌ Error processing WebSocket message:', err);
+            console.error('❌ CRITICAL ERROR processing WebSocket message:', err);
         }
     });
 
     ws.on('close', () => {
         clients.delete(userId);
-        console.log(`🔌 Client disconnected with userId: ${userId}. Total 
-clients: ${clients.size}`);
+        console.log(`🔌 Client disconnected with userId: ${userId}. Total clients: ${clients.size}`);
     });
 });
 
 
-
-// ---------- Start Server ----------
-const PORT = process.env.PORT;
-app.listen(PORT, () => {
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, () => {
   console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
 });
