@@ -4,8 +4,7 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const http = require('http');
-const WebSocket = require('ws');
-const url = require('url');
+const {Server} = require('socket.io');
 
 
 const twilio = require("twilio");
@@ -845,36 +844,34 @@ message` });
 });
 
 
-// ----------------------------------------------------
-// --- WebSocket Server Setup (Final Version) ---
-// ----------------------------------------------------
-
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-const clients = new Map();
 
-wss.on('connection', (ws, req) => {
-    const parameters = new URLSearchParams(url.parse(req.url).search);
-    const userId = parseInt(parameters.get('userId'), 10);
+// Configure Socket.IO with CORS
+const io = new Server(server, {
+  cors: {
+    origin: "*", // Allow all origins for simplicity, can be restricted later
+    methods: ["GET", "POST"]
+  }
+});
 
+// This runs for every new client connection
+io.on('connection', (socket) => {
+    // Get the userId from the initial connection handshake
+    const userId = socket.handshake.query.userId;
     if (!userId) {
-        console.log('🔌 Client connected without userId. Closing connection.');
-        ws.close();
+        console.log('🔌 Socket connected without userId. Disconnecting.');
+        socket.disconnect();
         return;
     }
 
-    clients.set(userId, ws);
-    console.log(`✅ Client connected with userId: ${userId}. Total clients: ${clients.size}`);
+    // Join a private "room" named after the user's ID
+    socket.join(userId);
+    console.log(`✅ User connected with socket ID: ${socket.id}, joined room: ${userId}`);
 
-    ws.on('message', async (message) => {
-        let data;
+    // This runs when a 'chat_message' event is received from a client
+    socket.on('chat_message', async (data) => {
         try {
-            // --- THIS IS THE FIX ---
-            // Explicitly convert the incoming message buffer to a string
-            const messageString = message.toString();
-            
-            console.log(`📩 Raw message received from user ${userId}: ${messageString}`);
-            data = JSON.parse(messageString);
+            console.log(`📩 Message received from ${data.senderId} for ${data.receiverId}:`, data.message);
 
             // Save the message to the database
             const [result] = await db.query(
@@ -882,44 +879,31 @@ wss.on('connection', (ws, req) => {
                 [data.senderId, data.receiverId, data.message]
             );
             console.log(`💽 Message saved with ID: ${result.insertId}`);
-            
-            // Get the full message object with the new ID and timestamp from the database
+
+            // Get the full message object with the new ID and timestamp
             const [rows] = await db.query('SELECT *, sender_id as senderId, receiver_id as receiverId, is_read as isRead FROM messages WHERE id = ?', [result.insertId]);
             const fullMessageObject = rows[0];
 
-            // Find the receiver and sender sockets
-            const receiverSocket = clients.get(data.receiverId);
-            const senderSocket = clients.get(data.senderId);
-            const finalMessageString = JSON.stringify(fullMessageObject);
+            // Send the message to the receiver's private room
+            io.to(String(data.receiverId)).emit('chat_message', fullMessageObject);
+            console.log(`🚀 Sent message to receiver room: ${data.receiverId}`);
 
-            // Send to the receiver if they are online
-            if (receiverSocket && receiverSocket.readyState === WebSocket.OPEN) {
-                receiverSocket.send(finalMessageString);
-                console.log(`🚀 Sent message to receiver: ${data.receiverId}`);
-            } else {
-                console.log(`- Receiver ${data.receiverId} is not online.`);
-            }
-
-            // Send the confirmed message back to the sender
-            if (senderSocket && senderSocket.readyState === WebSocket.OPEN) {
-                senderSocket.send(finalMessageString);
-                console.log(`🚀 Sent message back to sender: ${data.senderId}`);
-            }
+            // Also send the message back to the sender's private room
+            io.to(String(data.senderId)).emit('chat_message', fullMessageObject);
+            console.log(`🚀 Sent message back to sender room: ${data.senderId}`);
 
         } catch (err) {
-            console.error('❌❌❌ CRITICAL ERROR processing WebSocket message:', err);
+            console.error('❌ CRITICAL ERROR processing chat message:', err);
         }
     });
 
-    ws.on('close', () => {
-        clients.delete(userId);
-        console.log(`🔌 Client disconnected with userId: ${userId}. Total clients: ${clients.size}`);
+    socket.on('disconnect', () => {
+        console.log(`🔌 User disconnected with socket ID: ${socket.id}, from room: ${userId}`);
     });
 });
-
 
 // --- Start Server ---
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
-  console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
+  console.log(`✅ Server with Socket.IO listening on http://0.0.0.0:${PORT}`);
 });
