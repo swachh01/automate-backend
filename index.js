@@ -915,7 +915,7 @@ clients: ${clients.size}`);
 
 
 // ---------- Start Server ----------
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
 });
