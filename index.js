@@ -3,10 +3,6 @@ require("dotenv").config();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
-const http = require('http');
-const {Server} = require('socket.io');
-
-
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -63,21 +59,18 @@ pool.getConnection((err, connection) => {
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'reloaded_automate_profiles', 
-    allowed_formats: ['jpg', 'jpeg', 'png', 'heic'], 
-    transformation: [{ width: 500, height: 500, crop: 'limit', format: 
-'jpg' }]
+    folder: 'reloaded_automate_profiles',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'heic'],
+    transformation: [{ width: 500, height: 500, crop: 'limit', format: 'jpg' }]
   }
 });
 const upload = multer({ storage: storage });
-
 
 // ---------- Helpers ----------
 async function getUserByPhone(phone) {
   try {
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, 
-profile_pic FROM users WHERE phone = ?`,
+      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ?`,
       [phone]
     );
     return rows && rows[0] ? rows[0] : null;
@@ -96,16 +89,14 @@ app.get("/health", async (_req, res) => {
     res.json({ status: "OK", timestamp: new Date().toISOString() });
   } catch (err) {
     console.error("❌ Health check failed:", err);
-    res.status(500).json({ status: "ERROR", message: `Database connection 
-failed: ${err.message}` });
+    res.status(500).json({ status: "ERROR", message: `Database connection failed: ${err.message}` });
   }
 });
 
 // Debug endpoint to check memory stores
 app.get("/debug/stores", (req, res) => {
   if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({ message: "Not available in production" 
-});
+    return res.status(403).json({ message: "Not available in production" });
   }
   res.json({
     otpStore: Object.keys(otpStore).map(phone => ({
@@ -122,13 +113,12 @@ app.get("/debug/stores", (req, res) => {
 
 // Debug endpoint to check users
 app.get('/debug/users', async (req, res) => {
-    try {
-        const [rows] = await db.execute(`SELECT id, name FROM users LIMIT 
-10`);
-        res.json({ users: rows });
-    } catch (error) {
-        res.json({ error: error.message });
-    }
+  try {
+    const [rows] = await db.execute(`SELECT id, name FROM users LIMIT 10`);
+    res.json({ users: rows });
+  } catch (error) {
+    res.json({ error: error.message });
+  }
 });
 
 app.post("/signup", async (req, res) => {
@@ -136,31 +126,29 @@ app.post("/signup", async (req, res) => {
     const { name, college, gender, phone } = req.body || {};
     console.log("📩 /signup RAW body:", req.body);
     console.log("📩 /signup PARSED:", { name, college, gender, phone });
+    
     if (!name || !college || !gender || !phone) {
-      console.log("❌ Missing fields:", { hasName: !!name, hasCollege: 
-!!college, hasGender: !!gender, hasPhone: !!phone });
-      return res.status(400).json({ success: false, message: `Missing 
-required fields: name, college, gender, phone` });
+      console.log("❌ Missing fields:", { hasName: !!name, hasCollege: !!college, hasGender: !!gender, hasPhone: !!phone });
+      return res.status(400).json({ success: false, message: `Missing required fields: name, college, gender, phone` });
     }
+    
     if (name.trim().length < 4) {
-      return res.status(400).json({ success: false, message: `Name must be 
-at least 4 characters long` });
+      return res.status(400).json({ success: false, message: `Name must be at least 4 characters long` });
     }
-    const [existingUser] = await db.query(`SELECT id FROM users WHERE 
-phone = ?`, [phone]);
+    
+    const [existingUser] = await db.query(`SELECT id FROM users WHERE phone = ?`, [phone]);
     if (existingUser.length > 0) {
       console.log("❌ User already exists for phone:", phone);
-      return res.status(400).json({ success: false, message: `User with 
-this phone number already exists` });
+      return res.status(400).json({ success: false, message: `User with this phone number already exists` });
     }
-    const signupData = { name: name.trim(), college: college.trim(), 
-gender };
+    
+    const signupData = { name: name.trim(), college: college.trim(), gender };
     signupStore[phone] = signupData;
     console.log("✅ Stored signup data for phone:", phone);
     console.log("✅ Signup data:", signupData);
     console.log("✅ Current signupStore keys:", Object.keys(signupStore));
-    return res.json({ success: true, message: `Signup data received. 
-Please verify OTP.` });
+    
+    return res.json({ success: true, message: `Signup data received. Please verify OTP.` });
   } catch (err) {
     console.error("❌ /signup error:", err);
     res.status(500).json({ success: false, message: "Server error" });
@@ -170,15 +158,16 @@ Please verify OTP.` });
 app.post("/sendOtp", (req, res) => {
   const { phone } = req.body;
   console.log("📩 /sendOtp request:", { phone });
+  
   if (!phone) {
-    return res.status(400).json({ success: false, message: `Phone 
-required` });
+    return res.status(400).json({ success: false, message: `Phone required` });
   }
+  
   const otp = Math.floor(1000 + Math.random() * 9000);
   const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
   otpStore[phone] = { otp: otp.toString(), expires: expiresAt };
-  console.log(`📩 Generated OTP for ${phone}: ${otp}, expires: ${new 
-Date(expiresAt)}`);
+  console.log(`📩 Generated OTP for ${phone}: ${otp}, expires: ${new Date(expiresAt)}`);
+  
   client.messages
     .create({
       body: `Your OTP is ${otp}`,
@@ -195,61 +184,61 @@ Date(expiresAt)}`);
     })
     .catch(err => {
       console.error("❌ SMS Error:", err);
-      res.status(500).json({ success: false, message: "Failed to send SMS" 
-});
+      res.status(500).json({ success: false, message: "Failed to send SMS" });
     });
 });
 
 app.post("/verifyOtp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
-    console.log("📩 /verifyOtp request:", { phone, otp: otp ? "****" : 
-"missing" });
+    console.log("📩 /verifyOtp request:", { phone, otp: otp ? "****" : "missing" });
+    
     if (!phone || !otp) {
-      return res.status(400).json({ success: false, message: `Phone and 
-OTP required` });
+      return res.status(400).json({ success: false, message: `Phone and OTP required` });
     }
+    
     const entry = otpStore[phone];
-    console.log("📊 Stored OTP entry:", entry ? { hasOtp: !!entry.otp, 
-expires: new Date(entry.expires), now: new Date() } : "not found");
+    console.log("📊 Stored OTP entry:", entry ? { hasOtp: !!entry.otp, expires: new Date(entry.expires), now: new Date() } : "not found");
+    
     if (!entry) {
-      return res.status(400).json({ success: false, message: `No OTP found 
-for this phone. Please request a new OTP.` });
+      return res.status(400).json({ success: false, message: `No OTP found for this phone. Please request a new OTP.` });
     }
+    
     if (Date.now() > entry.expires) {
       delete otpStore[phone];
-      return res.status(400).json({ success: false, message: `OTP expired. 
-Please request a new OTP.` });
+      return res.status(400).json({ success: false, message: `OTP expired. Please request a new OTP.` });
     }
+    
     if (entry.otp !== otp.toString()) {
-      console.log(`❌ OTP mismatch: stored="${entry.otp}", 
-received="${otp}"`);
-      return res.status(400).json({ success: false, message: `Invalid OTP`
-});
+      console.log(`❌ OTP mismatch: stored="${entry.otp}", received="${otp}"`);
+      return res.status(400).json({ success: false, message: `Invalid OTP` });
     }
+    
     const signupData = signupStore[phone];
     console.log("📊 Signup data for phone", phone, ":", signupData);
     console.log("📊 All signupStore keys:", Object.keys(signupStore));
+    
     if (!signupData) {
       console.log("❌ No signup data found for phone:", phone);
-      return res.status(400).json({ success: false, message: `Signup data 
-missing. Please complete signup process first.` });
+      return res.status(400).json({ success: false, message: `Signup data missing. Please complete signup process first.` });
     }
+    
     if (!signupData.name || !signupData.college || !signupData.gender) {
       console.log("❌ Invalid signup data:", signupData);
-      return res.status(400).json({ success: false, message: `Invalid 
-signup data. Please restart signup process.` });
+      return res.status(400).json({ success: false, message: `Invalid signup data. Please restart signup process.` });
     }
+    
     delete otpStore[phone];
     console.log("🔄 Creating user with data:", signupData);
+    
     const [result] = await db.query(
-      `INSERT INTO users (name, college, password, phone, gender, 
-created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
+      `INSERT INTO users (name, college, password, phone, gender, created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
       [signupData.name, signupData.college, "", phone, signupData.gender]
     );
+    
     delete signupStore[phone];
-    console.log(`✅ User created: ID=${result.insertId}, 
-Name="${signupData.name}", Phone=${phone}`);
+    console.log(`✅ User created: ID=${result.insertId}, Name="${signupData.name}", Phone=${phone}`);
+    
     return res.json({
       success: true,
       message: "OTP verified and user created successfully",
@@ -264,70 +253,66 @@ Name="${signupData.name}", Phone=${phone}`);
     });
   } catch (err) {
     console.error("❌ Error in /verifyOtp:", err);
-    return res.status(500).json({ success: false, message: `Database 
-error: ` + err.message });
+    return res.status(500).json({ success: false, message: `Database error: ` + err.message });
   }
 });
 
 app.post("/savePassword", async (req, res) => {
-    try {
-        const { phone, newPassword } = req.body;
-        console.log("📩 /savePassword request:", { phone: phone ? "***" + 
-phone.slice(-4) : "missing", hasPassword: !!newPassword });
-        if (!phone || !newPassword) {
-            return res.status(400).json({ success: false, message: `Phone 
-and password required` });
-        }
-        if (newPassword.length < 6) {
-            return res.status(400).json({ success: false, message: 
-"Password must be at least 6 characters long" });
-        }
-        const [updateResult] = await db.query(`UPDATE users SET password = 
-? WHERE phone = ?`, [newPassword, phone]);
-        console.log("📊 Update result:", updateResult);
-        if (updateResult.affectedRows === 0) {
-            return res.status(404).json({ success: false, message: `User 
-not found` });
-        }
-        const [userRows] = await db.query(`SELECT id FROM users WHERE 
-phone = ?`, [phone]);
-        if (userRows.length === 0) {
-            return res.status(404).json({ success: false, message: `User 
-not found after update` });
-        }
-        const userId = userRows[0].id;
-        console.log(`✅ Password updated for phone: ***${phone.slice(-4)} 
--> userId: ${userId}`);
-        return res.json({ success: true, message: `Password updated 
-successfully`, userId: userId });
-    } catch (err) {
-        console.error("❌ Error in /savePassword:", err);
-        return res.status(500).json({ success: false, message: `Database 
-error`, error: process.env.NODE_ENV === 'development' ? err.message : 
-undefined });
+  try {
+    const { phone, newPassword } = req.body;
+    console.log("📩 /savePassword request:", { phone: phone ? "***" + phone.slice(-4) : "missing", hasPassword: !!newPassword });
+    
+    if (!phone || !newPassword) {
+      return res.status(400).json({ success: false, message: `Phone and password required` });
     }
+    
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters long" });
+    }
+    
+    const [updateResult] = await db.query(`UPDATE users SET password = ? WHERE phone = ?`, [newPassword, phone]);
+    console.log("📊 Update result:", updateResult);
+    
+    if (updateResult.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: `User not found` });
+    }
+    
+    const [userRows] = await db.query(`SELECT id FROM users WHERE phone = ?`, [phone]);
+    if (userRows.length === 0) {
+      return res.status(404).json({ success: false, message: `User not found after update` });
+    }
+    
+    const userId = userRows[0].id;
+    console.log(`✅ Password updated for phone: ***${phone.slice(-4)} -> userId: ${userId}`);
+    
+    return res.json({ success: true, message: `Password updated successfully`, userId: userId });
+  } catch (err) {
+    console.error("❌ Error in /savePassword:", err);
+    return res.status(500).json({ success: false, message: `Database error`, error: process.env.NODE_ENV === 'development' ? err.message : undefined });
+  }
 });
 
 app.post("/login", async (req, res) => {
   const { phone, password } = req.body || {};
   console.log("📩 /login body:", { phone, hasPassword: !!password });
+  
   if (!phone || !password) {
-    return res.status(400).json({ success: false, message: `Missing phone 
-or password` });
+    return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
+  
   try {
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, 
-profile_pic FROM users WHERE phone = ? AND password = ?`,
+      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND password = ?`,
       [phone, password]
     );
+    
     if (!rows.length) {
-      return res.status(401).json({ success: false, message: `Invalid 
-credentials` });
+      return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
+    
     const user = rows[0];
-    console.log(`✅ Login successful for user: ${user.name} (ID: 
-${user.id})`);
+    console.log(`✅ Login successful for user: ${user.name} (ID: ${user.id})`);
+    
     const userResponseObject = { ...user, year: user.year || 0 };
     res.json({
       success: true,
@@ -345,22 +330,21 @@ app.post("/addTravelPlan", async (req, res) => {
     const { userId, destination, time } = req.body;
     const actualTime = time;
     console.log("📩 /addTravelPlan request:", req.body);
+    
     if (!userId || !destination || !actualTime) {
       console.log("❌ Missing fields");
-      return res.status(400).json({ success: false, message: `Missing 
-required fields: userId, destination, and time` });
+      return res.status(400).json({ success: false, message: `Missing required fields: userId, destination, and time` });
     }
-    const query = `INSERT INTO travel_plans (user_id, destination, time) 
-VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE destination = 
-VALUES(destination), time = VALUES(time)`;
-    const [result] = await db.query(query, [userId, destination, 
-actualTime]);
+    
+    const query = `INSERT INTO travel_plans (user_id, destination, time) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE destination = VALUES(destination), time = VALUES(time)`;
+    const [result] = await db.query(query, [userId, destination, actualTime]);
+    
     let message = "Plan submitted successfully";
     if (result.affectedRows > 1) {
       message = "Plan updated successfully";
     }
-    console.log(`✅ Travel plan saved for userId=${userId} to 
-${destination}`);
+    
+    console.log(`✅ Travel plan saved for userId=${userId} to ${destination}`);
     res.json({
       success: true,
       message: message,
@@ -368,9 +352,7 @@ ${destination}`);
     });
   } catch (err) {
     console.error("❌ Error saving travel plan:", err);
-    res.status(500).json({ success: false, message: "Database error", 
-error: process.env.NODE_ENV === 'development' ? err.message : undefined 
-});
+    res.status(500).json({ success: false, message: "Database error", error: process.env.NODE_ENV === 'development' ? err.message : undefined });
   }
 });
 
@@ -378,24 +360,27 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
     console.log(`📩 /getUserTravelPlan/${userId} request`);
+    
     if (!userId) {
       return res.status(400).json({ success: false, message: `User ID is required` });
     }
+    
     const [results] = await db.query(
       `SELECT 
         tp.id, 
         tp.destination, 
         tp.time, 
         u.name, 
-        u.college,
-        u.gender,
-        u.profile_pic
+        u.college, 
+        u.gender, 
+        u.profile_pic 
        FROM travel_plans tp 
        JOIN users u ON tp.user_id = u.id 
        WHERE tp.user_id = ? AND tp.time > NOW() 
        ORDER BY tp.time ASC`,
       [userId]
     );
+    
     console.log(`Travel Plan fetched for user ${userId}:`, results);
     res.json({ success: true, users: results || [] });
   } catch (err) {
@@ -413,14 +398,15 @@ app.get("/getUserTravelPlan", async (req, res) => {
         tp.destination, 
         tp.time, 
         u.name, 
-        u.college,
-        u.gender,
-        u.profile_pic
+        u.college, 
+        u.gender, 
+        u.profile_pic 
       FROM travel_plans tp 
       JOIN users u ON tp.user_id = u.id 
       WHERE tp.time > NOW() 
       ORDER BY tp.time ASC`
     );
+    
     console.log("All Travel Plans fetched:", results);
     res.json({ success: true, users: results || [] });
   } catch (err) {
@@ -431,52 +417,52 @@ app.get("/getUserTravelPlan", async (req, res) => {
 
 // It has been corrected to get the other user's name and profile picture.
 app.get("/getChatUsers/:userId", async (req, res) => {
-    const currentUserId = req.params.userId;
-    try {
-        const query = `
-            SELECT
-                u.id,
-                u.name AS username,
-                u.profile_pic,
-                m.message AS lastMessage,
-                m.timestamp
-            FROM
-                (SELECT
-                    LEAST(sender_id, receiver_id) as user1,
-                    GREATEST(sender_id, receiver_id) as user2,
-                    MAX(id) as max_id
-                FROM messages
-                WHERE sender_id = ? OR receiver_id = ?
-                GROUP BY user1, user2) AS latest
-            JOIN messages m ON m.id = latest.max_id
-            JOIN users u ON u.id = IF(latest.user1 = ?, latest.user2, latest.user1)
-            ORDER BY m.timestamp DESC;
-        `;
-        const [chats] = await db.query(query, [currentUserId, currentUserId, currentUserId]);
-        res.json({ success: true, chats: chats });
-    } catch (err) {
-        console.error("❌ Error fetching chat users:", err);
-        res.status(500).json({ success: false, message: "Database error" });
-    }
+  const currentUserId = req.params.userId;
+  try {
+    const query = `
+      SELECT 
+        u.id, 
+        u.name AS username, 
+        u.profile_pic, 
+        m.message AS lastMessage, 
+        m.timestamp 
+      FROM 
+        (SELECT 
+          LEAST(sender_id, receiver_id) as user1,
+          GREATEST(sender_id, receiver_id) as user2, 
+          MAX(id) as max_id 
+        FROM messages 
+        WHERE sender_id = ? OR receiver_id = ? 
+        GROUP BY user1, user2) AS latest 
+      JOIN messages m ON m.id = latest.max_id 
+      JOIN users u ON u.id = IF(latest.user1 = ?, latest.user2, latest.user1) 
+      ORDER BY m.timestamp DESC;
+    `;
+    const [chats] = await db.query(query, [currentUserId, currentUserId, currentUserId]);
+    res.json({ success: true, chats: chats });
+  } catch (err) {
+    console.error("❌ Error fetching chat users:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
 });
-
 
 app.get("/getUsersGoing", async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT 
         tp.user_id, 
-        tp.destination,
-        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
+        tp.destination, 
+        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time, 
         u.name, 
-        u.college,
-        u.profile_pic,
-        u.gender
-      FROM travel_plans tp
-      JOIN users u ON tp.user_id = u.id
-      WHERE tp.time >= CURDATE()
+        u.college, 
+        u.profile_pic, 
+        u.gender 
+      FROM travel_plans tp 
+      JOIN users u ON tp.user_id = u.id 
+      WHERE tp.time >= CURDATE() 
       ORDER BY tp.time ASC`
     );
+    
     const usersGoing = rows.map(row => ({
       userId: row.user_id,
       name: row.name,
@@ -485,9 +471,10 @@ app.get("/getUsersGoing", async (req, res) => {
       college: row.college,
       // --- THIS IS THE FIX ---
       // The key is now "profile_pic" to match the Android model
-      profile_pic: row.profile_pic, 
+      profile_pic: row.profile_pic,
       gender: row.gender
     }));
+    
     res.json({ success: true, users: usersGoing });
   } catch (err) {
     console.error("❌ Error fetching users going:", err);
@@ -498,14 +485,17 @@ app.get("/getUsersGoing", async (req, res) => {
 app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
   console.log("📩 /getUserByPhone query:", req.query);
+  
   if (!phone) {
     return res.status(400).json({ success: false, message: "Missing phone" });
   }
+  
   try {
     const [results] = await db.query(`SELECT * FROM users WHERE phone = ?`, [phone]);
     if (results.length === 0) {
       return res.status(404).json({ success: false, message: `User not found` });
     }
+    
     const user = results[0];
     res.json({ success: true, userId: user.id, user });
   } catch (err) {
@@ -518,12 +508,10 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     const { userId, dob, degree, year } = req.body || {};
     console.log("📩 /updateProfile fields:", req.body);
-    console.log("📎 /updateProfile file received via Cloudinary:", 
-!!req.file);
+    console.log("📎 /updateProfile file received via Cloudinary:", !!req.file);
 
     if (!userId) {
-      return res.status(400).json({ success: false, message: `Missing 
-userId` });
+      return res.status(400).json({ success: false, message: `Missing userId` });
     }
 
     const sets = [];
@@ -536,12 +524,11 @@ userId` });
     if (req.file && req.file.path) {
       console.log("✅ Image uploaded to Cloudinary URL:", req.file.path);
       sets.push("profile_pic = ?");
-      params.push(req.file.path); 
+      params.push(req.file.path);
     }
 
     if (sets.length === 0) {
-      return res.status(400).json({ success: false, message: `Nothing to 
-update` });
+      return res.status(400).json({ success: false, message: `Nothing to update` });
     }
 
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
@@ -549,13 +536,10 @@ update` });
 
     const [result] = await db.query(sql, params);
     if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: `User not 
-found` });
+      return res.status(404).json({ success: false, message: `User not found` });
     }
 
-    const [rows] = await db.query(`SELECT id, name, college, phone, 
-gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, 
-[userId]);
+    const [rows] = await db.query(`SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, [userId]);
     console.log(`✅ Profile updated for userId: ${userId}`);
 
     res.json({
@@ -565,11 +549,9 @@ gender, dob, degree, year, profile_pic FROM users WHERE id = ?`,
     });
   } catch (err) {
     console.error("❌ /updateProfile error:", err);
-    res.status(500).json({ success: false, message: `Internal Server 
-Error` });
+    res.status(500).json({ success: false, message: `Internal Server Error` });
   }
 });
-
 
 app.post('/sendMessage', async (req, res) => {
   try {
@@ -577,10 +559,12 @@ app.post('/sendMessage', async (req, res) => {
     if (!senderId || !receiverId || !message) {
       return res.status(400).json({ success: false, message: `senderId, receiverId, and message are required` });
     }
+    
     const [userCheck] = await db.execute(`SELECT id FROM users WHERE id IN (?, ?)`, [senderId, receiverId]);
     if (userCheck.length !== 2) {
       return res.status(400).json({ success: false, message: `One or both users do not exist` });
     }
+    
     const [result] = await db.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp) VALUES (?, ?, ?, NOW())`, [senderId, receiverId, message]);
     res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
   } catch (error) {
@@ -590,125 +574,109 @@ app.post('/sendMessage', async (req, res) => {
 });
 
 app.get('/getMessages', async (req, res) => {
-    try {
-        const { senderId, receiverId } = req.query; 
+  try {
+    const { senderId, receiverId } = req.query;
 
-        if (!senderId || !receiverId) {
-            return res.status(400).json({ success: false, message: 
-'senderId and receiverId are required' });
-        }
-
-        const query = `
-            SELECT id, sender_id as senderId, receiver_id as receiverId,
-                   message, timestamp as timestamp
-            FROM messages
-            WHERE 
-                ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND 
-receiver_id = ?))
-            AND 
-                NOT (sender_id = ? AND deleted_by_sender = TRUE)
-            AND 
-                NOT (receiver_id = ? AND deleted_by_receiver = TRUE)
-            ORDER BY timestamp ASC
-        `;
-
-        const [rows] = await db.execute(query, [senderId, receiverId, 
-receiverId, senderId, senderId, senderId]);
-
-        res.json({
-            success: true,
-            messages: rows || []
-        });
-    } catch (error) {
-        console.error('Error fetching messages:', error);
-        res.status(500).json({ success: false, message: `Failed to fetch 
-messages` });
+    if (!senderId || !receiverId) {
+      return res.status(400).json({ success: false, message: 'senderId and receiverId are required' });
     }
+
+    const query = `
+      SELECT id, sender_id as senderId, receiver_id as receiverId, 
+             message, timestamp as timestamp 
+      FROM messages 
+      WHERE 
+        ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) 
+      AND 
+        NOT (sender_id = ? AND deleted_by_sender = TRUE) 
+      AND 
+        NOT (receiver_id = ? AND deleted_by_receiver = TRUE) 
+      ORDER BY timestamp ASC
+    `;
+
+    const [rows] = await db.execute(query, [senderId, receiverId, receiverId, senderId, senderId, senderId]);
+
+    res.json({
+      success: true,
+      messages: rows || []
+    });
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).json({ success: false, message: `Failed to fetch messages` });
+  }
 });
 
 // in index.js
-
 app.get('/getChatUsers', async (req, res) => {
   try {
     const { userId } = req.query;
     if (!userId) {
-      return res.status(400).json({ success: false, message: `userId is 
-required` });
+      return res.status(400).json({ success: false, message: `userId is required` });
     }
 
     const query = `
-        SELECT DISTINCT
-            u.id,
-            u.name as username,
-            u.college,
-            u.profile_pic,
-            latest.last_message as lastMessage,
-            latest.last_timestamp as timestamp,
-            0 as unreadCount
-        FROM users u
-        INNER JOIN (
-            SELECT
-                CASE
-                    WHEN sender_id = ? THEN receiver_id
-                    ELSE sender_id
-                END as other_user_id,
-                message as last_message,
-                created_at as last_timestamp,
-                ROW_NUMBER() OVER (
-                    PARTITION BY CASE
-                        WHEN sender_id = ? THEN receiver_id
-                        ELSE sender_id
-                    END
-                    ORDER BY created_at DESC
-                ) as rn
-            FROM messages
-            WHERE 
-              (sender_id = ? OR receiver_id = ?)
-              AND NOT (sender_id = ? AND deleted_by_sender = TRUE)
-              AND NOT (receiver_id = ? AND deleted_by_receiver = TRUE)
-        ) latest ON u.id = latest.other_user_id AND latest.rn = 1
-        ORDER BY latest.last_timestamp DESC
+      SELECT DISTINCT 
+        u.id, 
+        u.name as username, 
+        u.college, 
+        u.profile_pic, 
+        latest.last_message as lastMessage, 
+        latest.last_timestamp as timestamp, 
+        0 as unreadCount 
+      FROM users u 
+      INNER JOIN (
+        SELECT 
+          CASE 
+            WHEN sender_id = ? THEN receiver_id 
+            ELSE sender_id 
+          END as other_user_id, 
+          message as last_message, 
+          created_at as last_timestamp, 
+          ROW_NUMBER() OVER (
+            PARTITION BY CASE 
+              WHEN sender_id = ? THEN receiver_id 
+              ELSE sender_id 
+            END 
+            ORDER BY created_at DESC 
+          ) as rn 
+        FROM messages 
+        WHERE 
+          (sender_id = ? OR receiver_id = ?) 
+          AND NOT (sender_id = ? AND deleted_by_sender = TRUE) 
+          AND NOT (receiver_id = ? AND deleted_by_receiver = TRUE) 
+      ) latest ON u.id = latest.other_user_id AND latest.rn = 1 
+      ORDER BY latest.last_timestamp DESC
     `;
 
-    const [rows] = await db.execute(query, [userId, userId, userId, 
-userId, userId, userId]);
+    const [rows] = await db.execute(query, [userId, userId, userId, userId, userId, userId]);
     res.json({ success: true, chats: rows || [] });
-
   } catch (error) {
     console.error('Error fetching chat users:', error);
-    res.status(500).json({ success: false, message: `Failed to fetch chat 
-users` });
+    res.status(500).json({ success: false, message: `Failed to fetch chat users` });
   }
 });
-
 
 app.post("/deleteMessageForMe", async (req, res) => {
   try {
     const { messageId, userId } = req.body;
 
     if (!messageId || !userId) {
-      return res.status(400).json({ success: false, message: `messageId 
-and userId are required` });
+      return res.status(400).json({ success: false, message: `messageId and userId are required` });
     }
 
-    const [messages] = await db.query(`SELECT sender_id, receiver_id FROM 
-messages WHERE id = ?`, [messageId]);
+    const [messages] = await db.query(`SELECT sender_id, receiver_id FROM messages WHERE id = ?`, [messageId]);
     if (messages.length === 0) {
-      return res.status(404).json({ success: false, message: `Message not 
-found` });
+      return res.status(404).json({ success: false, message: `Message not found` });
     }
     const message = messages[0];
 
     let updateQuery;
     if (userId == message.sender_id) {
-      updateQuery = `UPDATE messages SET deleted_by_sender = TRUE WHERE id 
-= ?`;
+      updateQuery = `UPDATE messages SET deleted_by_sender = TRUE WHERE id = ?`;
     } else if (userId == message.receiver_id) {
-      updateQuery = `UPDATE messages SET deleted_by_receiver = TRUE WHERE 
-id = ?`;
+      updateQuery = `UPDATE messages SET deleted_by_receiver = TRUE WHERE id = ?`;
     } else {
-      return res.status(403).json({ success: false, message: `You can only 
-delete messages from your own chats.` });
+      return res.status(403).json({ success: false, message: `You can only delete messages from your own chats.` });
     }
 
     await db.query(updateQuery, [messageId]);
@@ -726,20 +694,17 @@ app.post('/markMessagesRead', async (req, res) => {
   try {
     const { userId, otherUserId } = req.body;
     if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: `userId and 
-otherUserId are required` });
+      return res.status(400).json({ success: false, message: `userId and otherUserId are required` });
     }
-    const query = `UPDATE messages SET is_read = 1 WHERE sender_id = ? AND 
-receiver_id = ? AND is_read = 0`;
+    
+    const query = `UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0`;
     const [result] = await db.execute(query, [otherUserId, userId]);
-    console.log(`Marked ${result.affectedRows} messages as read for user 
-${userId} from user ${otherUserId}`);
-    res.json({ success: true, message: 'Messages marked as read', 
-markedCount: result.affectedRows });
+    
+    console.log(`Marked ${result.affectedRows} messages as read for user ${userId} from user ${otherUserId}`);
+    res.json({ success: true, message: 'Messages marked as read', markedCount: result.affectedRows });
   } catch (error) {
     console.error('Error marking messages as read:', error);
-    res.status(500).json({ success: false, message: `Failed to mark 
-messages as read` });
+    res.status(500).json({ success: false, message: `Failed to mark messages as read` });
   }
 });
 
@@ -747,20 +712,18 @@ app.get('/getUnreadCount', async (req, res) => {
   try {
     const { userId, otherUserId } = req.query;
     if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: `userId and 
-otherUserId are required` });
+      return res.status(400).json({ success: false, message: `userId and otherUserId are required` });
     }
-    const query = `SELECT COUNT(*) as unreadCount FROM messages WHERE 
-sender_id = ? AND receiver_id = ? AND is_read = 0`;
+    
+    const query = `SELECT COUNT(*) as unreadCount FROM messages WHERE sender_id = ? AND receiver_id = ? AND is_read = 0`;
     const [rows] = await db.execute(query, [otherUserId, userId]);
     const unreadCount = rows[0].unreadCount;
-    console.log(`Unread count for user ${userId} from user ${otherUserId}: 
-${unreadCount}`);
+    
+    console.log(`Unread count for user ${userId} from user ${otherUserId}: ${unreadCount}`);
     res.json({ success: true, unreadCount: unreadCount });
   } catch (error) {
     console.error('Error getting unread count:', error);
-    res.status(500).json({ success: false, message: `Failed to get unread 
-count` });
+    res.status(500).json({ success: false, message: `Failed to get unread count` });
   }
 });
 
@@ -768,32 +731,27 @@ app.get('/getTotalUnreadCount/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     if (!userId) {
-      return res.status(400).json({ success: false, message: `userId is 
-required` });
+      return res.status(400).json({ success: false, message: `userId is required` });
     }
-    const query = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE 
-receiver_id = ? AND is_read = 0`;
+    
+    const query = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND is_read = 0`;
     const [rows] = await db.execute(query, [userId]);
     const totalUnreadCount = rows[0].totalUnreadCount;
-    console.log(`Total unread count for user ${userId}: 
-${totalUnreadCount}`);
+    
+    console.log(`Total unread count for user ${userId}: ${totalUnreadCount}`);
     res.json({ success: true, totalUnreadCount: totalUnreadCount });
   } catch (error) {
     console.error('Error getting total unread count:', error);
-    res.status(500).json({ success: false, message: `Failed to get total 
-unread count` });
+    res.status(500).json({ success: false, message: `Failed to get total unread count` });
   }
 });
-
-
 
 app.post("/hideChat", async (req, res) => {
   try {
     const { userId, otherUserId } = req.body;
 
     if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: `userId and 
-otherUserId are required` });
+      return res.status(400).json({ success: false, message: `userId and otherUserId are required` });
     }
 
     const hideSentQuery = `
@@ -814,8 +772,7 @@ otherUserId are required` });
 
   } catch (error) {
     console.error('Error in /hideChat:', error);
-    res.status(500).json({ success: false, message: 'Failed to hide chat' 
-});
+    res.status(500).json({ success: false, message: 'Failed to hide chat' });
   }
 });
 
@@ -823,87 +780,27 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
     const { userId } = req.body;
+    
     if (!userId) {
-      return res.status(400).json({ success: false, message: `userId is 
-required in the request body` });
+      return res.status(400).json({ success: false, message: `userId is required in the request body` });
     }
+    
     const query = 'DELETE FROM messages WHERE id = ? AND sender_id = ?';
     const [result] = await db.execute(query, [messageId, userId]);
+    
     if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Message deleted successfully' 
-});
+      res.json({ success: true, message: 'Message deleted successfully' });
     } else {
-      res.status(403).json({ success: false, message: `Forbidden: You can 
-only delete your own messages` });
+      res.status(403).json({ success: false, message: `Forbidden: You can only delete your own messages` });
     }
   } catch (error) {
     console.error('Error deleting message:', error);
-    res.status(500).json({ success: false, message: `Failed to delete 
-message` });
+    res.status(500).json({ success: false, message: `Failed to delete message` });
   }
 });
 
-
-const server = http.createServer(app);
-
-// Configure Socket.IO with CORS
-const io = new Server(server, {
-  cors: {
-    origin: "*", // Allow all origins for simplicity, can be restricted later
-    methods: ["GET", "POST"]
-  }
-});
-
-// This runs for every new client connection
-io.on('connection', (socket) => {
-    // Get the userId from the initial connection handshake
-    const userId = socket.handshake.query.userId;
-    if (!userId) {
-        console.log('🔌 Socket connected without userId. Disconnecting.');
-        socket.disconnect();
-        return;
-    }
-
-    // Join a private "room" named after the user's ID
-    socket.join(userId);
-    console.log(`✅ User connected with socket ID: ${socket.id}, joined room: ${userId}`);
-
-    // This runs when a 'chat_message' event is received from a client
-    socket.on('chat_message', async (data) => {
-        try {
-            console.log(`📩 Message received from ${data.senderId} for ${data.receiverId}:`, data.message);
-
-            // Save the message to the database
-            const [result] = await db.query(
-                'INSERT INTO messages (sender_id, receiver_id, message) VALUES (?, ?, ?)',
-                [data.senderId, data.receiverId, data.message]
-            );
-            console.log(`💽 Message saved with ID: ${result.insertId}`);
-
-            // Get the full message object with the new ID and timestamp
-            const [rows] = await db.query('SELECT *, sender_id as senderId, receiver_id as receiverId, is_read as isRead FROM messages WHERE id = ?', [result.insertId]);
-            const fullMessageObject = rows[0];
-
-            // Send the message to the receiver's private room
-            io.to(String(data.receiverId)).emit('chat_message', fullMessageObject);
-            console.log(`🚀 Sent message to receiver room: ${data.receiverId}`);
-
-            // Also send the message back to the sender's private room
-            io.to(String(data.senderId)).emit('chat_message', fullMessageObject);
-            console.log(`🚀 Sent message back to sender room: ${data.senderId}`);
-
-        } catch (err) {
-            console.error('❌ CRITICAL ERROR processing chat message:', err);
-        }
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`🔌 User disconnected with socket ID: ${socket.id}, from room: ${userId}`);
-    });
-});
-
-// --- Start Server ---
+// ---------- Start Server ----------
 const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
-  console.log(`✅ Server with Socket.IO listening on http://0.0.0.0:${PORT}`);
+app.listen(PORT, () => {
+  console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
 });
