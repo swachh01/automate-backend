@@ -575,36 +575,33 @@ app.post('/sendMessage', async (req, res) => {
 
 // In index.js
 
-app.get('/getMessages', async (req, res) => {
+app.post('/sendMessage', async (req, res) => {
     try {
-        const { senderId, receiverId } = req.query;
+        // --- FIX: Change the variable names to match the incoming JSON ---
+        const { sender_id, receiver_id, message } = req.body;
 
-        if (!senderId || !receiverId) {
-            return res.status(400).json({ success: false, message: 'senderId and receiverId are required.' });
+        // --- FIX: Update validation to use the new variable names ---
+        if (!sender_id || !receiver_id || !message) {
+            return res.status(400).json({ success: false, message: 'sender_id, receiver_id, and message are required' });
         }
 
-        // --- THIS IS THE CORRECTED QUERY ---
-        // It selects all messages where:
-        // (sender is A AND receiver is B) OR (sender is B AND receiver is A)
-        // Then it orders them by time to create the conversation flow.
         const query = `
-            SELECT * FROM messages
-            WHERE (sender_id = ? AND receiver_id = ?)
-               OR (receiver_id = ? AND sender_id = ?)
-            ORDER BY timestamp ASC;
+            INSERT INTO messages (sender_id, receiver_id, message, timestamp) 
+            VALUES (?, ?, ?, NOW())
         `;
+        
+        // --- FIX: Use the new variables in the query ---
+        const [result] = await db.query(query, [sender_id, receiver_id, message]);
 
-        // The parameters must be passed for both conditions
-        const [messages] = await db.query(query, [senderId, receiverId, senderId, receiverId]);
-
-        res.json({ success: true, messages: messages || [] });
-
-    } catch (err) {
-        console.error("❌ Error fetching messages:", err);
-        res.status(500).json({ success: false, message: "Database error" });
+        // You can also emit this message via WebSocket here if you add that later
+        
+        res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
+        
+    } catch (error) {
+        console.error('❌ Error sending message:', error);
+        res.status(500).json({ success: false, message: `Failed to send message` });
     }
 });
-
 
 // in index.js
 app.get('/getChatUsers', async (req, res) => {
