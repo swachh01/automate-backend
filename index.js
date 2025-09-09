@@ -573,41 +573,38 @@ app.post('/sendMessage', async (req, res) => {
   }
 });
 
+// In index.js
+
 app.get('/getMessages', async (req, res) => {
-  try {
-    const { senderId, receiverId } = req.query;
+    try {
+        const { senderId, receiverId } = req.query;
 
-    if (!senderId || !receiverId) {
-      return res.status(400).json({ success: false, message: 'senderId and receiverId are required' });
+        if (!senderId || !receiverId) {
+            return res.status(400).json({ success: false, message: 'senderId and receiverId are required.' });
+        }
+
+        // --- THIS IS THE CORRECTED QUERY ---
+        // It selects all messages where:
+        // (sender is A AND receiver is B) OR (sender is B AND receiver is A)
+        // Then it orders them by time to create the conversation flow.
+        const query = `
+            SELECT * FROM messages
+            WHERE (sender_id = ? AND receiver_id = ?)
+               OR (receiver_id = ? AND sender_id = ?)
+            ORDER BY timestamp ASC;
+        `;
+
+        // The parameters must be passed for both conditions
+        const [messages] = await db.query(query, [senderId, receiverId, senderId, receiverId]);
+
+        res.json({ success: true, messages: messages || [] });
+
+    } catch (err) {
+        console.error("❌ Error fetching messages:", err);
+        res.status(500).json({ success: false, message: "Database error" });
     }
-
-const query = `
-  SELECT id, sender_id as senderId, receiver_id as receiverId,
-         message, timestamp,
-         CASE 
-           WHEN receiver_id = ? THEN COALESCE(is_read, 0)
-           ELSE 1 
-         END as isRead
-  FROM messages
-  WHERE
-    ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-  AND
-    NOT (sender_id = ? AND deleted_by_sender = TRUE)
-  AND
-    NOT (receiver_id = ? AND deleted_by_receiver = TRUE)
-  ORDER BY timestamp ASC
-`;
-
-const [rows] = await db.execute(query, [receiverId, senderId, receiverId, receiverId, senderId, senderId, receiverId]);
-    res.json({
-      success: true,
-      messages: rows || []
-    });
-  } catch (error) {
-    console.error('Error fetching messages:', error);
-    res.status(500).json({ success: false, message: `Failed to fetch messages` });
-  }
 });
+
 
 // in index.js
 app.get('/getChatUsers', async (req, res) => {
