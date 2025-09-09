@@ -799,6 +799,63 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   }
 });
 
+app.get("/travel-plans/destinations", async (req, res) => {
+    try {
+        await db.query('DELETE FROM travel_plans WHERE time < NOW()');
+
+        const query = `
+            SELECT
+                ANY_VALUE(destination) as destination,
+                COUNT(user_id) as userCount
+            FROM travel_plans
+            WHERE time > NOW()
+            GROUP BY LOWER(destination)
+            ORDER BY LOWER(destination) ASC;
+        `;
+        const [destinations] = await db.query(query);
+
+        res.json({ success: true, destinations: destinations || [] });
+
+    } catch (err) {
+        console.error("❌ Error fetching travel plan destinations:", err);
+        res.status(500).json({ success: false, message: "Database error" });
+    }
+});
+
+
+app.get("/travel-plans/by-destination", async (req, res) => {
+    try {
+        const { destination } = req.query;
+
+        if (!destination) {
+            return res.status(400).json({ success: false, message: "Destination query parameter is required." });
+        }
+
+        const query = `
+            SELECT
+                u.id,
+                u.name,
+                u.college,
+                u.gender,
+                u.profile_pic,
+                tp.time
+            FROM travel_plans tp
+            JOIN users u ON tp.user_id = u.id
+            -- Compare the lowercase versions of both the column and the input
+            WHERE LOWER(tp.destination) = LOWER(?) AND tp.time > NOW()
+            ORDER BY tp.time ASC;
+        `;
+        const [users] = await db.query(query, [destination]);
+
+        res.json({ success: true, users: users || [] });
+
+    } catch (err)
+    {
+        console.error("❌ Error fetching users by destination:", err);
+        res.status(500).json({ success: false, message: "Database error" });
+    }
+});
+
 // ---------- Start Server ----------
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
