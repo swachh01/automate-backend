@@ -553,34 +553,35 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   }
 });
 
-app.post('/sendMessage', async (req, res) => {
-  try {
-    const { senderId, receiverId, message } = req.body;
-    if (!senderId || !receiverId || !message) {
-      return res.status(400).json({ success: false, message: `senderId, receiverId, and message are required` });
-    }
-    
-    const [userCheck] = await db.execute(`SELECT id FROM users WHERE id IN (?, ?)`, [senderId, receiverId]);
-    if (userCheck.length !== 2) {
-      return res.status(400).json({ success: false, message: `One or both users do not exist` });
-    }
-    
-    const [result] = await db.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp) VALUES (?, ?, ?, NOW())`, [senderId, receiverId, message]);
-    res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
-  } catch (error) {
-    console.error('Error sending message:', error);
-    res.status(500).json({ success: false, message: `Failed to send message` });
-  }
-});
 
-// In index.js
+app.get('/getMessages', async (req, res) => {
+    try {
+        const { senderId, receiverId } = req.query;
+
+        if (!senderId || !receiverId) {
+            return res.status(400).json({ success: false, message: 'senderId and receiverId are required.' });
+        }
+
+        const query = `
+            SELECT * FROM messages
+            WHERE (sender_id = ? AND receiver_id = ?)
+               OR (receiver_id = ? AND sender_id = ?)
+            ORDER BY timestamp ASC;
+        `;
+
+        const [messages] = await db.query(query, [senderId, receiverId, senderId, receiverId]);
+        res.json({ success: true, messages: messages || [] });
+
+    } catch (err) {
+        console.error("❌ Error fetching messages:", err);
+        res.status(500).json({ success: false, message: "Database error" });
+    }
+});
 
 app.post('/sendMessage', async (req, res) => {
     try {
-        // --- FIX: Change the variable names to match the incoming JSON ---
         const { sender_id, receiver_id, message } = req.body;
 
-        // --- FIX: Update validation to use the new variable names ---
         if (!sender_id || !receiver_id || !message) {
             return res.status(400).json({ success: false, message: 'sender_id, receiver_id, and message are required' });
         }
@@ -590,11 +591,7 @@ app.post('/sendMessage', async (req, res) => {
             VALUES (?, ?, ?, NOW())
         `;
         
-        // --- FIX: Use the new variables in the query ---
         const [result] = await db.query(query, [sender_id, receiver_id, message]);
-
-        // You can also emit this message via WebSocket here if you add that later
-        
         res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
         
     } catch (error) {
