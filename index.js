@@ -581,21 +581,24 @@ app.get('/getMessages', async (req, res) => {
       return res.status(400).json({ success: false, message: 'senderId and receiverId are required' });
     }
 
-    const query = `
-      SELECT id, sender_id as senderId, receiver_id as receiverId, 
-             message, timestamp as timestamp 
-      FROM messages 
-      WHERE 
-        ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) 
-      AND 
-        NOT (sender_id = ? AND deleted_by_sender = TRUE) 
-      AND 
-        NOT (receiver_id = ? AND deleted_by_receiver = TRUE) 
-      ORDER BY timestamp ASC
-    `;
+const query = `
+  SELECT id, sender_id as senderId, receiver_id as receiverId,
+         message, timestamp,
+         CASE 
+           WHEN receiver_id = ? THEN COALESCE(is_read, 0)
+           ELSE 1 
+         END as isRead
+  FROM messages
+  WHERE
+    ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+  AND
+    NOT (sender_id = ? AND deleted_by_sender = TRUE)
+  AND
+    NOT (receiver_id = ? AND deleted_by_receiver = TRUE)
+  ORDER BY timestamp ASC
+`;
 
-    const [rows] = await db.execute(query, [senderId, receiverId, receiverId, senderId, senderId, senderId]);
-
+const [rows] = await db.execute(query, [receiverId, senderId, receiverId, receiverId, senderId, senderId, receiverId]);
     res.json({
       success: true,
       messages: rows || []
