@@ -554,12 +554,17 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
 });
 
 
+// In index.js
+
+// Ensure the path is exactly '/getMessages'
 app.get('/getMessages', async (req, res) => {
     try {
-        const { senderId, receiverId } = req.query;
+        // --- FIX: Destructure snake_case variables from the query ---
+        const { sender_id, receiver_id } = req.query;
 
-        if (!senderId || !receiverId) {
-            return res.status(400).json({ success: false, message: 'senderId and receiverId are required.' });
+        // --- FIX: Update the validation check ---
+        if (!sender_id || !receiver_id) {
+            return res.status(400).json({ success: false, message: 'sender_id and receiver_id are required.' });
         }
 
         const query = `
@@ -569,7 +574,9 @@ app.get('/getMessages', async (req, res) => {
             ORDER BY timestamp ASC;
         `;
 
-        const [messages] = await db.query(query, [senderId, receiverId, senderId, receiverId]);
+        // --- FIX: Use the new variables in the query's parameter array ---
+        const [messages] = await db.query(query, [sender_id, receiver_id, sender_id, receiver_id]);
+
         res.json({ success: true, messages: messages || [] });
 
     } catch (err) {
