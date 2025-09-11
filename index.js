@@ -568,10 +568,12 @@ app.get('/getMessages', async (req, res) => {
         }
 
         const query = `
-            SELECT * FROM messages
-            WHERE (sender_id = ? AND receiver_id = ?)
-               OR (receiver_id = ? AND sender_id = ?)
-            ORDER BY timestamp ASC;
+SELECT * FROM messages
+WHERE
+  ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+  AND
+  id NOT IN (SELECT message_id FROM hidden_messages WHERE user_id = ?)
+ORDER BY timestamp ASC;
         `;
 
         // --- FIX: Use the new variables in the query's parameter array ---
@@ -755,6 +757,18 @@ app.get('/getTotalUnreadCount/:userId', async (req, res) => {
     console.error('Error getting total unread count:', error);
     res.status(500).json({ success: false, message: `Failed to get total unread count` });
   }
+});
+
+app.post('/hideMessage', (req, res) => {
+  const { messageId, userId } = req.body;
+  const sql = "INSERT INTO hidden_messages (message_id, user_id) VALUES (?, ?)";
+
+  db.query(sql, [messageId, userId], (err, result) => {
+    if (err) {
+      return res.status(500).json({ success: false, message: "Database error." });
+    }
+    res.json({ success: true, message: "Message hidden successfully." });
+  });
 });
 
 app.post("/hideChat", async (req, res) => {
