@@ -589,6 +589,16 @@ app.post('/sendMessage', async (req, res) => {
     try {
         const { sender_id, receiver_id, message } = req.body;
 
+        const blockCheckQuery = `
+            SELECT * FROM blocked_users 
+            WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
+        `;
+        const [blockedRows] = await db.query(blockCheckQuery, [sender_id, receiver_id, receiver_id, sender_id]);
+
+        if (blockedRows.length > 0) {
+            return res.status(403).json({ success: false, message: 'This user cannot be messaged.' });
+        }
+
         if (!sender_id || !receiver_id || !message) {
             return res.status(400).json({ success: false, message: 'sender_id, receiver_id, and message are required' });
         }
@@ -854,6 +864,68 @@ app.get("/travel-plans/by-destination", async (req, res) => {
     {
         console.error("❌ Error fetching users by destination:", err);
         res.status(500).json({ success: false, message: "Database error" });
+    }
+});
+
+app.post('/block', async (req, res) => {
+    try {
+        const { blocker_id, blocked_id } = req.body;
+        if (!blocker_id || !blocked_id) {
+            return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
+        }
+        
+        const query = 'INSERT INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)';
+        await db.query(query, [blocker_id, blocked_id]);
+        
+        res.json({ success: true, message: 'User blocked successfully.' });
+    } catch (err) {
+        console.error("❌ Error blocking user:", err);
+        res.status(500).json({ success: false, message: 'Database error' });
+    }
+});
+
+app.post('/unblock', async (req, res) => {
+    try {
+        const { blocker_id, blocked_id } = req.body;
+        if (!blocker_id || !blocked_id) {
+            return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
+        }
+        
+        const query = 'DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?';
+        await db.query(query, [blocker_id, blocked_id]);
+        
+        res.json({ success: true, message: 'User unblocked successfully.' });
+    } catch (err) {
+        console.error("❌ Error unblocking user:", err);
+        res.status(500).json({ success: false, message: 'Database error' });
+    }
+});
+
+// GET /checkBlockStatus
+app.get('/checkBlockStatus', async (req, res) => {
+    try {
+        const { user1_id, user2_id } = req.query;
+        if (!user1_id || !user2_id) {
+            return res.status(400).json({ success: false, message: 'Both user IDs are required.' });
+        }
+
+        const query = `
+            SELECT * FROM blocked_users 
+            WHERE (blocker_id = ? AND blocked_id = ?) 
+               OR (blocker_id = ? AND blocked_id = ?)
+        `;
+        const [rows] = await db.query(query, [user1_id, user2_id, user2_id, user1_id]);
+
+        if (rows.length > 0) {
+            // A block exists. Let the client know who blocked whom.
+            res.json({ success: true, isBlocked: true, blockerId: rows[0].blocker_id });
+        } else {
+            // No block exists.
+            res.json({ success: true, isBlocked: false });
+        }
+    } catch (err) {
+        console.error("❌ Error checking block status:", err);
+        res.status(500).json({ success: false, message: 'Database error' });
     }
 });
 
