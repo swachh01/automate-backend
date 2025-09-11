@@ -554,37 +554,37 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
 });
 
 
-// In index.js
+// Endpoint to get messages
+app.get('/getMessages', (req, res) => {
+    const { sender_id, receiver_id } = req.query;
 
-// Ensure the path is exactly '/getMessages'
-app.get('/getMessages', async (req, res) => {
-    try {
-        // --- FIX: Destructure snake_case variables from the query ---
-        const { sender_id, receiver_id } = req.query;
+    // This is the new, corrected SQL query
+    const sql = `
+        SELECT m.*
+        FROM messages AS m
+        LEFT JOIN hidden_messages AS hm ON m.id = hm.message_id AND hm.user_id = ?
+        WHERE
+          ((m.sender_id = ? AND m.receiver_id = ?) OR (m.receiver_id = ? AND m.sender_id = ?))
+          AND hm.id IS NULL
+        ORDER BY m.timestamp ASC;
+    `;
 
-        // --- FIX: Update the validation check ---
-        if (!sender_id || !receiver_id) {
-            return res.status(400).json({ success: false, message: 'sender_id and receiver_id are required.' });
+    // The parameters must be in the correct order to match the '?' placeholders
+    const params = [
+        sender_id,     // For hm.user_id = ?
+        sender_id,     // For m.sender_id = ?
+        receiver_id,   // For m.receiver_id = ?
+        receiver_id,   // For m.sender_id = ? (swapped)
+        sender_id      // For m.receiver_id = ? (swapped)
+    ];
+
+    db.query(sql, params, (err, results) => {
+        if (err) {
+            console.error('❌ Error fetching messages:', err);
+            return res.status(500).json({ success: false, message: 'Failed to fetch messages.' });
         }
-
-        const query = `
-SELECT * FROM messages
-WHERE
-  ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-  AND
-  id NOT IN (SELECT message_id FROM hidden_messages WHERE user_id = ?)
-ORDER BY timestamp ASC;
-        `;
-
-        // --- FIX: Use the new variables in the query's parameter array ---
-        const [messages] = await db.query(query, [sender_id, receiver_id, sender_id, receiver_id]);
-
-        res.json({ success: true, messages: messages || [] });
-
-    } catch (err) {
-        console.error("❌ Error fetching messages:", err);
-        res.status(500).json({ success: false, message: "Database error" });
-    }
+        res.json({ success: true, messages: results });
+    });
 });
 
 app.post('/sendMessage', async (req, res) => {
