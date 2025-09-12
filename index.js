@@ -669,33 +669,46 @@ app.get('/getChatUsers', async (req, res) => {
   }
 });
 
+// Updated deleteMessageForMe route that works with hidden_messages table
 app.post("/deleteMessageForMe", async (req, res) => {
   try {
     const { messageId, userId } = req.body;
-
+          
     if (!messageId || !userId) {
       return res.status(400).json({ success: false, message: `messageId and userId are required` });
     }
-
+              
+    // Check if message exists and user has permission to hide it
     const [messages] = await db.query(`SELECT sender_id, receiver_id FROM messages WHERE id = ?`, [messageId]);
     if (messages.length === 0) {
       return res.status(404).json({ success: false, message: `Message not found` });
     }
+    
     const message = messages[0];
-
-    let updateQuery;
-    if (userId == message.sender_id) {
-      updateQuery = `UPDATE messages SET deleted_by_sender = TRUE WHERE id = ?`;
-    } else if (userId == message.receiver_id) {
-      updateQuery = `UPDATE messages SET deleted_by_receiver = TRUE WHERE id = ?`;
-    } else {
+    
+    // Verify user can hide this message (must be sender or receiver)
+    if (userId != message.sender_id && userId != message.receiver_id) {
       return res.status(403).json({ success: false, message: `You can only delete messages from your own chats.` });
     }
-
-    await db.query(updateQuery, [messageId]);
-
+    
+    // Check if message is already hidden for this user
+    const [existingHidden] = await db.query(
+      `SELECT id FROM hidden_messages WHERE message_id = ? AND user_id = ?`, 
+      [messageId, userId]
+    );
+    
+    if (existingHidden.length > 0) {
+      return res.status(200).json({ success: true, message: "Message already hidden" });
+    }
+    
+    // Insert into hidden_messages table
+    await db.query(
+      `INSERT INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, 
+      [messageId, userId]
+    );
+    
     res.json({ success: true, message: "Message hidden successfully" });
-
+   
   } catch (error) {
     console.error('Error in /deleteMessageForMe:', error);
     res.status(500).json({ success: false, message: 'Server error' });
