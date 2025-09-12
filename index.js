@@ -554,36 +554,57 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
 });
 
 
-// Endpoint to get messages
+// Optimized endpoint to get messages
 app.get('/getMessages', (req, res) => {
     const { sender_id, receiver_id } = req.query;
 
-    // This is the new, corrected SQL query
-    const sql = `
-        SELECT m.*
-        FROM messages AS m
-        LEFT JOIN hidden_messages AS hm ON m.id = hm.message_id AND hm.user_id = ?
-        WHERE
-          ((m.sender_id = ? AND m.receiver_id = ?) OR (m.receiver_id = ? AND m.sender_id = ?))
-          AND hm.id IS NULL
-        ORDER BY m.timestamp ASC;
+    console.log(`Fetching messages for sender: ${sender_id}, receiver: ${receiver_id}`);
+
+    if (!sender_id || !receiver_id) {
+        return res.status(400).json({ success: false, message: 'sender_id and receiver_id are required' });
+    }
+
+    // First, get all messages between the two users
+    const getMessagesQuery = `
+        SELECT * FROM messages 
+        WHERE (sender_id = ? AND receiver_id = ?) 
+           OR (sender_id = ? AND receiver_id = ?)
+        ORDER BY timestamp ASC
     `;
-
-    // The parameters must be in the correct order to match the '?' placeholders
-    const params = [
-        sender_id,     // For hm.user_id = ?
-        sender_id,     // For m.sender_id = ?
-        receiver_id,   // For m.receiver_id = ?
-        receiver_id,   // For m.sender_id = ? (swapped)
-        sender_id      // For m.receiver_id = ? (swapped)
-    ];
-
-    db.query(sql, params, (err, results) => {
+    
+    // Then get hidden messages for the current user
+    const getHiddenQuery = `
+        SELECT message_id FROM hidden_messages WHERE user_id = ?
+    `;
+    
+    db.query(getMessagesQuery, [sender_id, receiver_id, receiver_id, sender_id], (err, messages) => {
         if (err) {
             console.error('❌ Error fetching messages:', err);
             return res.status(500).json({ success: false, message: 'Failed to fetch messages.' });
         }
-        res.json({ success: true, messages: results });
+
+        // If no messages, return empty array
+        if (messages.length === 0) {
+            return res.json({ success: true, messages: [] });
+        }
+
+        // Get hidden messages for this user
+        db.query(getHiddenQuery, [sender_id], (err, hiddenMessages) => {
+            if (err) {
+                console.error('❌ Error fetching hidden messages:', err);
+                return res.status(500).json({ success: false, message: 'Failed to fetch hidden messages.' });
+            }
+
+            // Create a Set of hidden message IDs for fast lookup
+            const hiddenMessageIds = new Set(hiddenMessages.map(hm => hm.message_id));
+
+            // Filter out hidden messages
+            const visibleMessages = messages.filter(message => !hiddenMessageIds.has(message.id));
+
+            console.log(`Found ${messages.length} total messages, ${visibleMessages.length} visible to user ${sender_id}`);
+            
+            res.json({ success: true, messages: visibleMessages });
+        });
     });
 });
 
