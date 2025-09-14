@@ -327,24 +327,34 @@ app.post("/login", async (req, res) => {
 
 app.post("/addTravelPlan", async (req, res) => {
   try {
-    const { userId, destination, time } = req.body;
+    const { userId, fromPlace, toPlace, time } = req.body;
     const actualTime = time;
-    console.log("📩 /addTravelPlan request:", req.body);
-    
-    if (!userId || !destination || !actualTime) {
+
+    console.log("📩 /addTravelPlan request:", req.body);   
+      
+    if (!userId || !fromPlace || !toPlace || !actualTime) {
       console.log("❌ Missing fields");
-      return res.status(400).json({ success: false, message: `Missing required fields: userId, destination, and time` });
-    }
+      return res.status(400).json({ 
+        success: false, 
+        message: "Missing required fields: userId, fromPlace, toPlace, and time" 
+      });
+    } 
+
+    const query = `INSERT INTO travel_plans (user_id, from_place, to_place, time) 
+                   VALUES (?, ?, ?, ?) 
+                   ON DUPLICATE KEY UPDATE 
+                   from_place = VALUES(from_place), 
+                   to_place = VALUES(to_place), 
+                   time = VALUES(time)`;
     
-    const query = `INSERT INTO travel_plans (user_id, destination, time) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE destination = VALUES(destination), time = VALUES(time)`;
-    const [result] = await db.query(query, [userId, destination, actualTime]);
-    
+    const [result] = await db.query(query, [userId, fromPlace, toPlace, actualTime]);
+        
     let message = "Plan submitted successfully";
     if (result.affectedRows > 1) {
       message = "Plan updated successfully";
     }
-    
-    console.log(`✅ Travel plan saved for userId=${userId} to ${destination}`);
+        
+    console.log(`✅ Travel plan saved for userId=${userId} from ${fromPlace} to ${toPlace}`);
     res.json({
       success: true,
       message: message,
@@ -352,58 +362,72 @@ app.post("/addTravelPlan", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error saving travel plan:", err);
-    res.status(500).json({ success: false, message: "Database error", error: process.env.NODE_ENV === 'development' ? err.message : undefined });
-  }
+    res.status(500).json({ 
+      success: false, 
+      message: "Database error", 
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined 
+    });
+  } 
 });
 
 app.get("/getUserTravelPlan/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
     console.log(`📩 /getUserTravelPlan/${userId} request`);
-    
+  
     if (!userId) {
-      return res.status(400).json({ success: false, message: `User ID is required` });
-    }
-    
+      return res.status(400).json({ 
+        success: false, 
+        message: "User ID is required" 
+      });
+    } 
+
     const [results] = await db.query(
-      `SELECT 
-        tp.id, 
-        tp.destination, 
-        tp.time, 
-        u.name, 
-        u.college, 
-        u.gender, 
-        u.profile_pic 
-       FROM travel_plans tp 
-       JOIN users u ON tp.user_id = u.id 
-       WHERE tp.user_id = ? AND tp.time > NOW() 
+      `SELECT
+        tp.id,
+        tp.from_place as fromPlace,
+        tp.to_place as toPlace,
+        tp.time,
+        u.name,
+        u.college,
+        u.gender,
+        u.profile_pic
+       FROM travel_plans tp
+       JOIN users u ON tp.user_id = u.id
+       WHERE tp.user_id = ? AND tp.time > NOW()
        ORDER BY tp.time ASC`,
       [userId]
     );
-    
+
     console.log(`Travel Plan fetched for user ${userId}:`, results);
     res.json({ success: true, users: results || [] });
   } catch (err) {
     console.error(`❌ Error fetching travel plan for user ${userId}:`, err);
-    res.status(500).json({ success: false, message: "Database error", users: [] });
+    res.status(500).json({ 
+      success: false, 
+      message: "Database error", 
+      users: [] 
+    });
   }
 });
 
 app.get("/getUserTravelPlan", async (req, res) => {
   try {
     await db.query('DELETE FROM travel_plans WHERE time < NOW()');
+    
     const [results] = await db.query(
-      `SELECT 
-        tp.id, 
-        tp.destination, 
-        tp.time, 
-        u.name, 
-        u.college, 
-        u.gender, 
-        u.profile_pic 
-      FROM travel_plans tp 
-      JOIN users u ON tp.user_id = u.id 
-      WHERE tp.time > NOW() 
+      `SELECT
+        tp.id,
+        tp.from_place as fromPlace,
+        tp.to_place as toPlace,
+        tp.time,
+        u.name,
+        u.college,
+        u.gender,
+        u.profile_pic
+      FROM travel_plans tp
+      JOIN users u ON tp.user_id = u.id
+      WHERE tp.time > NOW()
       ORDER BY tp.time ASC`
     );
     
@@ -415,29 +439,29 @@ app.get("/getUserTravelPlan", async (req, res) => {
   }
 });
 
-// It has been corrected to get the other user's name and profile picture.
 app.get("/getChatUsers/:userId", async (req, res) => {
   const currentUserId = req.params.userId;
   try {
     const query = `
-      SELECT 
-        u.id, 
-        u.name AS username, 
-        u.profile_pic, 
-        m.message AS lastMessage, 
-        m.timestamp 
-      FROM 
-        (SELECT 
+      SELECT
+        u.id,
+        u.name AS username,
+        u.profile_pic,
+        m.message AS lastMessage,
+        m.timestamp
+      FROM
+        (SELECT
           LEAST(sender_id, receiver_id) as user1,
-          GREATEST(sender_id, receiver_id) as user2, 
-          MAX(id) as max_id 
-        FROM messages 
-        WHERE sender_id = ? OR receiver_id = ? 
-        GROUP BY user1, user2) AS latest 
-      JOIN messages m ON m.id = latest.max_id 
-      JOIN users u ON u.id = IF(latest.user1 = ?, latest.user2, latest.user1) 
+          GREATEST(sender_id, receiver_id) as user2,
+          MAX(id) as max_id
+        FROM messages
+        WHERE sender_id = ? OR receiver_id = ?
+        GROUP BY user1, user2) AS latest
+      JOIN messages m ON m.id = latest.max_id
+      JOIN users u ON u.id = IF(latest.user1 = ?, latest.user2, latest.user1)
       ORDER BY m.timestamp DESC;
     `;
+
     const [chats] = await db.query(query, [currentUserId, currentUserId, currentUserId]);
     res.json({ success: true, chats: chats });
   } catch (err) {
@@ -449,53 +473,59 @@ app.get("/getChatUsers/:userId", async (req, res) => {
 app.get("/getUsersGoing", async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT 
-        tp.user_id, 
-        tp.destination, 
-        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time, 
-        u.name, 
-        u.college, 
-        u.profile_pic, 
-        u.gender 
-      FROM travel_plans tp 
-      JOIN users u ON tp.user_id = u.id 
-      WHERE tp.time >= CURDATE() 
+      `SELECT
+        tp.user_id,
+        tp.from_place as fromPlace,
+        tp.to_place as toPlace,
+        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
+        u.name,
+        u.college,
+        u.profile_pic,
+        u.gender
+      FROM travel_plans tp
+      JOIN users u ON tp.user_id = u.id
+      WHERE tp.time >= CURDATE()
       ORDER BY tp.time ASC`
     );
-    
+
     const usersGoing = rows.map(row => ({
       userId: row.user_id,
+      id: row.user_id,  // Add this for compatibility with GoingUser model
       name: row.name,
-      destination: row.destination,
+      fromPlace: row.fromPlace,
+      toPlace: row.toPlace,
       time: row.time,
       college: row.college,
-      // --- THIS IS THE FIX ---
-      // The key is now "profile_pic" to match the Android model
       profile_pic: row.profile_pic,
       gender: row.gender
     }));
-    
+
     res.json({ success: true, users: usersGoing });
   } catch (err) {
     console.error("❌ Error fetching users going:", err);
-    res.status(500).json({ success: false, message: "Database error", users: [] });
+    res.status(500).json({ 
+      success: false, 
+      message: "Database error", 
+      users: [] 
+    });
   }
 });
 
 app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
   console.log("📩 /getUserByPhone query:", req.query);
-  
+
   if (!phone) {
     return res.status(400).json({ success: false, message: "Missing phone" });
   }
-  
+
   try {
     const [results] = await db.query(`SELECT * FROM users WHERE phone = ?`, [phone]);
+
     if (results.length === 0) {
-      return res.status(404).json({ success: false, message: `User not found` });
+      return res.status(404).json({ success: false, message: "User not found" });
     }
-    
+
     const user = results[0];
     res.json({ success: true, userId: user.id, user });
   } catch (err) {
@@ -842,60 +872,62 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
 });
 
 app.get("/travel-plans/destinations", async (req, res) => {
-    try {
-        await db.query('DELETE FROM travel_plans WHERE time < NOW()');
+  try {
+    await db.query('DELETE FROM travel_plans WHERE time < NOW()');
+    
+    const query = `
+      SELECT
+        ANY_VALUE(to_place) as destination,
+        COUNT(user_id) as userCount
+      FROM travel_plans
+      WHERE time > NOW()
+      GROUP BY LOWER(to_place)
+      ORDER BY LOWER(to_place) ASC;
+    `;
+    
+    const [destinations] = await db.query(query);
+    res.json({ success: true, destinations: destinations || [] });
 
-        const query = `
-            SELECT
-                ANY_VALUE(destination) as destination,
-                COUNT(user_id) as userCount
-            FROM travel_plans
-            WHERE time > NOW()
-            GROUP BY LOWER(destination)
-            ORDER BY LOWER(destination) ASC;
-        `;
-        const [destinations] = await db.query(query);
-
-        res.json({ success: true, destinations: destinations || [] });
-
-    } catch (err) {
-        console.error("❌ Error fetching travel plan destinations:", err);
-        res.status(500).json({ success: false, message: "Database error" });
-    }
+  } catch (err) {
+    console.error("❌ Error fetching travel plan destinations:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
 });
 
-
 app.get("/travel-plans/by-destination", async (req, res) => {
-    try {
-        const { destination } = req.query;
+  try {
+    const { destination } = req.query;
 
-        if (!destination) {
-            return res.status(400).json({ success: false, message: "Destination query parameter is required." });
-        }
-
-        const query = `
-            SELECT
-                u.id,
-                u.name,
-                u.college,
-                u.gender,
-                u.profile_pic,
-                tp.time
-            FROM travel_plans tp
-            JOIN users u ON tp.user_id = u.id
-            -- Compare the lowercase versions of both the column and the input
-            WHERE LOWER(tp.destination) = LOWER(?) AND tp.time > NOW()
-            ORDER BY tp.time ASC;
-        `;
-        const [users] = await db.query(query, [destination]);
-
-        res.json({ success: true, users: users || [] });
-
-    } catch (err)
-    {
-        console.error("❌ Error fetching users by destination:", err);
-        res.status(500).json({ success: false, message: "Database error" });
+    if (!destination) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Destination query parameter is required." 
+      });
     }
+    
+    const query = `
+      SELECT
+        u.id,
+        u.name,
+        u.college,
+        u.gender,
+        u.profile_pic,
+        tp.from_place as fromPlace,
+        tp.to_place as toPlace,
+        tp.time
+      FROM travel_plans tp
+      JOIN users u ON tp.user_id = u.id
+      WHERE LOWER(tp.to_place) = LOWER(?) AND tp.time > NOW()
+      ORDER BY tp.time ASC;
+    `;
+    const [users] = await db.query(query, [destination]);
+
+    res.json({ success: true, users: users || [] });
+ 
+  } catch (err) {
+    console.error("❌ Error fetching users by destination:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
 });
 
 app.post('/block', async (req, res) => {
