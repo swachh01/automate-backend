@@ -261,21 +261,49 @@ app.post("/savePassword", async (req, res) => {
   try {
     const { phone, newPassword } = req.body;
     console.log("📩 /savePassword request:", { phone: phone ? "***" + phone.slice(-4) : "missing", hasPassword: !!newPassword });
-    
+        
     if (!phone || !newPassword) {
       return res.status(400).json({ success: false, message: `Phone and password required` });
     }
     
-    if (newPassword.length < 6) {
-      return res.status(400).json({ success: false, message: "Password must be at least 6 characters long" });
+    // Enhanced password validation
+    if (newPassword.length < 7) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Password must be at least 7 characters long" 
+      });
     }
     
+    // Check for at least one alphabet (letter)
+    if (!/[a-zA-Z]/.test(newPassword)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Password must contain at least one letter" 
+      });
+    }
+    
+    // Check for at least one numeral (digit)
+    if (!/[0-9]/.test(newPassword)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Password must contain at least one number" 
+      });
+    }
+    
+    // Check for at least one symbol (special character)
+    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(newPassword)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Password must contain at least one symbol (!@#$%^&* etc.)" 
+      });
+    }
+      
     const [updateResult] = await db.query(`UPDATE users SET password = ? WHERE phone = ?`, [newPassword, phone]);
     console.log("📊 Update result:", updateResult);
-    
+      
     if (updateResult.affectedRows === 0) {
       return res.status(404).json({ success: false, message: `User not found` });
-    }
+    }  
     
     const [userRows] = await db.query(`SELECT id FROM users WHERE phone = ?`, [phone]);
     if (userRows.length === 0) {
@@ -289,7 +317,7 @@ app.post("/savePassword", async (req, res) => {
   } catch (err) {
     console.error("❌ Error in /savePassword:", err);
     return res.status(500).json({ success: false, message: `Database error`, error: process.env.NODE_ENV === 'development' ? err.message : undefined });
-  }
+  } 
 });
 
 app.post("/login", async (req, res) => {
