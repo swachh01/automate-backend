@@ -112,14 +112,41 @@ app.get("/debug/stores", (req, res) => {
   });
 });
 
-// Debug endpoint to check users
-app.get('/debug/users', async (req, res) => {
-  try {
-    const [rows] = await db.execute(`SELECT id, name FROM users LIMIT 10`);
-    res.json({ users: rows });
-  } catch (error) {
-    res.json({ error: error.message });
-  }
+app.get('/debug/routes', (req, res) => {
+    // 1. Security check - only allow in development
+    if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ message: "Not available in production" });
+    }
+    
+    const routes = [];
+    
+    // 2. Loop through all middleware in the Express app
+    app._router.stack.forEach((middleware) => {
+        
+        // 3. Check if it's a direct route (like app.get('/health', ...))
+        if (middleware.route) {
+            routes.push({
+                path: middleware.route.path,           // e.g., "/health"
+                methods: Object.keys(middleware.route.methods)  // e.g., ["get"]
+            });
+        } 
+        
+        // 4. Check if it's a router middleware (like app.use(router))
+        else if (middleware.name === 'router') {
+            // Loop through routes inside the router
+            middleware.handle.stack.forEach((handler) => {
+                if (handler.route) {
+                    routes.push({
+                        path: handler.route.path,     // e.g., "/tripHistory/:userId"
+                        methods: Object.keys(handler.route.methods) // e.g., ["get"]
+                    });
+                }
+            });
+        }
+    });
+    
+    // 5. Return all found routes as JSON
+    res.json({ routes, message: "Available routes" });
 });
 
 app.post("/signup", async (req, res) => {
@@ -1516,7 +1543,6 @@ router.delete('/settings/account/:userId', async (req, res) => {
     }
 });
 
-module.exports = router;
 app.use('/api', router);
 
 // ---------- Start Server ----------
