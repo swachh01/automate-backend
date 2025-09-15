@@ -18,6 +18,7 @@ const multer = require("multer");
 const mysql = require("mysql2");
 
 const app = express();
+const router = express.Router();
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -1019,6 +1020,504 @@ app.get('/checkBlockStatus', async (req, res) => {
         res.status(500).json({ success: false, message: 'Database error' });
     }
 });
+
+// Fixed Trip History Route
+router.get('/tripHistory/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { page = 1, limit = 20 } = req.query;
+        const offset = (page - 1) * limit;
+        
+        // Validate userId
+        if (!userId || isNaN(userId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid user ID'
+            });
+        }
+                    
+        const query = `
+            SELECT
+                tp.id,
+                tp.from_place,
+                tp.to_place,
+                tp.time as travel_time,
+                tp.created_at,
+                u.name as user_name,
+                u.profile_pic 
+            FROM travel_plans tp
+            LEFT JOIN users u ON tp.user_id = u.id
+            WHERE tp.user_id = ?
+            ORDER BY tp.created_at DESC
+            LIMIT ? OFFSET ?
+        `;
+
+        // FIX: Properly handle the query result structure
+        const [trips] = await db.query(query, [parseInt(userId), parseInt(limit), parseInt(offset)]);
+    
+        // Get total count for pagination
+        const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
+        const [countResult] = await db.query(countQuery, [parseInt(userId)]);
+        const totalTrips = countResult[0].total;
+                
+        res.json({
+            success: true,
+            data: {
+                trips: trips,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalTrips / limit),
+                    totalTrips: totalTrips,
+                    hasMore: offset + trips.length < totalTrips
+                }
+            }
+        });
+                
+    } catch (error) {
+        console.error('Error fetching trip history:', error);
+        res.status(500).json({
+            success: false,  
+            message: 'Error fetching trip history',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Fixed Trip Stats Route      
+router.get('/tripStats/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        // Validate userId
+        if (!userId || isNaN(userId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid user ID'
+            });
+        }
+
+        const statsQuery = `
+            SELECT
+                COUNT(*) as total_trips,
+                COUNT(DISTINCT to_place) as unique_destinations,
+                MIN(created_at) as first_trip_date,
+                MAX(created_at) as last_trip_date
+            FROM travel_plans
+            WHERE user_id = ?
+        `;
+
+        // FIX: Properly handle the query result structure
+        const [statsResult] = await db.query(statsQuery, [parseInt(userId)]);
+        const stats = statsResult[0];
+
+        // Get most visited destinations
+        const destinationsQuery = `
+            SELECT
+                to_place as destination,
+                COUNT(*) as visit_count
+            FROM travel_plans
+            WHERE user_id = ?
+            GROUP BY to_place
+            ORDER BY visit_count DESC
+            LIMIT 5
+        `;
+
+        const [topDestinations] = await db.query(destinationsQuery, [parseInt(userId)]);
+
+        res.json({
+            success: true,
+            data: {
+                statistics: stats,
+                topDestinations: topDestinations
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching trip statistics:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching trip statistics',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Fixed Favorites Route
+router.get('/favorites/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        // Validate userId
+        if (!userId || isNaN(userId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid user ID'
+            });
+        }
+
+        const query = `
+            SELECT
+                id,
+                place_name,
+                place_type,
+                address,
+                latitude,
+                longitude,
+                created_at
+            FROM favorites
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+        `;
+
+        // FIX: Properly handle the query result structure
+        const [favorites] = await db.query(query, [parseInt(userId)]);
+
+        res.json({
+            success: true,
+            data: favorites
+        });
+
+    } catch (error) {
+        console.error('Error fetching favorites:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching favorites',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Fixed Add Favorite Route
+router.post('/favorites', async (req, res) => {
+    try {
+        const { userId, placeName, placeType, address, latitude, longitude } = req.body;
+        
+        // Validate required fields
+        if (!userId || !placeName || !address) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: userId, placeName, and address are required'
+            });
+        }
+
+        // Check if place already exists in favorites
+        const existingQuery = 'SELECT id FROM favorites WHERE user_id = ? AND place_name = ? AND address = ?';
+        const [existing] = await db.query(existingQuery, [parseInt(userId), placeName, address]);
+        
+        if (existing.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Place already in favorites'
+            });
+        }
+
+        const insertQuery = `
+            INSERT INTO favorites (user_id, place_name, place_type, address, latitude, longitude, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, NOW())
+        `;
+
+        const [result] = await db.query(insertQuery, [
+            parseInt(userId), 
+            placeName, 
+            placeType || null, 
+            address, 
+            latitude || null, 
+            longitude || null
+        ]);
+
+        res.json({
+            success: true,
+            message: 'Place added to favorites',
+            data: {
+                favoriteId: result.insertId
+            }
+        });
+
+    } catch (error) {
+        console.error('Error adding favorite:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error adding favorite place',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Fixed Remove Favorite Route
+router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
+    try {
+        const { userId, favoriteId } = req.params;
+        
+        // Validate parameters
+        if (!userId || isNaN(userId) || !favoriteId || isNaN(favoriteId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid user ID or favorite ID'
+            });
+        }
+
+        const deleteQuery = 'DELETE FROM favorites WHERE id = ? AND user_id = ?';
+        const [result] = await db.query(deleteQuery, [parseInt(favoriteId), parseInt(userId)]);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Favorite not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Favorite removed successfully'
+        });
+
+    } catch (error) {
+        console.error('Error removing favorite:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error removing favorite',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+router.get('/settings/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        // Option 1: If settings are in users table
+        const userQuery = `
+            SELECT 
+                name,
+                college,
+                phone,
+                gender,
+                dob,
+                degree,
+                year,
+                profile_pic,
+                created_at
+            FROM users 
+            WHERE id = ?
+        `;
+
+        const user = await db.query(userQuery, [userId]);
+
+        if (user.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // You can also fetch additional settings from a separate table if needed
+        // const settingsQuery = 'SELECT * FROM user_settings WHERE user_id = ?';
+        // const settings = await db.query(settingsQuery, [userId]);
+
+        res.json({
+            success: true,
+            data: {
+                profile: user[0],
+                // settings: settings[0] || {} // if you have a separate settings table
+                preferences: {
+                    notifications: true, // default values
+                    darkMode: false,
+                    language: 'en'
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching settings:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching user settings'
+        });
+    }
+});
+
+// Update user profile settings
+router.put('/settings/profile/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { name, college, gender, dob, degree, year } = req.body;
+
+        const updateQuery = `
+            UPDATE users 
+            SET name = ?, college = ?, gender = ?, dob = ?, degree = ?, year = ?, updated_at = NOW()
+            WHERE id = ?
+        `;
+
+        const result = await db.query(updateQuery, [name, college, gender, dob, degree, year, userId]);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Profile updated successfully'
+        });
+
+    } catch (error) {
+        console.error('Error updating profile:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating profile'
+        });
+    }
+});
+
+// Update user preferences (if you create a separate settings table)
+router.put('/settings/preferences/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { notifications, darkMode, language } = req.body;
+
+        // This would require a user_settings table
+        const upsertQuery = `
+            INSERT INTO user_settings (user_id, notifications, dark_mode, language, updated_at)
+            VALUES (?, ?, ?, ?, NOW())
+            ON DUPLICATE KEY UPDATE
+            notifications = VALUES(notifications),
+            dark_mode = VALUES(dark_mode),
+            language = VALUES(language),
+            updated_at = NOW()
+        `;
+
+        await db.query(upsertQuery, [userId, notifications, darkMode, language]);
+
+        res.json({
+            success: true,
+            message: 'Preferences updated successfully'
+        });
+
+    } catch (error) {
+        console.error('Error updating preferences:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating preferences'
+        });
+    }
+});
+
+// Change password
+router.put('/settings/password/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { currentPassword, newPassword } = req.body;
+
+        // Verify current password
+        const userQuery = 'SELECT password FROM users WHERE id = ?';
+        const user = await db.query(userQuery, [userId]);
+
+        if (user.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Hash and verify current password (you should use bcrypt)
+        const bcrypt = require('bcrypt');
+        const isValid = await bcrypt.compare(currentPassword, user[0].password);
+
+        if (!isValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password is incorrect'
+            });
+        }
+
+        // Hash new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update password
+        const updateQuery = 'UPDATE users SET password = ? WHERE id = ?';
+        await db.query(updateQuery, [hashedPassword, userId]);
+
+        res.json({
+            success: true,
+            message: 'Password updated successfully'
+        });
+
+    } catch (error) {
+        console.error('Error updating password:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating password'
+        });
+    }
+});
+
+// Delete user account
+router.delete('/settings/account/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { password } = req.body;
+
+        // Verify password before deletion
+        const userQuery = 'SELECT password FROM users WHERE id = ?';
+        const user = await db.query(userQuery, [userId]);
+
+        if (user.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        const bcrypt = require('bcrypt');
+        const isValid = await bcrypt.compare(password, user[0].password);
+
+        if (!isValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password is incorrect'
+            });
+        }
+
+        // Begin transaction for cascading deletes
+        await db.beginTransaction();
+
+        try {
+            // Delete related data
+            await db.query('DELETE FROM blocked_users WHERE blocker_id = ? OR blocked_id = ?', [userId, userId]);
+            await db.query('DELETE FROM hidden_messages WHERE user_id = ?', [userId]);
+            await db.query('DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?', [userId, userId]);
+            await db.query('DELETE FROM travel_plans WHERE user_id = ?', [userId]);
+            await db.query('DELETE FROM favorites WHERE user_id = ?', [userId]);
+            // await db.query('DELETE FROM user_settings WHERE user_id = ?', [userId]); // if you have this table
+            
+            // Finally delete user
+            await db.query('DELETE FROM users WHERE id = ?', [userId]);
+
+            await db.commit();
+
+            res.json({
+                success: true,
+                message: 'Account deleted successfully'
+            });
+
+        } catch (error) {
+            await db.rollback();
+            throw error;
+        }
+
+    } catch (error) {
+        console.error('Error deleting account:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error deleting account'
+        });
+    }
+});
+
+module.exports = router;
+app.use('/api', router);
 
 // ---------- Start Server ----------
 const PORT = process.env.PORT || 8080;
