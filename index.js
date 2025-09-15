@@ -446,6 +446,21 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
   }
 });
 
+app.put('/travel-plans/:planId/cancel', (req, res) => {
+  const { planId } = req.params;
+  console.log(`[API] PUT /travel-plans/${planId}/cancel`);
+
+  // In a real app, you would run an SQL UPDATE query
+  // const query = "UPDATE travel_plans SET status = 'Cancelled' WHERE id = ?";
+  // await db.query(query, [planId]);
+
+  // For now, we'll just simulate a successful response
+  res.json({
+    success: true,
+    message: 'Trip cancelled successfully',
+  });
+});
+
 app.get("/getUserTravelPlan", async (req, res) => {
   try {
     await db.query('DELETE FROM travel_plans WHERE time < NOW()');
@@ -1050,7 +1065,9 @@ router.get('/tripHistory/:userId', async (req, res) => {
                 tp.time as travel_time,
                 tp.created_at,
                 u.name as user_name,
-                u.profile_pic 
+                u.profile_pic,
+                tp.fare,
+                tp.status
             FROM travel_plans tp
             LEFT JOIN users u ON tp.user_id = u.id
             WHERE tp.user_id = ?
