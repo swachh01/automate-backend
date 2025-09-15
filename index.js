@@ -113,41 +113,20 @@ app.get("/debug/stores", (req, res) => {
 });
 
 app.get('/debug/routes', (req, res) => {
-    // 1. Security check - only allow in development
-    if (process.env.NODE_ENV === 'production') {
-        return res.status(403).json({ message: "Not available in production" });
-    }
-    
-    const routes = [];
-    
-    // 2. Loop through all middleware in the Express app
-    app._router.stack.forEach((middleware) => {
-        
-        // 3. Check if it's a direct route (like app.get('/health', ...))
-        if (middleware.route) {
-            routes.push({
-                path: middleware.route.path,           // e.g., "/health"
-                methods: Object.keys(middleware.route.methods)  // e.g., ["get"]
-            });
-        } 
-        
-        // 4. Check if it's a router middleware (like app.use(router))
-        else if (middleware.name === 'router') {
-            // Loop through routes inside the router
-            middleware.handle.stack.forEach((handler) => {
-                if (handler.route) {
-                    routes.push({
-                        path: handler.route.path,     // e.g., "/tripHistory/:userId"
-                        methods: Object.keys(handler.route.methods) // e.g., ["get"]
-                    });
-                }
-            });
-        }
-    });
-    
-    // 5. Return all found routes as JSON
-    res.json({ routes, message: "Available routes" });
-});
+       const routes = [];
+       app._router.stack.forEach((middleware) => {
+           if (middleware.route) {
+               routes.push(middleware.route.path);
+           } else if (middleware.name === 'router') {
+               middleware.handle.stack.forEach((handler) => {
+                   if (handler.route) {
+                       routes.push(handler.route.path);
+                   }
+               });
+           }
+       });
+       res.json({ routes });
+   });
 
 app.post("/signup", async (req, res) => {
   try {
@@ -1543,7 +1522,7 @@ router.delete('/settings/account/:userId', async (req, res) => {
     }
 });
 
-app.use('/api', router);
+app.use(router);
 
 // ---------- Start Server ----------
 const PORT = process.env.PORT || 8080;
