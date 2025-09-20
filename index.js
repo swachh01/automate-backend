@@ -1041,21 +1041,24 @@ app.get('/checkBlockStatus', async (req, res) => {
     }
 });
 
-// Fixed Trip History Route
+// Fixed Trip History Route 
 router.get('/tripHistory/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const { page = 1, limit = 20 } = req.query;
         const offset = (page - 1) * limit;
         
+        console.log(`Fetching trip history for userId: ${userId}, page: ${page}, limit: ${limit}, offset: ${offset}`);
+        
         // Validate userId
         if (!userId || isNaN(userId)) {
+            console.error('Invalid userId:', userId);
             return res.status(400).json({
                 success: false,
                 message: 'Invalid user ID'
             });
         }
-                    
+                
         const query = `
             SELECT
                 tp.id,
@@ -1073,16 +1076,22 @@ router.get('/tripHistory/:userId', async (req, res) => {
             ORDER BY tp.created_at DESC
             LIMIT ? OFFSET ?
         `;
-
-        // FIX: Properly handle the query result structure
+        
+        console.log('Executing query:', query);
+        console.log('Query parameters:', [parseInt(userId), parseInt(limit), parseInt(offset)]);
+        
+        // Execute the main query
         const [trips] = await db.query(query, [parseInt(userId), parseInt(limit), parseInt(offset)]);
-    
+        console.log('Query result - trips found:', trips.length);
+
         // Get total count for pagination
         const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
         const [countResult] = await db.query(countQuery, [parseInt(userId)]);
         const totalTrips = countResult[0].total;
-                
-        res.json({
+        
+        console.log('Total trips for user:', totalTrips);
+        
+        const responseData = {
             success: true,
             data: {
                 trips: trips,
@@ -1093,23 +1102,27 @@ router.get('/tripHistory/:userId', async (req, res) => {
                     hasMore: offset + trips.length < totalTrips
                 }
             }
-        });
-                
+        };
+        
+        console.log('Sending response:', JSON.stringify(responseData, null, 2));
+        res.json(responseData);
+
     } catch (error) {
         console.error('Error fetching trip history:', error);
+        console.error('Error stack:', error.stack);
         res.status(500).json({
-            success: false,  
+            success: false,
             message: 'Error fetching trip history',
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
 
-// Fixed Trip Stats Route      
+// Fixed Trip Stats Route
 router.get('/tripStats/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        
+
         // Validate userId
         if (!userId || isNaN(userId)) {
             return res.status(400).json({
@@ -1128,11 +1141,10 @@ router.get('/tripStats/:userId', async (req, res) => {
             WHERE user_id = ?
         `;
 
-        // FIX: Properly handle the query result structure
         const [statsResult] = await db.query(statsQuery, [parseInt(userId)]);
         const stats = statsResult[0];
 
-        // Get most visited destinations
+        // Get most visited destinations - FIXED THE SYNTAX ERROR HERE
         const destinationsQuery = `
             SELECT
                 to_place as destination,
