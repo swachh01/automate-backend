@@ -1041,7 +1041,6 @@ app.get('/checkBlockStatus', async (req, res) => {
     }
 });
 
-// Fixed Trip History Route 
 router.get('/tripHistory/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -1065,7 +1064,7 @@ router.get('/tripHistory/:userId', async (req, res) => {
                 tp.from_place,
                 tp.to_place,
                 tp.time as travel_time,
-                tp.created_at,
+                tp.time as created_at,  -- Changed: using travel time instead of created_at
                 u.name as user_name,
                 u.profile_pic,
                 tp.fare,
@@ -1073,7 +1072,7 @@ router.get('/tripHistory/:userId', async (req, res) => {
             FROM travel_plans tp
             LEFT JOIN users u ON tp.user_id = u.id
             WHERE tp.user_id = ?
-            ORDER BY tp.created_at DESC
+            ORDER BY tp.time DESC  -- Order by travel time instead of created_at
             LIMIT ? OFFSET ?
         `;
         
@@ -1113,6 +1112,47 @@ router.get('/tripHistory/:userId', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error fetching trip history',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+router.put('/cancelTrip/:tripId', async (req, res) => {
+    try {
+        const { tripId } = req.params;
+        
+        console.log(`Marking trip ${tripId} as cancelled`);
+        
+        // Validate tripId
+        if (!tripId || isNaN(tripId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid trip ID'
+            });
+        }
+
+        // Update trip status to 'Cancelled'
+        const updateQuery = 'UPDATE travel_plans SET status = ? WHERE id = ?';
+        const [result] = await db.query(updateQuery, ['Cancelled', parseInt(tripId)]);
+        
+        if (result.affectedRows > 0) {
+            console.log(`Trip ${tripId} marked as cancelled`);
+            res.json({
+                success: true,
+                message: 'Trip cancelled successfully'
+            });
+        } else {
+            res.status(404).json({
+                success: false,
+                message: 'Trip not found'
+            });
+        }
+
+    } catch (error) {
+        console.error('Error cancelling trip:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error cancelling trip',
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
