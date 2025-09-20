@@ -1064,7 +1064,7 @@ router.get('/tripHistory/:userId', async (req, res) => {
                 tp.from_place,
                 tp.to_place,
                 tp.time as travel_time,
-                tp.time as created_at,  -- Changed: using travel time instead of created_at
+                CONVERT_TZ(tp.time, '+00:00', '+05:30') as created_at,
                 u.name as user_name,
                 u.profile_pic,
                 tp.fare,
