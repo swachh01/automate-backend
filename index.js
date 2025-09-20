@@ -1119,8 +1119,7 @@ router.get('/tripHistory/:userId', async (req, res) => {
   }
 });
 
-// 2. Cancel Trip Route - Changes status to 'Cancelled', removes from "See Who's Going" but keeps in history
-router.put('/cancelTrip/:tripId', async (req, res) => {
+router.put('/trip/cancel/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
 
