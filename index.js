@@ -1,6 +1,7 @@
 require("dotenv").config();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const bcrypt = require('bcrypt'); // ADD THIS LINE - bcrypt was missing
 
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -18,6 +19,9 @@ const mysql = require("mysql2");
 
 const app = express();
 const router = express.Router();
+
+// ADD THIS LINE - saltRounds was referenced but not defined
+const saltRounds = 12;
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -230,7 +234,11 @@ app.post("/savePassword", async (req, res) => {
     if (newPassword.length < 7 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) || !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(newPassword)) {
       return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
     }
-    const [updateResult] = await db.query(`UPDATE users SET password = ? WHERE phone = ?`, [newPassword, phone]);
+
+    // CORRECTED: Hash the password before saving
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+    const [updateResult] = await db.query(`UPDATE users SET password = ? WHERE phone = ?`, [hashedPassword, phone]);
+    
     if (updateResult.affectedRows === 0) {
       return res.status(404).json({ success: false, message: `User not found` });
     }
@@ -249,14 +257,25 @@ app.post("/login", async (req, res) => {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
   try {
+    // CORRECTED: Get the hashed password and compare with bcrypt
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND password = ?`,
-      [phone, password]
+      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic, password FROM users WHERE phone = ?`,
+      [phone]
     );
     if (!rows.length) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
+    
     const user = rows[0];
+    
+    // Compare the provided password with the hashed password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, message: `Invalid credentials` });
+    }
+
+    // Remove password from response
+    delete user.password;
     res.json({ success: true, message: "Login successful", user: { ...user, year: user.year || 0 } });
   } catch (err) {
     console.error("❌ /login error:", err);
@@ -433,8 +452,6 @@ app.get('/getChatUsers', async (req, res) => {
       return res.status(400).json({ success: false, message: `userId is required` });
     }
     
-    // Simplified query without deletion tracking columns
-    // Also need to fix the timestamp column name - check what your actual column is called
     const query = `
       SELECT DISTINCT
         u.id, u.name as username, u.college, u.profile_pic,
@@ -536,10 +553,6 @@ app.get('/checkBlockStatus', async (req, res) => {
   }
 });
 
-// In index.js
-
-// In index.js
-
 app.get("/getUsersGoing", async (req, res) => {
     const { currentUserId } = req.query;
 
@@ -548,7 +561,6 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 
     try {
-        // ... (friendsQuery remains the same) ...
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
@@ -558,7 +570,6 @@ app.get("/getUsersGoing", async (req, res) => {
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
-
 
         const plansQuery = `
             SELECT
@@ -576,11 +587,6 @@ app.get("/getUsersGoing", async (req, res) => {
         `;
         const [rows] = await db.query(plansQuery);
 
-        // **DEBUG CHECKPOINT 1: See what the database returns**
-        console.log("--- RAW DATA FROM DATABASE ---");
-        console.log(JSON.stringify(rows, null, 2));
-        console.log("----------------------------");
-
         const usersGoing = rows.map(user => {
             let finalProfilePic = user.profile_pic;
 
@@ -590,9 +596,6 @@ app.get("/getUsersGoing", async (req, res) => {
             else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
                 finalProfilePic = 'default';
             }
-
-            // **DEBUG CHECKPOINT 2: See the decision for each user**
-            console.log(`Processing User: ${user.name}, Visibility: '${user.profile_visibility}', Final Pic: '${finalProfilePic}'`);
 
             return {
                 id: user.user_id,
@@ -606,12 +609,6 @@ app.get("/getUsersGoing", async (req, res) => {
             };
         });
 
-        // **DEBUG CHECKPOINT 3: See what is sent to the app**
-        console.log("--- FINAL DATA SENT TO APP ---");
-        console.log(JSON.stringify(usersGoing, null, 2));
-        console.log("----------------------------");
-
-
         res.json({ success: true, users: usersGoing });
     } catch (err) {
         console.error("❌ Error fetching users going:", err);
@@ -621,7 +618,6 @@ app.get("/getUsersGoing", async (req, res) => {
 
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
-    // Only shows destinations that have active travelers
     const query = `
       SELECT ANY_VALUE(to_place) as destination, COUNT(user_id) as userCount
       FROM travel_plans
@@ -637,10 +633,7 @@ app.get("/travel-plans/destinations", async (req, res) => {
   }
 });
 
-// In your index.js file
-
 router.get('/travel-plans/by-destination', async (req, res) => {
-    // Get both the destination AND the current user's ID
     const { destination, currentUserId } = req.query;
 
     if (!destination || !currentUserId) {
@@ -648,7 +641,6 @@ router.get('/travel-plans/by-destination', async (req, res) => {
     }
 
     try {
-        // 1. Get the list of the current user's "friends"
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
@@ -659,7 +651,6 @@ router.get('/travel-plans/by-destination', async (req, res) => {
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
 
-        // 2. Get users for the specific destination, including their visibility setting
         const plansQuery = `
             SELECT
                 u.id, u.name, u.college, u.gender, u.profile_pic, u.profile_visibility,
@@ -673,7 +664,6 @@ router.get('/travel-plans/by-destination', async (req, res) => {
         `;
         const [users] = await db.query(plansQuery, [destination]);
 
-        // 3. Apply the visibility rules (this is the same logic as before)
         const filteredUsers = users.map(user => {
             let finalProfilePic = user.profile_pic;
 
@@ -683,9 +673,8 @@ router.get('/travel-plans/by-destination', async (req, res) => {
                 finalProfilePic = 'default';
             }
 
-            // Return a new user object with the potentially modified profile_pic
             return {
-                ...user, // a shortcut to copy all original fields
+                ...user,
                 profile_pic: finalProfilePic
             };
         });
@@ -698,7 +687,6 @@ router.get('/travel-plans/by-destination', async (req, res) => {
     }
 });
 
-// The main Trip History endpoint. It updates statuses and then fetches ALL trips.
 router.get('/tripHistory/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -707,14 +695,11 @@ router.get('/tripHistory/:userId', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
     }
 
-    // Step 1: Automatically update status of past 'Active' trips to 'Completed'.
-    // This is the NON-DESTRUCTIVE way to clear the "See Who's Going" list.
     const updateStatusQuery = `
       UPDATE travel_plans SET status = 'Completed' 
       WHERE user_id = ? AND status = 'Active' AND time < NOW()`;
     await db.query(updateStatusQuery, [parseInt(userId)]);
 
-    // Step 2: Fetch ALL trips for the user, regardless of status.
     const offset = (page - 1) * limit;
     const historyQuery = `
       SELECT
@@ -750,7 +735,6 @@ router.get('/tripHistory/:userId', async (req, res) => {
   }
 });
 
-// Endpoint to cancel a trip (changes status to 'Cancelled')
 router.put('/trip/cancel/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
@@ -769,7 +753,6 @@ router.put('/trip/cancel/:tripId', async (req, res) => {
   }
 });
 
-// Endpoint to update fare after a trip is completed
 router.put('/trip/complete/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
@@ -789,7 +772,6 @@ router.put('/trip/complete/:tripId', async (req, res) => {
   }
 });
 
-// Endpoint to permanently delete a trip from history
 router.delete('/tripHistory/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
@@ -808,7 +790,6 @@ router.delete('/tripHistory/:tripId', async (req, res) => {
   }
 });
 
-// Check Completed Trips - Returns trips that have passed their travel time but are still Active
 router.get('/checkCompletedTrips/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -832,7 +813,6 @@ router.get('/checkCompletedTrips/:userId', async (req, res) => {
   }
 });
 
-// Update Trip After Completion - Updates fare and status to 'Completed'
 router.put('/completeTrip/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
@@ -864,7 +844,6 @@ router.put('/completeTrip/:tripId', async (req, res) => {
   }
 });
 
-// Auto-update completed trips (run this periodically or on app startup)
 router.post('/autoUpdateCompletedTrips', async (req, res) => {
   try {
     const updateQuery = `
@@ -880,7 +859,6 @@ router.post('/autoUpdateCompletedTrips', async (req, res) => {
   }
 });
 
-// Trip Statistics Route
 router.get('/tripStats/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -919,7 +897,6 @@ router.get('/tripStats/:userId', async (req, res) => {
   }
 });
 
-// Additional missing routes from original code
 app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
   if (!phone) {
@@ -938,7 +915,6 @@ app.get("/getUserByPhone", async (req, res) => {
   }
 });
 
-// Mark messages as read
 app.post('/markMessagesRead', async (req, res) => {
   try {
     const { userId, otherUserId } = req.body;
@@ -954,7 +930,6 @@ app.post('/markMessagesRead', async (req, res) => {
   }
 });
 
-// Get unread count
 app.get('/getUnreadCount', async (req, res) => {
   try {
     const { userId, otherUserId } = req.query;
@@ -970,7 +945,6 @@ app.get('/getUnreadCount', async (req, res) => {
   }
 });
 
-// Get total unread count
 app.get('/getTotalUnreadCount/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -986,7 +960,6 @@ app.get('/getTotalUnreadCount/:userId', async (req, res) => {
   }
 });
 
-// Hide chat
 app.post("/hideChat", async (req, res) => {
   try {
     const { userId, otherUserId } = req.body;
@@ -1007,7 +980,6 @@ app.post("/hideChat", async (req, res) => {
   }
 });
 
-// Delete message
 app.delete('/deleteMessage/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
@@ -1030,42 +1002,33 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   }
 });
 
-
 router.get('/favorites/:userId', async (req, res) => {
     const { userId } = req.params;
 
     if (!userId) {
-        return res.status(400).json({ success: false, message: `User ID is 
-required.` });
+        return res.status(400).json({ success: false, message: `User ID is required.` });
     }
 
     try {
         const query = `
-            SELECT id, user_id, place_name as name, place_type, address, 
-latitude, 
-longitude
+            SELECT id, user_id, place_name as name, place_type, address, latitude, longitude
             FROM favorites
             WHERE user_id = ?
             ORDER BY name ASC
         `;
 
         const [favorites] = await db.query(query, [userId]);
-
         res.json({ success: true, favorites: favorites });
 
     } catch (error) {
         console.error('❌ Error fetching favorites:', error);
-        res.status(500).json({ success: false, message: `Database error 
-while fetching favorites.` });
+        res.status(500).json({ success: false, message: `Database error while fetching favorites.` });
     }
 });
-
-// --- NEW: Add this route to handle creating a new favorite ---
 
 router.post('/favorites', async (req, res) => {
     const { placeName, address, latitude, longitude, userId, placeType } = req.body;
 
-    // Basic validation
     if (!placeName || !address || !latitude || !longitude || !userId) {
         return res.status(400).json({ success: false, message: 'Missing required fields.' });
     }
@@ -1076,9 +1039,7 @@ router.post('/favorites', async (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?)
         `;
 
-        // Make sure the order of values matches the columns in the query
         const values = [userId, placeName, placeType || 'Other', address, latitude, longitude];
-
         const [result] = await db.query(query, values);
 
         res.status(201).json({
@@ -1093,29 +1054,20 @@ router.post('/favorites', async (req, res) => {
     }
 });
 
-// --- NEW: Add this route to handle deleting a favorite ---
-
 router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
     const { userId, favoriteId } = req.params;
 
-    // Validate that both IDs are provided
     if (!userId || !favoriteId) {
         return res.status(400).json({ success: false, message: 'User ID and Favorite ID are required.' });
     }
 
     try {
-        const query = `
-            DELETE FROM favorites
-            WHERE id = ? AND user_id = ?
-        `;
-
+        const query = `DELETE FROM favorites WHERE id = ? AND user_id = ?`;
         const [result] = await db.query(query, [favoriteId, userId]);
 
-        // Check if a row was actually deleted
         if (result.affectedRows > 0) {
             res.json({ success: true, message: 'Favorite deleted successfully.' });
         } else {
-            // This occurs if the favorite doesn't exist or doesn't belong to the user
             res.status(404).json({ success: false, message: 'Favorite not found or you do not have permission.' });
         }
 
@@ -1125,13 +1077,9 @@ router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
     }
 });
 
-// In index.js
-
-// --- NEW: Route to update a user's profile visibility ---
 router.put('/settings/visibility', async (req, res) => {
     const { userId, visibility } = req.body;
 
-    // Validate input
     const allowedVisibilities = ['everyone', 'friends', 'none'];
     if (!userId || !visibility || !allowedVisibilities.includes(visibility)) {
         return res.status(400).json({ success: false, message: 'Invalid input provided.' });
@@ -1144,6 +1092,79 @@ router.put('/settings/visibility', async (req, res) => {
     } catch (error) {
         console.error('❌ Error updating visibility:', error);
         res.status(500).json({ success: false, message: 'Database error.' });
+    }
+});
+
+// CORRECTED: Change Password Route - Fixed to match the API call from your Android app
+app.post('/change-password', async (req, res) => {
+    try {
+        const { userId, currentPassword, newPassword } = req.body;
+
+        // 1. Validate input
+        if (!userId || !currentPassword || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'All fields are required'
+            });
+        }
+
+        // Validate new password length
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be at least 6 characters long'
+            });
+        }
+
+        // 2. Fetch the user's current password from the database
+        const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+
+        const user = rows[0];
+        const currentHashedPassword = user.password;
+
+        // 3. Compare the provided currentPassword with the one in the database
+        const isMatch = await bcrypt.compare(currentPassword, currentHashedPassword);
+
+        if (!isMatch) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Current password is incorrect' 
+            });
+        }
+
+        // 4. Check if new password is different from current password
+        const isSamePassword = await bcrypt.compare(newPassword, currentHashedPassword);
+        
+        if (isSamePassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be different from current password'
+            });
+        }
+
+        // 5. Hash the new password and update in database
+        const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
+        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
+
+        // 6. Send success response
+        res.json({ 
+            success: true, 
+            message: 'Password changed successfully' 
+        });
+
+    } catch (error) {
+        console.error('❌ Error changing password:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
     }
 });
 
