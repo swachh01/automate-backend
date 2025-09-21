@@ -538,30 +538,80 @@ app.get('/checkBlockStatus', async (req, res) => {
 
 // --- CORRECTED TRAVEL & TRIP HISTORY WORKFLOW ---
 
-// For "See Who's Going": Only shows trips with 'Active' status.
+// In index.js
+
+// --- MODIFIED: The /getUsersGoing route is now much more powerful ---
 app.get("/getUsersGoing", async (req, res) => {
-  try {
-    const query = `
-      SELECT
-        tp.user_id, tp.from_place as fromPlace, tp.to_place as toPlace,
-        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
-        u.name, u.college, u.profile_pic, u.gender
-      FROM travel_plans tp
-      JOIN users u ON tp.user_id = u.id
-      WHERE tp.status = 'Active'
-      ORDER BY tp.time ASC`;
-      
-    const [rows] = await db.query(query);
-    const usersGoing = rows.map(row => ({
-      userId: row.user_id, id: row.user_id, name: row.name,
-      fromPlace: row.fromPlace, toPlace: row.toPlace, time: row.time,
-      college: row.college, profile_pic: row.profile_pic, gender: row.gender
-    }));
-    res.json({ success: true, users: usersGoing });
-  } catch (err) {
-    console.error("❌ Error fetching users going:", err);
-    res.status(500).json({ success: false, message: "Database error", users: [] });
-  }
+    // We now require the ID of the user who is making the request
+    const { currentUserId } = req.query;
+
+    if (!currentUserId) {
+        return res.status(400).json({ success: false, message: 'Current user ID is required.' });
+    }
+
+    try {
+        // 1. Get the list of users the current user has chatted with (their "friends")
+        const friendsQuery = `
+            SELECT DISTINCT
+                CASE
+                    WHEN sender_id = ? THEN receiver_id
+                    ELSE sender_id
+                END as friend_id
+            FROM chats
+            WHERE sender_id = ? OR receiver_id = ?
+        `;
+        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const friendIds = new Set(friendRows.map(row => row.friend_id));
+        // Also consider the user themself a "friend" to see their own picture
+        friendIds.add(parseInt(currentUserId));
+
+        // 2. Get all active travel plans
+        const plansQuery = `
+            SELECT
+                tp.id as planId,
+                tp.user_id,
+                tp.from_place as fromPlace,
+                tp.to_place as toPlace,
+                DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
+                u.name,
+                u.college,
+                u.profile_pic,
+                u.gender,
+                u.profile_visibility -- We need this new field!
+            FROM travel_plans tp
+            JOIN users u ON tp.user_id = u.id
+            ORDER BY tp.time ASC
+        `;
+        const [rows] = await db.query(plansQuery);
+
+        // 3. Process the list to apply visibility rules
+        const usersGoing = rows.map(user => {
+            let finalProfilePic = user.profile_pic; // Start with the real picture
+
+            if (user.profile_visibility === 'none') {
+                finalProfilePic = 'default'; // Rule: "No One"
+            } else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
+                finalProfilePic = 'default'; // Rule: "Friends only", and they are not a friend
+            }
+
+            return {
+                userId: user.user_id,
+                id: user.user_id, // Keeping 'id' for compatibility
+                name: user.name,
+                fromPlace: user.fromPlace,
+                toPlace: user.toPlace,
+                time: user.time,
+                college: user.college,
+                gender: user.gender,
+                profile_pic: finalProfilePic // Use the processed picture URL
+            };
+        });
+
+        res.json({ success: true, users: usersGoing });
+    } catch (err) {
+        console.error("❌ Error fetching users going:", err);
+        res.status(500).json({ success: false, message: "Database error", users: [] });
+    }
 });
 
 app.get("/travel-plans/destinations", async (req, res) => {
@@ -1033,6 +1083,28 @@ router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
     } catch (error) {
         console.error('❌ Error deleting favorite:', error);
         res.status(500).json({ success: false, message: 'Database error while deleting favorite.' });
+    }
+});
+
+// In index.js
+
+// --- NEW: Route to update a user's profile visibility ---
+router.put('/settings/visibility', async (req, res) => {
+    const { userId, visibility } = req.body;
+
+    // Validate input
+    const allowedVisibilities = ['everyone', 'friends', 'none'];
+    if (!userId || !visibility || !allowedVisibilities.includes(visibility)) {
+        return res.status(400).json({ success: false, message: 'Invalid input provided.' });
+    }
+
+    try {
+        const query = 'UPDATE users SET profile_visibility = ? WHERE id = ?';
+        await db.query(query, [visibility, userId]);
+        res.json({ success: true, message: 'Visibility updated successfully.' });
+    } catch (error) {
+        console.error('❌ Error updating visibility:', error);
+        res.status(500).json({ success: false, message: 'Database error.' });
     }
 });
 
