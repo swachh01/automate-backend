@@ -536,13 +536,10 @@ app.get('/checkBlockStatus', async (req, res) => {
   }
 });
 
-// --- CORRECTED TRAVEL & TRIP HISTORY WORKFLOW ---
-
 // In index.js
 
-// --- MODIFIED: The /getUsersGoing route is now much more powerful ---
+// --- MODIFIED: Ensure your /getUsersGoing route looks exactly like this ---
 app.get("/getUsersGoing", async (req, res) => {
-    // We now require the ID of the user who is making the request
     const { currentUserId } = req.query;
 
     if (!currentUserId) {
@@ -550,67 +547,65 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 
     try {
-        // 1. Get the list of users the current user has chatted with (their "friends")
+        // 1. Get the list of the current user's "friends" (people they've chatted with)
         const friendsQuery = `
             SELECT DISTINCT
-                CASE
-                    WHEN sender_id = ? THEN receiver_id
-                    ELSE sender_id
-                END as friend_id
+                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
             FROM chats
             WHERE sender_id = ? OR receiver_id = ?
         `;
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
-        // Also consider the user themself a "friend" to see their own picture
         friendIds.add(parseInt(currentUserId));
 
-        // 2. Get all active travel plans
+        // 2. Get all active travel plans, MAKING SURE to select profile_visibility
         const plansQuery = `
             SELECT
-                tp.id as planId,
                 tp.user_id,
-                tp.from_place as fromPlace,
-                tp.to_place as toPlace,
-                DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
                 u.name,
-                u.college,
                 u.profile_pic,
                 u.gender,
-                u.profile_visibility -- We need this new field!
+                u.profile_visibility, -- THIS LINE IS ESSENTIAL
+                tp.from_place as fromPlace,
+                tp.to_place as toPlace,
+                DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
             FROM travel_plans tp
             JOIN users u ON tp.user_id = u.id
             ORDER BY tp.time ASC
         `;
         const [rows] = await db.query(plansQuery);
 
-        // 3. Process the list to apply visibility rules
+        // 3. **THIS IS THE LOGIC THAT HIDES THE PICTURE**
+        // It processes the list and applies the rules.
         const usersGoing = rows.map(user => {
-            let finalProfilePic = user.profile_pic; // Start with the real picture
+            let finalProfilePic = user.profile_pic;
 
+            // **CHECK FOR "none" VISIBILITY**
             if (user.profile_visibility === 'none') {
-                finalProfilePic = 'default'; // Rule: "No One"
-            } else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
-                finalProfilePic = 'default'; // Rule: "Friends only", and they are not a friend
+                finalProfilePic = 'default';
+            } 
+            // Check for "friends" visibility
+            else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
+                finalProfilePic = 'default';
             }
 
+            // Return the final, processed user object
             return {
+                id: user.user_id, // Use user_id for consistency
                 userId: user.user_id,
-                id: user.user_id, // Keeping 'id' for compatibility
                 name: user.name,
                 fromPlace: user.fromPlace,
                 toPlace: user.toPlace,
                 time: user.time,
-                college: user.college,
                 gender: user.gender,
-                profile_pic: finalProfilePic // Use the processed picture URL
+                profile_pic: finalProfilePic // This will be "default" for Swaraj
             };
         });
 
         res.json({ success: true, users: usersGoing });
     } catch (err) {
         console.error("❌ Error fetching users going:", err);
-        res.status(500).json({ success: false, message: "Database error", users: [] });
+        res.status(500).json({ success: false, message: "Database error" });
     }
 });
 
