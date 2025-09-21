@@ -473,7 +473,7 @@ app.get('/getChatUsers', async (req, res) => {
           message as last_message, timestamp as last_timestamp,
           ROW_NUMBER() OVER (
             PARTITION BY CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END
-            ORDER BY created_at DESC
+            ORDER BY timestamp DESC
           ) as rn
         FROM messages
         WHERE (sender_id = ? OR receiver_id = ?)
