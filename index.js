@@ -316,53 +316,37 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   }
 });
 
-// --- TRAVEL PLAN ROUTES ---
-app.post("/addTravelPlan", async (req, res) => {
+app.post('/addTravelPlan', async (req, res) => {
   try {
-    const { userId, fromPlace, toPlace, time } = req.body;
-    if (!userId || !fromPlace || !toPlace || !time) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields: userId, fromPlace, toPlace, and time"
-      });
+    const { userId, destination, departureDate, departureTime, seatsAvailable, pricePerSeat, phone } = req.body;
+    
+    if (!userId || !destination || !departureDate || !departureTime || !seatsAvailable || !pricePerSeat) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
     }
 
-    // Check if user already has an active trip
-    const [existingTrip] = await db.query(
-      `SELECT id FROM travel_plans WHERE user_id = ? AND status = 'Active'`,
-      [userId]
+    // Get user's college
+    const [users] = await db.execute('SELECT college FROM users WHERE id = ?', [userId]);
+    const college = users.length > 0 ? users[0].college : null;
+
+    // Insert into travel_plans table
+    const [travelPlanResult] = await db.execute(
+      `INSERT INTO travel_plans (user_id, destination, departure_date, departure_time, seats_available, price_per_seat, phone) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [userId, destination, departureDate, departureTime, seatsAvailable, pricePerSeat, phone]
+    );
+    
+    const travelPlanId = travelPlanResult.insertId;
+
+    // Insert into trip_history table
+    await db.execute(
+      `INSERT INTO trip_history (user_id, travel_plan_id, destination, departure_date, departure_time, seats_available, price_per_seat, phone, college, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 
+?)`,
+      [userId, travelPlanId, destination, departureDate, departureTime, seatsAvailable, pricePerSeat, phone, college, 'Active']
     );
 
-    if (existingTrip.length > 0) {
-      // Update existing active trip
-      const query = `UPDATE travel_plans 
-                     SET from_place = ?, to_place = ?, time = ?, created_at = NOW()
-                     WHERE user_id = ? AND status = 'Active'`;
-      await db.query(query, [fromPlace, toPlace, time, userId]);
-      
-      res.json({
-        success: true,
-        message: "Travel plan updated successfully",
-        id: existingTrip[0].id
-      });
-    } else {
-      // Create new trip
-      const query = `INSERT INTO travel_plans (user_id, from_place, to_place, time, status, fare, created_at)
-                     VALUES (?, ?, ?, ?, 'Active', 0.00, NOW())`;
-      const [result] = await db.query(query, [userId, fromPlace, toPlace, time]);
-      
-      res.json({
-        success: true,
-        message: "Travel plan created successfully",
-        id: result.insertId
-      });
-    }
-  } catch (err) {
-    console.error("❌ Error saving travel plan:", err);
-    res.status(500).json({
-      success: false,
-      message: "Database error"
-    });
+    res.json({ success: true, message: 'Travel plan added successfully' });
+  } catch (error) {
+    console.error('Error adding travel plan:', error);
+    res.status(500).json({ success: false, message: 'Failed to add travel plan' });
   }
 });
 
@@ -639,168 +623,137 @@ app.get("/travel-plans/by-destination", async (req, res) => {
   }
 });
 
-// Main Trip History endpoint - Shows ALL trips for a user
 app.get('/tripHistory/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 10 } = req.query;
     
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    // First update expired trips to Completed status
-    await updateExpiredTrips();
-
-    // Fetch ALL trips for the user (Active, Completed, Cancelled)
     const offset = (page - 1) * limit;
-    const historyQuery = `
-      SELECT
-        tp.id, tp.from_place, tp.to_place,
-        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as travel_time,
-        tp.fare, tp.status, tp.added_fare,
-        CONVERT_TZ(tp.created_at, '+00:00', '+05:30') as created_at
-      FROM travel_plans tp
-      WHERE tp.user_id = ?
-      ORDER BY tp.created_at DESC
+    
+    const query = `
+      SELECT * FROM trip_history 
+      WHERE user_id = ? 
+      ORDER BY created_at DESC 
       LIMIT ? OFFSET ?
     `;
-    const [trips] = await db.query(historyQuery, [parseInt(userId), parseInt(limit), parseInt(offset)]);
     
-    const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
-    const [countResult] = await db.query(countQuery, [parseInt(userId)]);
-    const totalTrips = countResult[0].total;
-
-    res.json({
-      success: true,
-      data: {
-        trips: trips,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(totalTrips / limit),
-          totalTrips: totalTrips,
-          hasMore: offset + trips.length < totalTrips
-        }
-      }
-    });
+    const [trips] = await db.execute(query, [userId, parseInt(limit), offset]);
+    
+    res.json({ success: true, trips });
   } catch (error) {
     console.error('Error fetching trip history:', error);
-    res.status(500).json({ success: false, message: 'Error fetching trip history' });
+    res.status(500).json({ success: false, message: 'Failed to fetch trip history' });
   }
 });
 
-// Cancel a trip (changes status to 'Cancelled')
+app.delete('/tripHistory/:tripId', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { userId } = req.body;
+    
+    // Verify ownership and get trip info
+    const [tripHistory] = await db.execute('SELECT * FROM trip_history WHERE id = ? AND user_id = ?', [tripId, userId]);
+    
+    if (tripHistory.length === 0) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    
+    const trip = tripHistory[0];
+    
+    // If trip is still active, also delete from travel_plans
+    if (trip.status === 'Active' && trip.travel_plan_id) {
+      await db.execute('DELETE FROM travel_plans WHERE id = ?', [trip.travel_plan_id]);
+    }
+    
+    // Delete from trip_history
+    await db.execute('DELETE FROM trip_history WHERE id = ?', [tripId]);
+    
+    res.json({ success: true, message: 'Trip deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting trip:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete trip' });
+  }
+});
+
 app.put('/trip/cancel/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
     const { userId } = req.body;
     
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
-    }
+    // Get the trip history record
+    const [tripHistory] = await db.execute('SELECT * FROM trip_history WHERE id = ? AND user_id = ?', [tripId, userId]);
     
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'User ID is required' });
-    }
-
-    // Check if trip belongs to user
-    const [tripCheck] = await db.query('SELECT user_id FROM travel_plans WHERE id = ?', [parseInt(tripId)]);
-    if (tripCheck.length === 0) {
+    if (tripHistory.length === 0) {
       return res.status(404).json({ success: false, message: 'Trip not found' });
     }
     
-    if (tripCheck[0].user_id !== parseInt(userId)) {
-      return res.status(403).json({ success: false, message: 'Unauthorized to cancel this trip' });
+    const trip = tripHistory[0];
+    
+    if (trip.status !== 'Active') {
+      return res.status(400).json({ success: false, message: 'Can only cancel active trips' });
     }
-
-    const [result] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', parseInt(tripId)]);
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Trip cancelled successfully' });
-    } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
+    
+    // Update status to Cancelled in trip_history
+    await db.execute('UPDATE trip_history SET status = ?, updated_at = NOW() WHERE id = ?', ['Cancelled', tripId]);
+    
+    // Delete from travel_plans table if travel_plan_id exists
+    if (trip.travel_plan_id) {
+      await db.execute('DELETE FROM travel_plans WHERE id = ?', [trip.travel_plan_id]);
+      // Set travel_plan_id to NULL since the travel plan is deleted
+      await db.execute('UPDATE trip_history SET travel_plan_id = NULL WHERE id = ?', [tripId]);
     }
+    
+    res.json({ success: true, message: 'Trip cancelled successfully' });
   } catch (error) {
     console.error('Error cancelling trip:', error);
-    res.status(500).json({ success: false, message: 'Error cancelling trip' });
+    res.status(500).json({ success: false, message: 'Failed to cancel trip' });
   }
 });
 
-// Add fare to a completed trip
+
 app.put('/trip/addFare/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
     const { userId, fare } = req.body;
     
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
+    if (!fare || fare <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid fare amount is required' });
     }
     
-    if (!userId || fare === undefined || isNaN(fare)) {
-      return res.status(400).json({ success: false, message: 'User ID and valid fare amount are required' });
-    }
-
-    // Check if trip belongs to user and is completed
-    const [tripCheck] = await db.query(
-      'SELECT user_id, status FROM travel_plans WHERE id = ?', 
-      [parseInt(tripId)]
-    );
+    // Verify ownership and that trip is completed
+    const [tripHistory] = await db.execute('SELECT * FROM trip_history WHERE id = ? AND user_id = ?', [tripId, userId]);
     
-    if (tripCheck.length === 0) {
+    if (tripHistory.length === 0) {
       return res.status(404).json({ success: false, message: 'Trip not found' });
     }
     
-    if (tripCheck[0].user_id !== parseInt(userId)) {
-      return res.status(403).json({ success: false, message: 'Unauthorized to update this trip' });
-    }
-    
-    if (tripCheck[0].status !== 'Completed') {
+    if (tripHistory[0].status !== 'Completed') {
       return res.status(400).json({ success: false, message: 'Can only add fare to completed trips' });
     }
-
-    const [result] = await db.query(
-      'UPDATE travel_plans SET added_fare = ? WHERE id = ?', 
-      [parseFloat(fare), parseInt(tripId)]
-    );
     
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Fare added successfully' });
-    } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
+    // Update fare and added_fare flag
+    await db.execute('UPDATE trip_history SET fare = ?, added_fare = TRUE, updated_at = NOW() WHERE id = ?', [fare, tripId]);
+    
+    res.json({ success: true, message: 'Fare added successfully' });
   } catch (error) {
     console.error('Error adding fare:', error);
-    res.status(500).json({ success: false, message: 'Error adding fare' });
+    res.status(500).json({ success: false, message: 'Failed to add fare' });
   }
 });
 
-// Get completed trips that need fare input
 app.get('/completedTrips/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    // First update expired trips
-    await updateExpiredTrips();
-
-    // Get completed trips without added fare
-    const query = `
-      SELECT 
-        tp.id, tp.from_place, tp.to_place, 
-        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as travel_time,
-        tp.status, tp.added_fare
-      FROM travel_plans tp
-      WHERE tp.user_id = ? AND tp.status = 'Completed' AND tp.added_fare IS NULL
-      ORDER BY tp.time DESC
-    `;
-
-    const [completedTrips] = await db.query(query, [parseInt(userId)]);
-    res.json({ success: true, data: completedTrips });
+    const [trips] = await db.execute(
+      'SELECT * FROM trip_history WHERE user_id = ? AND status = ? AND added_fare = FALSE ORDER BY departure_date DESC',
+      [userId, 'Completed']
+    );
+    
+    res.json({ success: true, trips });
   } catch (error) {
     console.error('Error fetching completed trips:', error);
-    res.status(500).json({ success: false, message: 'Error fetching completed trips' });
+    res.status(500).json({ success: false, message: 'Failed to fetch completed trips' });
   }
 });
 
@@ -886,24 +839,35 @@ app.get('/tripStats/:userId', async (req, res) => {
   }
 });
 
-// Auto-update completed trips endpoint (can be called manually or via cron)
 app.post('/autoUpdateCompletedTrips', async (req, res) => {
   try {
-    const updateQuery = `
-      UPDATE travel_plans
-      SET status = 'Completed'
-      WHERE status = 'Active' AND time < NOW()
-    `;
-    const [result] = await db.query(updateQuery);
-    res.json({ 
-      success: true, 
-      message: `Updated ${result.affectedRows} expired trips to completed status` 
-    });
+    // Get expired active trips from trip_history
+    const [expiredTrips] = await db.execute(`
+      SELECT th.id, th.travel_plan_id 
+      FROM trip_history th
+      WHERE th.status = 'Active' 
+      AND CONCAT(th.departure_date, ' ', th.departure_time) < NOW()
+    `);
+    
+    for (const trip of expiredTrips) {
+      // Update status to Completed in trip_history
+      await db.execute('UPDATE trip_history SET status = ?, updated_at = NOW() WHERE id = ?', ['Completed', trip.id]);
+      
+      // Delete from travel_plans table if travel_plan_id exists
+      if (trip.travel_plan_id) {
+        await db.execute('DELETE FROM travel_plans WHERE id = ?', [trip.travel_plan_id]);
+        // Set travel_plan_id to NULL since the travel plan is deleted
+        await db.execute('UPDATE trip_history SET travel_plan_id = NULL WHERE id = ?', [trip.id]);
+      }
+    }
+    
+    res.json({ success: true, message: `Updated ${expiredTrips.length} expired trips` });
   } catch (error) {
-    console.error('Error auto-updating trips:', error);
-    res.status(500).json({ success: false, message: 'Error auto-updating trips' });
+    console.error('Error updating completed trips:', error);
+    res.status(500).json({ success: false, message: 'Failed to update completed trips' });
   }
 });
+
 
 // Additional missing routes from original code
 app.get("/getUserByPhone", async (req, res) => {
