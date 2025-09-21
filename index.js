@@ -538,7 +538,8 @@ app.get('/checkBlockStatus', async (req, res) => {
 
 // In index.js
 
-// --- MODIFIED: Ensure your /getUsersGoing route looks exactly like this ---
+// In index.js
+
 app.get("/getUsersGoing", async (req, res) => {
     const { currentUserId } = req.query;
 
@@ -547,7 +548,7 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 
     try {
-        // 1. Get the list of the current user's "friends" (people they've chatted with)
+        // ... (friendsQuery remains the same) ...
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
@@ -558,14 +559,14 @@ app.get("/getUsersGoing", async (req, res) => {
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
 
-        // 2. Get all active travel plans, MAKING SURE to select profile_visibility
+
         const plansQuery = `
             SELECT
                 tp.user_id,
                 u.name,
                 u.profile_pic,
                 u.gender,
-                u.profile_visibility, -- THIS LINE IS ESSENTIAL
+                u.profile_visibility,
                 tp.from_place as fromPlace,
                 tp.to_place as toPlace,
                 DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
@@ -575,32 +576,41 @@ app.get("/getUsersGoing", async (req, res) => {
         `;
         const [rows] = await db.query(plansQuery);
 
-        // 3. **THIS IS THE LOGIC THAT HIDES THE PICTURE**
-        // It processes the list and applies the rules.
+        // **DEBUG CHECKPOINT 1: See what the database returns**
+        console.log("--- RAW DATA FROM DATABASE ---");
+        console.log(JSON.stringify(rows, null, 2));
+        console.log("----------------------------");
+
         const usersGoing = rows.map(user => {
             let finalProfilePic = user.profile_pic;
 
-            // **CHECK FOR "none" VISIBILITY**
             if (user.profile_visibility === 'none') {
                 finalProfilePic = 'default';
             } 
-            // Check for "friends" visibility
             else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
                 finalProfilePic = 'default';
             }
 
-            // Return the final, processed user object
+            // **DEBUG CHECKPOINT 2: See the decision for each user**
+            console.log(`Processing User: ${user.name}, Visibility: '${user.profile_visibility}', Final Pic: '${finalProfilePic}'`);
+
             return {
-                id: user.user_id, // Use user_id for consistency
+                id: user.user_id,
                 userId: user.user_id,
                 name: user.name,
                 fromPlace: user.fromPlace,
                 toPlace: user.toPlace,
                 time: user.time,
                 gender: user.gender,
-                profile_pic: finalProfilePic // This will be "default" for Swaraj
+                profile_pic: finalProfilePic
             };
         });
+
+        // **DEBUG CHECKPOINT 3: See what is sent to the app**
+        console.log("--- FINAL DATA SENT TO APP ---");
+        console.log(JSON.stringify(usersGoing, null, 2));
+        console.log("----------------------------");
+
 
         res.json({ success: true, users: usersGoing });
     } catch (err) {
