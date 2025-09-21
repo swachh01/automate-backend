@@ -1004,6 +1004,38 @@ router.post('/favorites', async (req, res) => {
     }
 });
 
+// --- NEW: Add this route to handle deleting a favorite ---
+
+router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
+    const { userId, favoriteId } = req.params;
+
+    // Validate that both IDs are provided
+    if (!userId || !favoriteId) {
+        return res.status(400).json({ success: false, message: 'User ID and Favorite ID are required.' });
+    }
+
+    try {
+        const query = `
+            DELETE FROM favorites
+            WHERE id = ? AND user_id = ?
+        `;
+
+        const [result] = await db.query(query, [favoriteId, userId]);
+
+        // Check if a row was actually deleted
+        if (result.affectedRows > 0) {
+            res.json({ success: true, message: 'Favorite deleted successfully.' });
+        } else {
+            // This occurs if the favorite doesn't exist or doesn't belong to the user
+            res.status(404).json({ success: false, message: 'Favorite not found or you do not have permission.' });
+        }
+
+    } catch (error) {
+        console.error('❌ Error deleting favorite:', error);
+        res.status(500).json({ success: false, message: 'Database error while deleting favorite.' });
+    }
+});
+
 // Use router for all router-defined routes
 app.use(router);
 
