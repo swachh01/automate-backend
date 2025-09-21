@@ -952,7 +952,8 @@ required.` });
 
     try {
         const query = `
-            SELECT id, user_id, name, place_type, address, latitude, 
+            SELECT id, user_id, place_name as name, place_type, address, 
+latitude, 
 longitude
             FROM favorites
             WHERE user_id = ?
