@@ -637,31 +637,65 @@ app.get("/travel-plans/destinations", async (req, res) => {
   }
 });
 
-app.get("/travel-plans/by-destination", async (req, res) => {
-  try {
-    const { destination } = req.query;
-    if (!destination) {
-      return res.status(400).json({
-        success: false,
-        message: "Destination query parameter is required."
-      });
+// In your index.js file
+
+router.get('/travel-plans/by-destination', async (req, res) => {
+    // Get both the destination AND the current user's ID
+    const { destination, currentUserId } = req.query;
+
+    if (!destination || !currentUserId) {
+        return res.status(400).json({ success: false, message: 'Destination and currentUserId are required.' });
     }
 
-    const query = `
-      SELECT
-        u.id, u.name, u.college, u.gender, u.profile_pic,
-        tp.from_place as fromPlace, tp.to_place as toPlace, tp.time
-      FROM travel_plans tp
-      JOIN users u ON tp.user_id = u.id
-      WHERE LOWER(tp.to_place) = LOWER(?) AND tp.status = 'Active'
-      ORDER BY tp.time ASC;
-    `;
-    const [users] = await db.query(query, [destination]);
-    res.json({ success: true, users: users || [] });
-  } catch (err) {
-    console.error("❌ Error fetching users by destination:", err);
-    res.status(500).json({ success: false, message: "Database error" });
-  }
+    try {
+        // 1. Get the list of the current user's "friends"
+        const friendsQuery = `
+            SELECT DISTINCT
+                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
+            FROM chats
+            WHERE sender_id = ? OR receiver_id = ?
+        `;
+        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const friendIds = new Set(friendRows.map(row => row.friend_id));
+        friendIds.add(parseInt(currentUserId));
+
+        // 2. Get users for the specific destination, including their visibility setting
+        const plansQuery = `
+            SELECT
+                u.id, u.name, u.college, u.gender, u.profile_pic, u.profile_visibility,
+                tp.from_place as fromPlace,
+                tp.to_place as toPlace,
+                DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
+            FROM travel_plans tp
+            JOIN users u ON tp.user_id = u.id
+            WHERE tp.to_place = ?
+            ORDER BY tp.time ASC
+        `;
+        const [users] = await db.query(plansQuery, [destination]);
+
+        // 3. Apply the visibility rules (this is the same logic as before)
+        const filteredUsers = users.map(user => {
+            let finalProfilePic = user.profile_pic;
+
+            if (user.profile_visibility === 'none') {
+                finalProfilePic = 'default';
+            } else if (user.profile_visibility === 'friends' && !friendIds.has(user.id)) {
+                finalProfilePic = 'default';
+            }
+
+            // Return a new user object with the potentially modified profile_pic
+            return {
+                ...user, // a shortcut to copy all original fields
+                profile_pic: finalProfilePic
+            };
+        });
+
+        res.json({ success: true, users: filteredUsers });
+
+    } catch (error) {
+        console.error('❌ Error fetching users by destination:', error);
+        res.status(500).json({ success: false, message: 'Database error' });
+    }
 });
 
 // The main Trip History endpoint. It updates statuses and then fetches ALL trips.
