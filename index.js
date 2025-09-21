@@ -552,7 +552,7 @@ app.get("/getUsersGoing", async (req, res) => {
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
-            FROM chats
+            FROM messages
             WHERE sender_id = ? OR receiver_id = ?
         `;
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
@@ -652,7 +652,7 @@ router.get('/travel-plans/by-destination', async (req, res) => {
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
-            FROM chats
+            FROM messages
             WHERE sender_id = ? OR receiver_id = ?
         `;
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
