@@ -971,6 +971,40 @@ while fetching favorites.` });
     }
 });
 
+// --- NEW: Add this route to handle creating a new favorite ---
+
+router.post('/favorites', async (req, res) => {
+    // The JSON sent from your app has: placeName, address, latitude, longitude, userId, placeType
+    const { placeName, address, latitude, longitude, userId, placeType } = req.body;
+
+    // Basic validation
+    if (!placeName || !address || !latitude || !longitude || !userId) {
+        return res.status(400).json({ success: false, message: 'Missing required fields.' });
+    }
+
+    try {
+        const query = `
+            INSERT INTO favorites (user_id, favorite_name, place_type, address, latitude, longitude)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `;
+
+        // Make sure the order of values matches the columns in the query
+        const values = [userId, placeName, placeType || 'Other', address, latitude, longitude];
+
+        const [result] = await db.query(query, values);
+
+        res.status(201).json({
+            success: true,
+            message: 'Favorite added successfully.',
+            favoriteId: result.insertId
+        });
+
+    } catch (error) {
+        console.error('❌ Error adding favorite:', error);
+        res.status(500).json({ success: false, message: 'Database error while adding favorite.' });
+    }
+});
+
 // Use router for all router-defined routes
 app.use(router);
 
