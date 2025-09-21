@@ -941,6 +941,35 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   }
 });
 
+
+router.get('/favorites/:userId', async (req, res) => {
+    const { userId } = req.params;
+
+    if (!userId) {
+        return res.status(400).json({ success: false, message: `User ID is 
+required.` });
+    }
+
+    try {
+        const query = `
+            SELECT id, user_id, name, place_type, address, latitude, 
+longitude
+            FROM favorites
+            WHERE user_id = ?
+            ORDER BY name ASC
+        `;
+
+        const [favorites] = await db.query(query, [userId]);
+
+        res.json({ success: true, favorites: favorites });
+
+    } catch (error) {
+        console.error('❌ Error fetching favorites:', error);
+        res.status(500).json({ success: false, message: `Database error 
+while fetching favorites.` });
+    }
+});
+
 // Use router for all router-defined routes
 app.use(router);
 
