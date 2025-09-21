@@ -256,7 +256,6 @@ app.post("/login", async (req, res) => {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
   try {
-    // CORRECTED: Get the hashed password and compare with bcrypt
     const [rows] = await db.query(
       `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic, password FROM users WHERE phone = ?`,
       [phone]
@@ -266,9 +265,22 @@ app.post("/login", async (req, res) => {
     }
     
     const user = rows[0];
-    
-    // Compare the provided password with the hashed password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    let isPasswordValid = false;
+
+    // Check if password is already hashed (bcrypt hashes start with $2a$, $2b$, or $2y$)
+    if (user.password.startsWith('$2') && user.password.length > 50) {
+      // It's a bcrypt hash, use bcrypt.compare
+      isPasswordValid = await bcrypt.compare(password, user.password);
+    } else {
+      // It's plain text, do direct comparison AND hash it for future use
+      if (user.password === password) {
+        isPasswordValid = true;
+        // Update to hashed password for future logins
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
+      }
+    }
+
     if (!isPasswordValid) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
