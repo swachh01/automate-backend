@@ -20,7 +20,6 @@ const mysql = require("mysql2");
 const app = express();
 const router = express.Router();
 
-// ADD THIS LINE - saltRounds was referenced but not defined
 const saltRounds = 12;
 
 app.use(cors());
