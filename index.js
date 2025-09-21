@@ -470,7 +470,7 @@ app.get('/getChatUsers', async (req, res) => {
       INNER JOIN (
         SELECT
           CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as other_user_id,
-          message as last_message, created_at as last_timestamp,
+          message as last_message, timestamp as last_timestamp,
           ROW_NUMBER() OVER (
             PARTITION BY CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END
             ORDER BY created_at DESC
