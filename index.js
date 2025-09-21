@@ -974,7 +974,6 @@ while fetching favorites.` });
 // --- NEW: Add this route to handle creating a new favorite ---
 
 router.post('/favorites', async (req, res) => {
-    // The JSON sent from your app has: placeName, address, latitude, longitude, userId, placeType
     const { placeName, address, latitude, longitude, userId, placeType } = req.body;
 
     // Basic validation
@@ -984,7 +983,7 @@ router.post('/favorites', async (req, res) => {
 
     try {
         const query = `
-            INSERT INTO favorites (user_id, favorite_name, place_type, address, latitude, longitude)
+            INSERT INTO favorites (user_id, place_name, place_type, address, latitude, longitude)
             VALUES (?, ?, ?, ?, ?, ?)
         `;
 
