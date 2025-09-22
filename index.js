@@ -135,17 +135,24 @@ app.post("/signup", async (req, res) => {
   try {
     const { name, college, gender, phone } = req.body || {};
     if (!name || !college || !gender || !phone) {
-      return res.status(400).json({ success: false, message: `Missing required fields: name, college, gender, phone` });
+      return res.status(400).json({ success: false, message: `Missing required fields.` });
     }
     if (name.trim().length < 4) {
       return res.status(400).json({ success: false, message: `Name must be at least 4 characters long` });
     }
-    const [existingUser] = await db.query(`SELECT id FROM users WHERE phone = ?`, [phone]);
-    if (existingUser.length > 0) {
-      return res.status(400).json({ success: false, message: `User with this phone number already exists` });
+
+    // ✨ MODIFIED LOGIC: Check for a user with a 'completed' status
+    const [existingUser] = await db.query(`SELECT id, signup_status FROM users WHERE phone = ?`, [phone]);
+    
+    // Only block the signup if the user exists AND their status is 'completed'
+    if (existingUser.length > 0 && existingUser[0].signup_status === 'completed') {
+      return res.status(400).json({ success: false, message: `A user with this phone number already has a completed account.` });
     }
+
+    // If user is 'pending' or doesn't exist, we proceed by storing Stage 1 data
     const signupData = { name: name.trim(), college: college.trim(), gender };
     signupStore[phone] = signupData;
+    
     return res.json({ success: true, message: `Signup data received. Please verify OTP.` });
   } catch (err) {
     console.error("❌ /signup error:", err);
@@ -188,31 +195,47 @@ app.post("/verifyOtp", async (req, res) => {
     }
     const entry = otpStore[phone];
     if (!entry) {
-      return res.status(400).json({ success: false, message: `No OTP found for this phone. Please request a new OTP.` });
+      return res.status(400).json({ success: false, message: `No OTP found for this phone.` });
     }
     if (Date.now() > entry.expires) {
       delete otpStore[phone];
-      return res.status(400).json({ success: false, message: `OTP expired. Please request a new OTP.` });
+      return res.status(400).json({ success: false, message: `OTP expired.` });
     }
     if (entry.otp !== otp.toString()) {
       return res.status(400).json({ success: false, message: `Invalid OTP` });
     }
     const signupData = signupStore[phone];
     if (!signupData) {
-      return res.status(400).json({ success: false, message: `Signup data missing. Please complete signup process first.` });
+      return res.status(400).json({ success: false, message: `Signup data missing.` });
     }
     delete otpStore[phone];
-    const [result] = await db.query(
-      `INSERT INTO users (name, college, password, phone, gender, created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
-      [signupData.name, signupData.college, "", phone, signupData.gender]
-    );
+
+    // ✨ MODIFIED LOGIC: This query now handles both new and restarting users.
+    // It INSERTS a new user with status 'pending'.
+    // If the phone number already exists, it UPDATES their Stage 1 details instead.
+    const query = `
+      INSERT INTO users (name, college, phone, gender, password, created_at, signup_status) 
+      VALUES (?, ?, ?, ?, '', NOW(), 'pending')
+      ON DUPLICATE KEY UPDATE
+        name = VALUES(name),
+        college = VALUES(college),
+        gender = VALUES(gender);
+    `;
+
+    await db.query(query, [signupData.name, signupData.college, phone, signupData.gender]);
+    
+    // Fetch the user's ID after the insert/update to ensure we have it
+    const [userRows] = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
+    const userId = userRows[0].id;
+    
     delete signupStore[phone];
+    
     return res.json({
       success: true,
-      message: "OTP verified and user created successfully",
-      userId: result.insertId,
+      message: "OTP verified successfully",
+      userId: userId,
       user: {
-        id: result.insertId,
+        id: userId,
         name: signupData.name,
         college: signupData.college,
         phone: phone,
@@ -319,8 +342,12 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: `User not found` });
     }
+
+    // ✨ NEW "GRADUATION" STEP: Mark the user as fully signed up.
+    await db.query(`UPDATE users SET signup_status = 'completed' WHERE id = ?`, [userId]);
+    
     const [rows] = await db.query(`SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, [userId]);
-    res.json({ success: true, message: "Profile updated", user: rows[0] });
+    res.json({ success: true, message: "Profile updated and signup complete!", user: rows[0] });
   } catch (err) {
     console.error("❌ /updateProfile error:", err);
     res.status(500).json({ success: false, message: `Internal Server Error` });
