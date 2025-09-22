@@ -442,8 +442,6 @@ app.get('/getMessages', async (req, res) => {
   }
 });
 
-// In index.js (or your main server file)
-const { encrypt, decrypt } = require('./cryptoHelper'); // ✨ Import the helper functions
 
 app.post('/sendMessage', async (req, res) => {
   try {
