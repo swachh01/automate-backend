@@ -354,7 +354,8 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   }
 });
 
-// --- TRAVEL PLAN ROUTES ---
+// In your index.js file
+
 app.post("/addTravelPlan", async (req, res) => {
   try {
     const { userId, fromPlace, toPlace, time } = req.body;
@@ -365,16 +366,21 @@ app.post("/addTravelPlan", async (req, res) => {
       });
     }
 
-    const query = `INSERT INTO travel_plans (user_id, from_place, to_place, time, status, fare, created_at)
-                   VALUES (?, ?, ?, ?, 'Active', 0.00, NOW())
-                   ON DUPLICATE KEY UPDATE
-                   from_place = VALUES(from_place),
-                   to_place = VALUES(to_place),
-                   time = VALUES(time),
-                   status = 'Active',
-                   fare = 0.00`;
+    // ✨ THE FIX: Convert the incoming UTC string into a JavaScript Date object.
+    // The mysql2 driver will automatically format this object for the database.
+    const formattedTime = new Date(time);
 
-    const [result] = await db.query(query, [userId, fromPlace, toPlace, time]);
+    const query = `
+      INSERT INTO travel_plans (user_id, from_place, to_place, time, status, fare, created_at)
+      VALUES (?, ?, ?, ?, 'Active', 0.00, NOW())
+      ON DUPLICATE KEY UPDATE
+        from_place = VALUES(from_place),
+        to_place = VALUES(to_place),
+        time = VALUES(time),
+        status = 'Active',
+        fare = 0.00`;
+
+    const [result] = await db.query(query, [userId, fromPlace, toPlace, formattedTime]);
     
     let message = "Plan submitted successfully";
     if (result.affectedRows > 1) {
@@ -386,6 +392,7 @@ app.post("/addTravelPlan", async (req, res) => {
       message: message,
       id: result.insertId
     });
+
   } catch (err) {
     console.error("❌ Error saving travel plan:", err);
     res.status(500).json({
