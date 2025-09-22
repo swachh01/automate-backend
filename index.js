@@ -13,6 +13,7 @@ const signupStore = {};
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const { encrypt, decrypt } = require('./cryptoHelper');
 const fs = require("fs");
 const multer = require("multer");
 const mysql = require("mysql2");
@@ -405,13 +406,13 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
   }
 });
 
-// --- CHAT ROUTES ---
 app.get('/getMessages', async (req, res) => {
   try {
     const { sender_id, receiver_id } = req.query;
     if (!sender_id || !receiver_id) {
       return res.status(400).json({ success: false, message: 'sender_id and receiver_id are required' });
     }
+    
     const sql = `
       SELECT * FROM messages
       WHERE (sender_id = ? AND receiver_id = ?)
@@ -419,20 +420,36 @@ app.get('/getMessages', async (req, res) => {
       ORDER BY timestamp ASC
     `;
     const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
+    
+    // Your logic for hiding messages remains the same
     const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
     const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
     const hiddenIds = hiddenMessages.map(h => h.message_id);
     const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
-    res.json({ success: true, messages: visibleMessages });
+    
+    // ✨ Decrypt the visible messages before sending them to the client
+    const decryptedMessages = visibleMessages.map(msg => {
+        return {
+            ...msg, // Copy all original fields (id, sender_id, etc.)
+            message: decrypt(msg.message) // Overwrite the message field with the decrypted version
+        };
+    });
+    
+    res.json({ success: true, messages: decryptedMessages });
   } catch (error) {
     console.error('❌ Error fetching messages:', error);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
 
+// In index.js (or your main server file)
+const { encrypt, decrypt } = require('./cryptoHelper'); // ✨ Import the helper functions
+
 app.post('/sendMessage', async (req, res) => {
   try {
     const { sender_id, receiver_id, message } = req.body;
+    
+    // Block check logic remains the same
     const blockCheckQuery = `
       SELECT * FROM blocked_users
       WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
@@ -441,14 +458,22 @@ app.post('/sendMessage', async (req, res) => {
     if (blockedRows.length > 0) {
       return res.status(403).json({ success: false, message: 'This user cannot be messaged.' });
     }
+    
+    // Validation remains the same
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'sender_id, receiver_id, and message are required' });
     }
+
+    // ✨ Encrypt the message before saving
+    const encryptedMessage = encrypt(message);
+    
     const query = `
       INSERT INTO messages (sender_id, receiver_id, message, timestamp)
       VALUES (?, ?, ?, NOW())
     `;
-    const [result] = await db.query(query, [sender_id, receiver_id, message]);
+    // Save the encrypted message to the database
+    const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
+    
     res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
   } catch (error) {
     console.error('❌ Error sending message:', error);
