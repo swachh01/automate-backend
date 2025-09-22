@@ -479,6 +479,8 @@ app.post('/sendMessage', async (req, res) => {
   }
 });
 
+// In your index.js file
+
 app.get('/getChatUsers', async (req, res) => {
   try {
     const { userId } = req.query;
@@ -486,28 +488,51 @@ app.get('/getChatUsers', async (req, res) => {
       return res.status(400).json({ success: false, message: `userId is required` });
     }
     
+    // This query is now updated to exclude messages hidden by the current user
     const query = `
       SELECT DISTINCT
         u.id, u.name as username, u.college, u.profile_pic,
-        latest.last_message as lastMessage, latest.last_timestamp as timestamp, 0 as unreadCount
+        latest.last_message as lastMessage, 
+        latest.last_timestamp as timestamp, 
+        0 as unreadCount
       FROM users u
       INNER JOIN (
         SELECT
-          CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as other_user_id,
-          message as last_message, 
-          timestamp as last_timestamp,
+          CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END as other_user_id,
+          m.message as last_message, 
+          m.timestamp as last_timestamp,
           ROW_NUMBER() OVER (
-            PARTITION BY CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END
-            ORDER BY timestamp DESC
+            PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
+            ORDER BY m.timestamp DESC
           ) as rn
-        FROM messages
-        WHERE (sender_id = ? OR receiver_id = ?)
+        FROM messages m
+        
+        -- ✨ MODIFICATION: Join with hidden_messages to find messages hidden by the current user
+        LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
+        
+        -- ✨ MODIFICATION: Filter the main message pool to exclude hidden ones
+        WHERE 
+          (m.sender_id = ? OR m.receiver_id = ?) 
+          AND hm.message_id IS NULL -- This ensures we only get messages that are NOT hidden
+          
       ) latest ON u.id = latest.other_user_id AND latest.rn = 1
       ORDER BY latest.last_timestamp DESC
     `;
     
-    const [rows] = await db.execute(query, [userId, userId, userId, userId]);
-    res.json({ success: true, chats: rows || [] });
+    // We now need to pass the userId 5 times to fill in all the '?' placeholders
+    const params = [userId, userId, userId, userId, userId];
+    const [rows] = await db.execute(query, params);
+
+    // Decrypt the last message for each chat before sending
+    const decryptedChats = rows.map(chat => {
+        return {
+            ...chat,
+            lastMessage: decrypt(chat.lastMessage)
+        };
+    });
+
+    res.json({ success: true, chats: decryptedChats || [] });
+
   } catch (error) {
     console.error('Error fetching chat users:', error);
     res.status(500).json({ success: false, message: `Failed to fetch chat users` });
