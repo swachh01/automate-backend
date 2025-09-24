@@ -354,43 +354,45 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   }
 });
 
-// In your index.js file
-
 app.post("/addTravelPlan", async (req, res) => {
   try {
-    const { userId, fromPlace, toPlace, time } = req.body;
-    if (!userId || !fromPlace || !toPlace || !time) {
+    // ✨ Now expecting latitude and longitude from the app
+    const { userId, fromPlace, toPlace, time, toPlaceLat, toPlaceLng } = req.body;
+
+    // ✨ Updated validation to check for coordinates
+    if (!userId || !fromPlace || !toPlace || !time || toPlaceLat === undefined || toPlaceLng === undefined) {
       return res.status(400).json({
         success: false,
-        message: "Missing required fields: userId, fromPlace, toPlace, and time"
+        message: "Missing required fields, including destination coordinates."
       });
     }
-
-    // ✨ THE FIX: Convert the incoming UTC string into a JavaScript Date object.
-    // The mysql2 driver will automatically format this object for the database.
+    
     const formattedTime = new Date(time);
-
+    
+    // ✨ Updated query to insert the new coordinate columns
     const query = `
-      INSERT INTO travel_plans (user_id, from_place, to_place, time, status, fare, created_at)
-      VALUES (?, ?, ?, ?, 'Active', 0.00, NOW())
+      INSERT INTO travel_plans (user_id, from_place, to_place, time, status, to_place_lat, to_place_lng)
+      VALUES (?, ?, ?, ?, 'Active', ?, ?)
       ON DUPLICATE KEY UPDATE
         from_place = VALUES(from_place),
         to_place = VALUES(to_place),
         time = VALUES(time),
         status = 'Active',
-        fare = 0.00`;
-
-    const [result] = await db.query(query, [userId, fromPlace, toPlace, formattedTime]);
-    
+        to_place_lat = VALUES(to_place_lat),
+        to_place_lng = VALUES(to_place_lng)`;
+        
+    // ✨ Updated parameters to include the new coordinate values
+    const [result] = await db.query(query, [userId, fromPlace, toPlace, formattedTime, toPlaceLat, toPlaceLng]);
+  
     let message = "Plan submitted successfully";
     if (result.affectedRows > 1) {
       message = "Plan updated successfully";
     }
-
+        
     res.json({
-      success: true,
-      message: message,
-      id: result.insertId
+        success: true,
+        message: message,
+        id: result.insertId
     });
 
   } catch (err) {
@@ -712,11 +714,21 @@ app.get("/getUsersGoing", async (req, res) => {
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
     const query = `
-      SELECT ANY_VALUE(to_place) as destination, COUNT(user_id) as userCount
+      SELECT
+        ANY_VALUE(to_place) as destination, -- Selects one representative name from each group
+        COUNT(user_id) as userCount
       FROM travel_plans
-      WHERE status = 'Active'
-      GROUP BY LOWER(to_place)
-      ORDER BY LOWER(to_place) ASC;
+      WHERE 
+        status = 'Active' 
+        AND time > NOW() 
+        AND to_place_lat IS NOT NULL 
+        AND to_place_lng IS NOT NULL
+      -- ✨ THE FIX: Group by rounded coordinates to cluster nearby locations
+      GROUP BY 
+        ROUND(to_place_lat, 3), 
+        ROUND(to_place_lng, 3)
+      ORDER BY 
+        userCount DESC; -- Order by most popular destinations
     `;
     const [destinations] = await db.query(query);
     res.json({ success: true, destinations: destinations || [] });
