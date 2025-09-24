@@ -792,6 +792,8 @@ router.get('/travel-plans/by-destination', async (req, res) => {
     }
 });
 
+// In your index.js file
+
 router.get('/tripHistory/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -800,17 +802,24 @@ router.get('/tripHistory/:userId', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
     }
 
+    // This update query remains the same and is correct.
     const updateStatusQuery = `
       UPDATE travel_plans SET status = 'Completed' 
       WHERE user_id = ? AND status = 'Active' AND time < NOW()`;
     await db.query(updateStatusQuery, [parseInt(userId)]);
 
     const offset = (page - 1) * limit;
+    
+    // ✨ THIS QUERY IS THE FIX ✨
     const historyQuery = `
       SELECT
-        tp.id, tp.from_place, tp.to_place,
-        CONVERT_TZ(tp.time, '+00:00', '+05:30') as travel_time,
-        tp.fare, tp.status
+        tp.id, 
+        tp.from_place, 
+        tp.to_place,
+        -- Changed CONVERT_TZ to a standard UTC format string
+        DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+        tp.fare, 
+        tp.status
       FROM travel_plans tp
       WHERE tp.user_id = ?
       ORDER BY tp.time DESC
