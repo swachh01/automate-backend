@@ -1095,52 +1095,50 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   }
 });
 
+// In index.js
+
 router.get('/favorites/:userId', async (req, res) => {
     const { userId } = req.params;
-
     if (!userId) {
         return res.status(400).json({ success: false, message: `User ID is required.` });
     }
-
     try {
         const query = `
-            SELECT id, user_id, place_name as name, place_type, address, latitude, longitude
+            SELECT id, user_id, routeName, from_place, to_place
             FROM favorites
             WHERE user_id = ?
-            ORDER BY name ASC
+            ORDER BY routeName ASC
         `;
-
         const [favorites] = await db.query(query, [userId]);
         res.json({ success: true, favorites: favorites });
-
     } catch (error) {
         console.error('❌ Error fetching favorites:', error);
         res.status(500).json({ success: false, message: `Database error while fetching favorites.` });
     }
 });
 
-router.post('/favorites', async (req, res) => {
-    const { placeName, address, latitude, longitude, userId, placeType } = req.body;
+// In index.js
 
-    if (!placeName || !address || !latitude || !longitude || !userId) {
+router.post('/favorites', async (req, res) => {
+    // Expecting new fields from the app
+    const { userId, routeName, fromPlace, toPlace } = req.body;
+
+    if (!userId || !routeName || !fromPlace || !toPlace) {
         return res.status(400).json({ success: false, message: 'Missing required fields.' });
     }
-
     try {
         const query = `
-            INSERT INTO favorites (user_id, place_name, place_type, address, latitude, longitude)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO favorites (user_id, routeName, from_place, to_place)
+            VALUES (?, ?, ?, ?)
         `;
-
-        const values = [userId, placeName, placeType || 'Other', address, latitude, longitude];
+        const values = [userId, routeName, fromPlace, toPlace];
         const [result] = await db.query(query, values);
 
         res.status(201).json({
             success: true,
-            message: 'Favorite added successfully.',
+            message: 'Favorite route added successfully.',
             favoriteId: result.insertId
         });
-
     } catch (error) {
         console.error('❌ Error adding favorite:', error);
         res.status(500).json({ success: false, message: 'Database error while adding favorite.' });
