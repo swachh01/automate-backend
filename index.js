@@ -18,10 +18,30 @@ const fs = require("fs");
 const multer = require("multer");
 const mysql = require("mysql2");
 
+const http = require('http');
+const socketIo = require('socket.io');
+
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 const router = express.Router();
 
 const saltRounds = 12;
+
+app.use(cors());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+cloudinary.config({
+  secure: true,
+});
+
+const onlineUsers = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -69,6 +89,119 @@ const storage = new CloudinaryStorage({
   }
 });
 const upload = multer({ storage: storage });
+
+async function updateUserPresence(userId, isOnline) {
+  try {
+    const query = `
+      INSERT INTO user_presence (user_id, is_online, last_seen, updated_at)
+      VALUES (?, ?, NOW(), NOW())
+      ON DUPLICATE KEY UPDATE
+        is_online = VALUES(is_online),
+        last_seen = VALUES(last_seen),
+        updated_at = VALUES(updated_at)
+    `;
+    await db.query(query, [userId, isOnline]);
+  } catch (error) {
+    console.error('❌ Error updating user presence:', error);
+  }
+}
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('🔌 User connected:', socket.id);
+
+  // Handle user going online
+  socket.on('user_online', async (userId) => {
+    try {
+      onlineUsers.set(userId.toString(), {
+        socketId: socket.id,
+        lastSeen: new Date(),
+        isOnline: true
+      });
+
+      // Update database
+      await updateUserPresence(userId, true);
+
+      // Broadcast to all other clients that this user is online
+      socket.broadcast.emit('user_status_changed', {
+        userId: userId.toString(),
+        isOnline: true,
+        lastSeen: new Date()
+      });
+
+      console.log(`✅ User ${userId} is now online`);
+    } catch (error) {
+      console.error('❌ Error handling user_online:', error);
+    }
+  });
+
+  // Handle user going offline manually
+  socket.on('user_offline', async (userId) => {
+    try {
+      onlineUsers.delete(userId.toString());
+      await updateUserPresence(userId, false);
+      
+      socket.broadcast.emit('user_status_changed', {
+        userId: userId.toString(),
+        isOnline: false,
+        lastSeen: new Date()
+      });
+
+      console.log(`📴 User ${userId} manually went offline`);
+    } catch (error) {
+      console.error('❌ Error handling user_offline:', error);
+    }
+  });
+
+  // Handle disconnect
+  socket.on('disconnect', async () => {
+    try {
+      // Find user by socket ID
+      let disconnectedUserId = null;
+      for (let [userId, userData] of onlineUsers.entries()) {
+        if (userData.socketId === socket.id) {
+          disconnectedUserId = userId;
+          break;
+        }
+      }
+
+      if (disconnectedUserId) {
+        onlineUsers.delete(disconnectedUserId);
+        
+        // Update database
+        await updateUserPresence(disconnectedUserId, false);
+
+        // Broadcast to all clients that this user is offline
+        socket.broadcast.emit('user_status_changed', {
+          userId: disconnectedUserId,
+          isOnline: false,
+          lastSeen: new Date()
+        });
+
+        console.log(`📴 User ${disconnectedUserId} disconnected`);
+      }
+    } catch (error) {
+      console.error('❌ Error handling disconnect:', error);
+    }
+  });
+
+  // Handle typing indicators
+  socket.on('typing_start', (data) => {
+    socket.broadcast.emit('user_typing', {
+      userId: data.userId,
+      chatWithUserId: data.chatWithUserId,
+      isTyping: true
+    });
+  });
+
+  socket.on('typing_stop', (data) => {
+    socket.broadcast.emit('user_typing', {
+      userId: data.userId,
+      chatWithUserId: data.chatWithUserId,
+      isTyping: false
+    });
+  });
+});
 
 // ---------- Helpers ----------
 async function getUserByPhone(phone) {
@@ -1116,8 +1249,6 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   }
 });
 
-// In index.js
-
 router.get('/favorites/:userId', async (req, res) => {
     const { userId } = req.params;
     if (!userId) {
@@ -1125,7 +1256,7 @@ router.get('/favorites/:userId', async (req, res) => {
     }
     try {
         const query = `
-            SELECT id, user_id, routeName, from_place, to_place
+            SELECT id, user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng
             FROM favorites
             WHERE user_id = ?
             ORDER BY routeName ASC
@@ -1138,21 +1269,19 @@ router.get('/favorites/:userId', async (req, res) => {
     }
 });
 
-// In index.js
-
 router.post('/favorites', async (req, res) => {
-    // Expecting new fields from the app
-    const { userId, routeName, fromPlace, toPlace } = req.body;
+    // ✨ Now expecting all coordinate fields
+    const { userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
 
-    if (!userId || !routeName || !fromPlace || !toPlace) {
-        return res.status(400).json({ success: false, message: 'Missing required fields.' });
+    if (!userId || !routeName || !fromPlace || !toPlace || fromPlaceLat === undefined || fromPlaceLng === undefined || toPlaceLat === undefined || toPlaceLng === undefined) {
+        return res.status(400).json({ success: false, message: 'Missing required fields, including all coordinates.' });
     }
     try {
         const query = `
-            INSERT INTO favorites (user_id, routeName, from_place, to_place)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO favorites (user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
-        const values = [userId, routeName, fromPlace, toPlace];
+        const values = [userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng];
         const [result] = await db.query(query, values);
 
         res.status(201).json({
@@ -1278,6 +1407,63 @@ app.post('/change-password', async (req, res) => {
             message: 'Internal server error' 
         });
     }
+});
+
+app.get('/api/online-users', (req, res) => {
+  try {
+    const users = Array.from(onlineUsers.entries()).map(([userId, data]) => ({
+      userId,
+      isOnline: data.isOnline,
+      lastSeen: data.lastSeen
+    }));
+    res.json({ success: true, onlineUsers: users });
+  } catch (error) {
+    console.error('❌ Error getting online users:', error);
+    res.status(500).json({ success: false, message: 'Error fetching online users' });
+  }
+});
+
+// Check specific user's online status
+app.get('/api/user-status/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Check in-memory first for real-time status
+    const onlineData = onlineUsers.get(userId);
+    if (onlineData) {
+      return res.json({
+        success: true,
+        userId,
+        isOnline: true,
+        lastSeen: onlineData.lastSeen
+      });
+    }
+
+    // If not in memory, check database for last seen
+    const [rows] = await db.query(
+      'SELECT is_online, last_seen FROM user_presence WHERE user_id = ?',
+      [userId]
+    );
+
+    if (rows.length > 0) {
+      res.json({
+        success: true,
+        userId,
+        isOnline: false,
+        lastSeen: rows[0].last_seen
+      });
+    } else {
+      res.json({
+        success: true,
+        userId,
+        isOnline: false,
+        lastSeen: null
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error checking user status:', error);
+    res.status(500).json({ success: false, message: 'Error checking user status' });
+  }
 });
 
 // Use router for all router-defined routes
