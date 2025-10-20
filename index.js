@@ -1,7 +1,7 @@
 require("dotenv").config();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const bcrypt = require('bcrypt'); // ADD THIS LINE - bcrypt was missing
+const bcrypt = require('bcrypt');
 
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -42,14 +42,6 @@ cloudinary.config({
 });
 
 const onlineUsers = new Map();
-
-app.use(cors());
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-cloudinary.config({
-  secure: true,
-});
 
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -106,11 +98,9 @@ async function updateUserPresence(userId, isOnline) {
   }
 }
 
-// Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  // Handle user going online
   socket.on('user_online', async (userId) => {
     try {
       onlineUsers.set(userId.toString(), {
@@ -119,7 +109,6 @@ io.on('connection', (socket) => {
         isOnline: true
       });
 
-      // Update database
       await updateUserPresence(userId, true);
 
       // Broadcast to all other clients that this user is online
@@ -129,13 +118,12 @@ io.on('connection', (socket) => {
         lastSeen: new Date()
       });
 
-      console.log(`✅ User ${userId} is now online`);
+      console.log(` User ${userId} is now online`);
     } catch (error) {
-      console.error('❌ Error handling user_online:', error);
+      console.error(' Error handling user_online:', error);
     }
   });
 
-  // Handle user going offline manually
   socket.on('user_offline', async (userId) => {
     try {
       onlineUsers.delete(userId.toString());
@@ -147,16 +135,14 @@ io.on('connection', (socket) => {
         lastSeen: new Date()
       });
 
-      console.log(`📴 User ${userId} manually went offline`);
+      console.log(`User ${userId} manually went offline`);
     } catch (error) {
-      console.error('❌ Error handling user_offline:', error);
+      console.error(' Error handling user_offline:', error);
     }
   });
 
-  // Handle disconnect
   socket.on('disconnect', async () => {
     try {
-      // Find user by socket ID
       let disconnectedUserId = null;
       for (let [userId, userData] of onlineUsers.entries()) {
         if (userData.socketId === socket.id) {
@@ -168,24 +154,21 @@ io.on('connection', (socket) => {
       if (disconnectedUserId) {
         onlineUsers.delete(disconnectedUserId);
         
-        // Update database
         await updateUserPresence(disconnectedUserId, false);
 
-        // Broadcast to all clients that this user is offline
         socket.broadcast.emit('user_status_changed', {
           userId: disconnectedUserId,
           isOnline: false,
           lastSeen: new Date()
         });
 
-        console.log(`📴 User ${disconnectedUserId} disconnected`);
+        console.log(` User ${disconnectedUserId} disconnected`);
       }
     } catch (error) {
       console.error('❌ Error handling disconnect:', error);
     }
   });
 
-  // Handle typing indicators
   socket.on('typing_start', (data) => {
     socket.broadcast.emit('user_typing', {
       userId: data.userId,
@@ -203,7 +186,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// ---------- Helpers ----------
 async function getUserByPhone(phone) {
   try {
     const [rows] = await db.query(
@@ -217,9 +199,6 @@ async function getUserByPhone(phone) {
   }
 }
 
-// ---------- Routes ----------
-
-// Health
 app.get("/health", async (_req, res) => {
   try {
     await db.query('SELECT 1');
@@ -230,7 +209,6 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-// Debug endpoint to check memory stores
 app.get("/debug/stores", (req, res) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(403).json({ message: "Not available in production" });
@@ -274,21 +252,18 @@ app.post("/signup", async (req, res) => {
       return res.status(400).json({ success: false, message: `Name must be at least 4 characters long` });
     }
 
-    // ✨ MODIFIED LOGIC: Check for a user with a 'completed' status
     const [existingUser] = await db.query(`SELECT id, signup_status FROM users WHERE phone = ?`, [phone]);
     
-    // Only block the signup if the user exists AND their status is 'completed'
     if (existingUser.length > 0 && existingUser[0].signup_status === 'completed') {
       return res.status(400).json({ success: false, message: `A user with this phone number already has a completed account.` });
     }
 
-    // If user is 'pending' or doesn't exist, we proceed by storing Stage 1 data
     const signupData = { name: name.trim(), college: college.trim(), gender };
     signupStore[phone] = signupData;
     
     return res.json({ success: true, message: `Signup data received. Please verify OTP.` });
   } catch (err) {
-    console.error("❌ /signup error:", err);
+    console.error(" /signup error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -315,7 +290,7 @@ app.post("/sendOtp", (req, res) => {
       });
     })
     .catch(err => {
-      console.error("❌ SMS Error:", err);
+      console.error(" SMS Error:", err);
       res.status(500).json({ success: false, message: "Failed to send SMS" });
     });
 });
@@ -343,9 +318,6 @@ app.post("/verifyOtp", async (req, res) => {
     }
     delete otpStore[phone];
 
-    // ✨ MODIFIED LOGIC: This query now handles both new and restarting users.
-    // It INSERTS a new user with status 'pending'.
-    // If the phone number already exists, it UPDATES their Stage 1 details instead.
     const query = `
       INSERT INTO users (name, college, phone, gender, password, created_at, signup_status) 
       VALUES (?, ?, ?, ?, '', NOW(), 'pending')
@@ -357,7 +329,6 @@ app.post("/verifyOtp", async (req, res) => {
 
     await db.query(query, [signupData.name, signupData.college, phone, signupData.gender]);
     
-    // Fetch the user's ID after the insert/update to ensure we have it
     const [userRows] = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
     const userId = userRows[0].id;
     
@@ -391,7 +362,6 @@ app.post("/savePassword", async (req, res) => {
       return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
     }
 
-    // CORRECTED: Hash the password before saving
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
     const [updateResult] = await db.query(`UPDATE users SET password = ? WHERE phone = ?`, [hashedPassword, phone]);
     
@@ -424,12 +394,9 @@ app.post("/login", async (req, res) => {
     const user = rows[0];
     let isPasswordValid = false;
 
-    // Check if password is already hashed (bcrypt hashes start with $2a$, $2b$, or $2y$)
     if (user.password.startsWith('$2') && user.password.length > 50) {
-      // It's a bcrypt hash, use bcrypt.compare
       isPasswordValid = await bcrypt.compare(password, user.password);
     } else {
-      // It's plain text, do direct comparison AND hash it for future use
       if (user.password === password) {
         isPasswordValid = true;
         // Update to hashed password for future logins
@@ -442,7 +409,6 @@ app.post("/login", async (req, res) => {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
 
-    // Remove password from response
     delete user.password;
     res.json({ success: true, message: "Login successful", user: { ...user, year: user.year || 0 } });
   } catch (err) {
@@ -476,23 +442,20 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       return res.status(404).json({ success: false, message: `User not found` });
     }
 
-    // ✨ NEW "GRADUATION" STEP: Mark the user as fully signed up.
     await db.query(`UPDATE users SET signup_status = 'completed' WHERE id = ?`, [userId]);
     
     const [rows] = await db.query(`SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, [userId]);
     res.json({ success: true, message: "Profile updated and signup complete!", user: rows[0] });
   } catch (err) {
-    console.error("❌ /updateProfile error:", err);
+    console.error(" /updateProfile error:", err);
     res.status(500).json({ success: false, message: `Internal Server Error` });
   }
 });
 
 app.post("/addTravelPlan", async (req, res) => {
   try {
-    // ✨ Now expecting latitude and longitude from the app
     const { userId, fromPlace, toPlace, time, toPlaceLat, toPlaceLng } = req.body;
 
-    // ✨ Updated validation to check for coordinates
     if (!userId || !fromPlace || !toPlace || !time || toPlaceLat === undefined || toPlaceLng === undefined) {
       return res.status(400).json({
         success: false,
@@ -502,7 +465,6 @@ app.post("/addTravelPlan", async (req, res) => {
     
     const formattedTime = new Date(time);
     
-    // ✨ Updated query to insert the new coordinate columns
     const query = `
       INSERT INTO travel_plans (user_id, from_place, to_place, time, status, to_place_lat, to_place_lng)
       VALUES (?, ?, ?, ?, 'Active', ?, ?)
@@ -514,7 +476,6 @@ app.post("/addTravelPlan", async (req, res) => {
         to_place_lat = VALUES(to_place_lat),
         to_place_lng = VALUES(to_place_lng)`;
         
-    // ✨ Updated parameters to include the new coordinate values
     const [result] = await db.query(query, [userId, fromPlace, toPlace, formattedTime, toPlaceLat, toPlaceLng]);
   
     let message = "Plan submitted successfully";
@@ -529,7 +490,7 @@ app.post("/addTravelPlan", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ Error saving travel plan:", err);
+    console.error(" Error saving travel plan:", err);
     res.status(500).json({
       success: false,
       message: "Database error"
@@ -566,7 +527,7 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
 
     res.json({ success: true, users: results || [] });
   } catch (err) {
-    console.error(`❌ Error fetching travel plan for user ${userId}:`, err);
+    console.error(` Error fetching travel plan for user ${userId}:`, err);
     res.status(500).json({
       success: false,
       message: "Database error",
@@ -590,17 +551,15 @@ app.get('/getMessages', async (req, res) => {
     `;
     const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
     
-    // Your logic for hiding messages remains the same
     const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
     const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
     const hiddenIds = hiddenMessages.map(h => h.message_id);
     const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
     
-    // ✨ Decrypt the visible messages before sending them to the client
     const decryptedMessages = visibleMessages.map(msg => {
         return {
-            ...msg, // Copy all original fields (id, sender_id, etc.)
-            message: decrypt(msg.message) // Overwrite the message field with the decrypted version
+            ...msg, 
+            message: decrypt(msg.message) 
         };
     });
     
@@ -616,7 +575,6 @@ app.post('/sendMessage', async (req, res) => {
   try {
     const { sender_id, receiver_id, message } = req.body;
     
-    // Block check logic remains the same
     const blockCheckQuery = `
       SELECT * FROM blocked_users
       WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
@@ -626,19 +584,16 @@ app.post('/sendMessage', async (req, res) => {
       return res.status(403).json({ success: false, message: 'This user cannot be messaged.' });
     }
     
-    // Validation remains the same
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'sender_id, receiver_id, and message are required' });
     }
 
-    // ✨ Encrypt the message before saving
     const encryptedMessage = encrypt(message);
     
     const query = `
       INSERT INTO messages (sender_id, receiver_id, message, timestamp)
       VALUES (?, ?, ?, NOW())
     `;
-    // Save the encrypted message to the database
     const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
     
     res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
@@ -648,7 +603,6 @@ app.post('/sendMessage', async (req, res) => {
   }
 });
 
-// In your index.js file
 
 app.get('/getChatUsers', async (req, res) => {
   try {
@@ -657,7 +611,6 @@ app.get('/getChatUsers', async (req, res) => {
       return res.status(400).json({ success: false, message: `userId is required` });
     }
     
-    // This query is now updated to exclude messages hidden by the current user
     const query = `
       SELECT DISTINCT
         u.id, u.name as username, u.college, u.profile_pic,
@@ -676,10 +629,8 @@ app.get('/getChatUsers', async (req, res) => {
           ) as rn
         FROM messages m
         
-        -- ✨ MODIFICATION: Join with hidden_messages to find messages hidden by the current user
         LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
         
-        -- ✨ MODIFICATION: Filter the main message pool to exclude hidden ones
         WHERE 
           (m.sender_id = ? OR m.receiver_id = ?) 
           AND hm.message_id IS NULL -- This ensures we only get messages that are NOT hidden
@@ -688,11 +639,9 @@ app.get('/getChatUsers', async (req, res) => {
       ORDER BY latest.last_timestamp DESC
     `;
     
-    // We now need to pass the userId 5 times to fill in all the '?' placeholders
     const params = [userId, userId, userId, userId, userId];
     const [rows] = await db.execute(query, params);
 
-    // Decrypt the last message for each chat before sending
     const decryptedChats = rows.map(chat => {
         return {
             ...chat,
@@ -739,7 +688,7 @@ app.post('/block', async (req, res) => {
     await db.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)', [blocker_id, blocked_id]);
     res.json({ success: true, message: 'User blocked successfully.' });
   } catch (err) {
-    console.error("❌ Error blocking user:", err);
+    console.error(" Error blocking user:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -753,7 +702,7 @@ app.post('/unblock', async (req, res) => {
     await db.query('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?', [blocker_id, blocked_id]);
     res.json({ success: true, message: 'User unblocked successfully.' });
   } catch (err) {
-    console.error("❌ Error unblocking user:", err);
+    console.error(" Error unblocking user:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -776,7 +725,7 @@ app.get('/checkBlockStatus', async (req, res) => {
       res.json({ success: true, isBlocked: false });
     }
   } catch (err) {
-    console.error("❌ Error checking block status:", err);
+    console.error(" Error checking block status:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -839,7 +788,7 @@ app.get("/getUsersGoing", async (req, res) => {
 
         res.json({ success: true, users: usersGoing });
     } catch (err) {
-        console.error("❌ Error fetching users going:", err);
+        console.error(" Error fetching users going:", err);
         res.status(500).json({ success: false, message: "Database error" });
     }
 });
@@ -848,7 +797,7 @@ app.get("/travel-plans/destinations", async (req, res) => {
   try {
     const query = `
       SELECT
-        ANY_VALUE(to_place) as destination, -- Selects one representative name from each group
+        ANY_VALUE(to_place) as destination,
         COUNT(user_id) as userCount
       FROM travel_plans
       WHERE 
@@ -856,17 +805,16 @@ app.get("/travel-plans/destinations", async (req, res) => {
         AND time > NOW() 
         AND to_place_lat IS NOT NULL 
         AND to_place_lng IS NOT NULL
-      -- ✨ THE FIX: Group by rounded coordinates to cluster nearby locations
       GROUP BY 
         ROUND(to_place_lat, 3), 
         ROUND(to_place_lng, 3)
       ORDER BY 
-        userCount DESC; -- Order by most popular destinations
+        userCount DESC; 
     `;
     const [destinations] = await db.query(query);
     res.json({ success: true, destinations: destinations || [] });
   } catch (err) {
-    console.error("❌ Error fetching travel plan destinations:", err);
+    console.error(" Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
   }
 });
@@ -920,104 +868,367 @@ router.get('/travel-plans/by-destination', async (req, res) => {
         res.json({ success: true, users: filteredUsers });
 
     } catch (error) {
-        console.error('❌ Error fetching users by destination:', error);
+        console.error(' Error fetching users by destination:', error);
         res.status(500).json({ success: false, message: 'Database error' });
     }
 });
 
-// In your index.js file
+// --- NEW TRIP HISTORY & FARE ROUTES START ---
 
-router.get('/tripHistory/:userId', async (req, res) => {
+// 1. GET endpoint to check for trips that need fare input
+router.get('/api/trips/needs-fare/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { page = 1, limit = 20 } = req.query;
+    
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
     }
 
-    // This update query remains the same and is correct.
-    const updateStatusQuery = `
-      UPDATE travel_plans SET status = 'Completed' 
-      WHERE user_id = ? AND status = 'Active' AND time < NOW()`;
-    await db.query(updateStatusQuery, [parseInt(userId)]);
+    // First, auto-update any active trips that have passed their time to 'completed'
+    const updateQuery = `
+      UPDATE travel_plans 
+      SET status = 'completed' 
+      WHERE user_id = ? 
+        AND status = 'Active' 
+        AND time < NOW()
+    `;
+    await db.query(updateQuery, [parseInt(userId)]);
+
+    // Now fetch trips that need fare
+    const query = `
+      SELECT 
+        id, 
+        from_place, 
+        to_place, 
+        time,
+        status
+      FROM travel_plans
+      WHERE user_id = ? 
+        AND status = 'completed' 
+        AND (fare IS NULL OR fare = 0)
+      ORDER BY time DESC
+      LIMIT 1
+    `;
+    
+    const [trips] = await db.query(query, [parseInt(userId)]);
+    
+    if (trips.length > 0) {
+      res.json({ 
+        success: true, 
+        needsFare: true,
+        trip: trips[0]
+      });
+    } else {
+      res.json({ 
+        success: true, 
+        needsFare: false,
+        trip: null
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error checking trips needing fare:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error checking trips needing fare' 
+    });
+  }
+});
+
+// 2. POST endpoint to save fare for a completed trip
+router.post('/api/trips/:tripId/fare', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { fare, userId } = req.body;
+
+    if (!tripId || isNaN(tripId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid trip ID' 
+      });
+    }
+
+    if (fare === undefined || fare === null || isNaN(fare)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Valid fare amount is required' 
+      });
+    }
+
+    // Verify the trip belongs to the user
+    const verifyQuery = `
+      SELECT id FROM travel_plans 
+      WHERE id = ? AND user_id = ?
+    `;
+    const [verifyResult] = await db.query(verifyQuery, [parseInt(tripId), parseInt(userId)]);
+
+    if (verifyResult.length === 0) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Trip not found or unauthorized' 
+      });
+    }
+
+    // Update the fare
+    const updateQuery = `
+      UPDATE travel_plans 
+      SET fare = ?, status = 'completed'
+      WHERE id = ?
+    `;
+    
+    const [result] = await db.query(updateQuery, [parseFloat(fare), parseInt(tripId)]);
+    
+    if (result.affectedRows > 0) {
+      res.json({ 
+        success: true, 
+        message: 'Fare saved successfully' 
+      });
+    } else {
+      res.status(404).json({ 
+        success: false, 
+        message: 'Trip not found' 
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error saving fare:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error saving fare' 
+    });
+  }
+});
+
+// 3. PATCH endpoint (alternative to POST) for updating fare
+router.patch('/api/trips/:tripId/fare', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { fare, userId } = req.body;
+
+    if (!tripId || isNaN(tripId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid trip ID' 
+      });
+    }
+
+    if (fare === undefined || fare === null || isNaN(fare)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Valid fare amount is required' 
+      });
+    }
+
+    // Verify the trip belongs to the user
+    const verifyQuery = `
+      SELECT id FROM travel_plans 
+      WHERE id = ? AND user_id = ?
+    `;
+    const [verifyResult] = await db.query(verifyQuery, [parseInt(tripId), parseInt(userId)]);
+
+    if (verifyResult.length === 0) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Trip not found or unauthorized' 
+      });
+    }
+
+    const updateQuery = `
+      UPDATE travel_plans 
+      SET fare = ?
+      WHERE id = ?
+    `;
+    
+    const [result] = await db.query(updateQuery, [parseFloat(fare), parseInt(tripId)]);
+    
+    if (result.affectedRows > 0) {
+      res.json({ 
+        success: true, 
+        message: 'Fare updated successfully' 
+      });
+    } else {
+      res.status(404).json({ 
+        success: false, 
+        message: 'Trip not found' 
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error updating fare:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error updating fare' 
+    });
+  }
+});
+
+// 4. GET endpoint to fetch ALL trips for a user (for Trip History screen)
+router.get('/api/trips/all/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { page = 1, limit = 50 } = req.query;
+    
+    if (!userId || isNaN(userId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid user ID' 
+      });
+    }
+
+    // First, auto-update any active trips that have passed
+    const updateQuery = `
+      UPDATE travel_plans 
+      SET status = 'completed' 
+      WHERE user_id = ? 
+        AND status = 'Active' 
+        AND time < NOW()
+    `;
+    await db.query(updateQuery, [parseInt(userId)]);
 
     const offset = (page - 1) * limit;
-    
-    // ✨ THIS QUERY IS THE FIX ✨
-    const historyQuery = `
-      SELECT
-        tp.id, 
-        tp.from_place, 
-        tp.to_place,
-        -- Changed CONVERT_TZ to a standard UTC format string
-        DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-        tp.fare, 
-        tp.status
-      FROM travel_plans tp
-      WHERE tp.user_id = ?
-      ORDER BY tp.time DESC
+
+    // Fetch all trips, sorted by time (newest first)
+    const tripsQuery = `
+      SELECT 
+        id,
+        from_place,
+        to_place,
+        DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as time,
+        fare,
+        status,
+        created_at
+      FROM travel_plans
+      WHERE user_id = ?
+      ORDER BY time DESC
       LIMIT ? OFFSET ?
     `;
-    const [trips] = await db.query(historyQuery, [parseInt(userId), parseInt(limit), parseInt(offset)]);
     
-    const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
+    const [trips] = await db.query(tripsQuery, [
+      parseInt(userId), 
+      parseInt(limit), 
+      parseInt(offset)
+    ]);
+
+    // Get total count for pagination
+    const countQuery = `
+      SELECT COUNT(*) as total 
+      FROM travel_plans 
+      WHERE user_id = ?
+    `;
     const [countResult] = await db.query(countQuery, [parseInt(userId)]);
     const totalTrips = countResult[0].total;
 
     res.json({
       success: true,
-      data: {
-        trips: trips,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(totalTrips / limit),
-          totalTrips: totalTrips,
-          hasMore: offset + trips.length < totalTrips
-        }
+      trips: trips,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages: Math.ceil(totalTrips / limit),
+        totalTrips: totalTrips,
+        hasMore: offset + trips.length < totalTrips
       }
     });
   } catch (error) {
-    console.error('Error fetching trip history:', error);
-    res.status(500).json({ success: false, message: 'Error fetching trip history' });
+    console.error('❌ Error fetching all trips:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching trips' 
+    });
   }
 });
 
-router.put('/trip/cancel/:tripId', async (req, res) => {
+// 5. GET endpoint for trip statistics
+router.get('/api/trips/stats/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId || isNaN(userId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid user ID' 
+      });
+    }
+
+    const statsQuery = `
+      SELECT 
+        COUNT(*) as total_trips,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
+        COUNT(CASE WHEN status = 'Cancelled' THEN 1 END) as cancelled_trips,
+        COUNT(CASE WHEN status = 'Active' THEN 1 END) as active_trips,
+        COALESCE(SUM(CASE WHEN status = 'completed' THEN fare ELSE 0 END), 0) as total_spent,
+        COALESCE(AVG(CASE WHEN status = 'completed' AND fare > 0 THEN fare END), 0) as avg_fare,
+        COUNT(DISTINCT to_place) as unique_destinations
+      FROM travel_plans
+      WHERE user_id = ?
+    `;
+    
+    const [stats] = await db.query(statsQuery, [parseInt(userId)]);
+
+    res.json({
+      success: true,
+      statistics: stats[0]
+    });
+  } catch (error) {
+    console.error('❌ Error fetching trip statistics:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching statistics' 
+    });
+  }
+});
+
+// 6. Endpoint to mark trip as "didn't go" (alternative to adding fare)
+router.post('/api/trips/:tripId/cancel', async (req, res) => {
   try {
     const { tripId } = req.params;
+    const { userId } = req.body;
+
     if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid trip ID' 
+      });
     }
-    const [result] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', parseInt(tripId)]);
+
+    // Verify the trip belongs to the user
+    const verifyQuery = `
+      SELECT id FROM travel_plans 
+      WHERE id = ? AND user_id = ?
+    `;
+    const [verifyResult] = await db.query(verifyQuery, [parseInt(tripId), parseInt(userId)]);
+
+    if (verifyResult.length === 0) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Trip not found or unauthorized' 
+      });
+    }
+
+    const updateQuery = `
+      UPDATE travel_plans 
+      SET status = 'Cancelled', fare = 0
+      WHERE id = ?
+    `;
+    
+    const [result] = await db.query(updateQuery, [parseInt(tripId)]);
+    
     if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Trip cancelled successfully' });
+      res.json({ 
+        success: true, 
+        message: 'Trip marked as cancelled' 
+      });
     } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
+      res.status(404).json({ 
+        success: false, 
+        message: 'Trip not found' 
+      });
     }
   } catch (error) {
-    console.error('Error cancelling trip:', error);
-    res.status(500).json({ success: false, message: 'Error cancelling trip' });
+    console.error('❌ Error cancelling trip:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error cancelling trip' 
+    });
   }
 });
 
-router.put('/trip/complete/:tripId', async (req, res) => {
-  try {
-    const { tripId } = req.params;
-    const { fare } = req.body;
-    if (!tripId || isNaN(tripId) || fare === undefined) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID or missing fare' });
-    }
-    const [result] = await db.query('UPDATE travel_plans SET fare = ? WHERE id = ?', [parseFloat(fare), parseInt(tripId)]);
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Trip fare updated successfully' });
-    } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
-  } catch (error) {
-    console.error('Error completing trip:', error);
-    res.status(500).json({ success: false, message: 'Error updating trip fare' });
-  }
-});
 
 router.delete('/tripHistory/:tripId', async (req, res) => {
   try {
@@ -1037,112 +1248,7 @@ router.delete('/tripHistory/:tripId', async (req, res) => {
   }
 });
 
-router.get('/checkCompletedTrips/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    const query = `
-      SELECT tp.id, tp.from_place, tp.to_place, tp.time, u.name as user_name
-      FROM travel_plans tp
-      LEFT JOIN users u ON tp.user_id = u.id
-      WHERE tp.user_id = ? AND tp.status = 'Active' AND tp.time < NOW()
-      ORDER BY tp.time DESC
-    `;
-
-    const [completedTrips] = await db.query(query, [parseInt(userId)]);
-    res.json({ success: true, data: completedTrips });
-  } catch (error) {
-    console.error('Error checking completed trips:', error);
-    res.status(500).json({ success: false, message: 'Error checking completed trips' });
-  }
-});
-
-router.put('/completeTrip/:tripId', async (req, res) => {
-  try {
-    const { tripId } = req.params;
-    const { fare, didGo } = req.body;
-
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
-    }
-
-    let updateQuery, queryParams;
-    if (didGo === true) {
-      updateQuery = 'UPDATE travel_plans SET status = ?, fare = ? WHERE id = ?';
-      queryParams = ['Completed', parseFloat(fare) || 0.00, parseInt(tripId)];
-    } else {
-      updateQuery = 'UPDATE travel_plans SET status = ? WHERE id = ?';
-      queryParams = ['Cancelled', parseInt(tripId)];
-    }
-
-    const [result] = await db.query(updateQuery, queryParams);
-    if (result.affectedRows > 0) {
-      const status = didGo ? 'completed' : 'marked as cancelled';
-      res.json({ success: true, message: `Trip ${status} successfully` });
-    } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
-  } catch (error) {
-    console.error('Error completing trip:', error);
-    res.status(500).json({ success: false, message: 'Error completing trip' });
-  }
-});
-
-router.post('/autoUpdateCompletedTrips', async (req, res) => {
-  try {
-    const updateQuery = `
-      UPDATE travel_plans
-      SET status = 'Completed'
-      WHERE status = 'Active' AND time < DATE_SUB(NOW(), INTERVAL 2 HOUR)
-    `;
-    const [result] = await db.query(updateQuery);
-    res.json({ success: true, message: `Updated ${result.affectedRows} overdue trips` });
-  } catch (error) {
-    console.error('Error auto-updating trips:', error);
-    res.status(500).json({ success: false, message: 'Error auto-updating trips' });
-  }
-});
-
-router.get('/tripStats/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    const statsQuery = `
-      SELECT
-        COUNT(*) as total_trips,
-        COUNT(DISTINCT to_place) as unique_destinations,
-        MIN(created_at) as first_trip_date,
-        MAX(created_at) as last_trip_date
-      FROM travel_plans
-      WHERE user_id = ?
-    `;
-    const [statsResult] = await db.query(statsQuery, [parseInt(userId)]);
-    
-    const destinationsQuery = `
-      SELECT to_place as destination, COUNT(*) as visit_count
-      FROM travel_plans
-      WHERE user_id = ?
-      GROUP BY to_place
-      ORDER BY visit_count DESC
-      LIMIT 5
-    `;
-    const [topDestinations] = await db.query(destinationsQuery, [parseInt(userId)]);
-
-    res.json({
-      success: true,
-      data: { statistics: statsResult[0], topDestinations: topDestinations }
-    });
-  } catch (error) {
-    console.error('Error fetching trip statistics:', error);
-    res.status(500).json({ success: false, message: 'Error fetching trip statistics' });
-  }
-});
+// --- NEW TRIP HISTORY & FARE ROUTES END ---
 
 app.get("/getUserByPhone", async (req, res) => {
   const phone = req.query.phone;
@@ -1157,7 +1263,7 @@ app.get("/getUserByPhone", async (req, res) => {
     const user = results[0];
     res.json({ success: true, userId: user.id, user });
   } catch (err) {
-    console.error("❌ /getUserByPhone error:", err);
+    console.error(" /getUserByPhone error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -1264,13 +1370,12 @@ router.get('/favorites/:userId', async (req, res) => {
         const [favorites] = await db.query(query, [userId]);
         res.json({ success: true, favorites: favorites });
     } catch (error) {
-        console.error('❌ Error fetching favorites:', error);
+        console.error(' Error fetching favorites:', error);
         res.status(500).json({ success: false, message: `Database error while fetching favorites.` });
     }
 });
 
 router.post('/favorites', async (req, res) => {
-    // ✨ Now expecting all coordinate fields
     const { userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
 
     if (!userId || !routeName || !fromPlace || !toPlace || fromPlaceLat === undefined || fromPlaceLng === undefined || toPlaceLat === undefined || toPlaceLng === undefined) {
@@ -1290,7 +1395,7 @@ router.post('/favorites', async (req, res) => {
             favoriteId: result.insertId
         });
     } catch (error) {
-        console.error('❌ Error adding favorite:', error);
+        console.error(' Error adding favorite:', error);
         res.status(500).json({ success: false, message: 'Database error while adding favorite.' });
     }
 });
@@ -1313,7 +1418,7 @@ router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
         }
 
     } catch (error) {
-        console.error('❌ Error deleting favorite:', error);
+        console.error(' Error deleting favorite:', error);
         res.status(500).json({ success: false, message: 'Database error while deleting favorite.' });
     }
 });
@@ -1331,17 +1436,15 @@ router.put('/settings/visibility', async (req, res) => {
         await db.query(query, [visibility, userId]);
         res.json({ success: true, message: 'Visibility updated successfully.' });
     } catch (error) {
-        console.error('❌ Error updating visibility:', error);
+        console.error(' Error updating visibility:', error);
         res.status(500).json({ success: false, message: 'Database error.' });
     }
 });
 
-// CORRECTED: Change Password Route - Fixed to match the API call from your Android app
 app.post('/change-password', async (req, res) => {
     try {
         const { userId, currentPassword, newPassword } = req.body;
 
-        // 1. Validate input
         if (!userId || !currentPassword || !newPassword) {
             return res.status(400).json({
                 success: false,
@@ -1349,7 +1452,6 @@ app.post('/change-password', async (req, res) => {
             });
         }
 
-        // Validate new password length
         if (newPassword.length < 6) {
             return res.status(400).json({
                 success: false,
@@ -1357,7 +1459,6 @@ app.post('/change-password', async (req, res) => {
             });
         }
 
-        // 2. Fetch the user's current password from the database
         const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
 
         if (rows.length === 0) {
@@ -1370,7 +1471,6 @@ app.post('/change-password', async (req, res) => {
         const user = rows[0];
         const currentHashedPassword = user.password;
 
-        // 3. Compare the provided currentPassword with the one in the database
         const isMatch = await bcrypt.compare(currentPassword, currentHashedPassword);
 
         if (!isMatch) {
@@ -1380,7 +1480,6 @@ app.post('/change-password', async (req, res) => {
             });
         }
 
-        // 4. Check if new password is different from current password
         const isSamePassword = await bcrypt.compare(newPassword, currentHashedPassword);
         
         if (isSamePassword) {
@@ -1390,18 +1489,16 @@ app.post('/change-password', async (req, res) => {
             });
         }
 
-        // 5. Hash the new password and update in database
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
         await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
 
-        // 6. Send success response
         res.json({ 
             success: true, 
             message: 'Password changed successfully' 
         });
 
     } catch (error) {
-        console.error('❌ Error changing password:', error);
+        console.error(' Error changing password:', error);
         res.status(500).json({ 
             success: false, 
             message: 'Internal server error' 
@@ -1418,17 +1515,15 @@ app.get('/api/online-users', (req, res) => {
     }));
     res.json({ success: true, onlineUsers: users });
   } catch (error) {
-    console.error('❌ Error getting online users:', error);
+    console.error(' Error getting online users:', error);
     res.status(500).json({ success: false, message: 'Error fetching online users' });
   }
 });
 
-// Check specific user's online status
 app.get('/api/user-status/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     
-    // Check in-memory first for real-time status
     const onlineData = onlineUsers.get(userId);
     if (onlineData) {
       return res.json({
@@ -1439,7 +1534,6 @@ app.get('/api/user-status/:userId', async (req, res) => {
       });
     }
 
-    // If not in memory, check database for last seen
     const [rows] = await db.query(
       'SELECT is_online, last_seen FROM user_presence WHERE user_id = ?',
       [userId]
@@ -1461,16 +1555,14 @@ app.get('/api/user-status/:userId', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('❌ Error checking user status:', error);
+    console.error(' Error checking user status:', error);
     res.status(500).json({ success: false, message: 'Error checking user status' });
   }
 });
 
-// Use router for all router-defined routes
 app.use(router);
 
-// ---------- Start Server ----------
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
 });
