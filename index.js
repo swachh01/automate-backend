@@ -730,6 +730,8 @@ app.get('/checkBlockStatus', async (req, res) => {
   }
 });
 
+
+
 app.get("/getUsersGoing", async (req, res) => {
     const { currentUserId } = req.query;
 
@@ -738,6 +740,7 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 
     try {
+        // Get friends list
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
@@ -748,6 +751,7 @@ app.get("/getUsersGoing", async (req, res) => {
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
 
+        // CRITICAL: Only fetch ACTIVE plans with future times
         const plansQuery = `
             SELECT
                 tp.user_id,
@@ -760,6 +764,8 @@ app.get("/getUsersGoing", async (req, res) => {
                 DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
             FROM travel_plans tp
             JOIN users u ON tp.user_id = u.id
+            WHERE tp.status = 'Active' 
+              AND tp.time > NOW()
             ORDER BY tp.time ASC
         `;
         const [rows] = await db.query(plansQuery);
@@ -788,7 +794,7 @@ app.get("/getUsersGoing", async (req, res) => {
 
         res.json({ success: true, users: usersGoing });
     } catch (err) {
-        console.error(" Error fetching users going:", err);
+        console.error("❌ Error fetching users going:", err);
         res.status(500).json({ success: false, message: "Database error" });
     }
 });
@@ -819,6 +825,7 @@ app.get("/travel-plans/destinations", async (req, res) => {
   }
 });
 
+
 router.get('/travel-plans/by-destination', async (req, res) => {
     const { destination, currentUserId } = req.query;
 
@@ -827,6 +834,7 @@ router.get('/travel-plans/by-destination', async (req, res) => {
     }
 
     try {
+        // Get friends list
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
@@ -837,6 +845,7 @@ router.get('/travel-plans/by-destination', async (req, res) => {
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
 
+        // CRITICAL: Only fetch ACTIVE plans with future times for this destination
         const plansQuery = `
             SELECT
                 u.id, u.name, u.college, u.gender, u.profile_pic, u.profile_visibility,
@@ -846,6 +855,8 @@ router.get('/travel-plans/by-destination', async (req, res) => {
             FROM travel_plans tp
             JOIN users u ON tp.user_id = u.id
             WHERE tp.to_place = ?
+              AND tp.status = 'Active'
+              AND tp.time > NOW()
             ORDER BY tp.time ASC
         `;
         const [users] = await db.query(plansQuery, [destination]);
@@ -868,14 +879,12 @@ router.get('/travel-plans/by-destination', async (req, res) => {
         res.json({ success: true, users: filteredUsers });
 
     } catch (error) {
-        console.error(' Error fetching users by destination:', error);
+        console.error('❌ Error fetching users by destination:', error);
         res.status(500).json({ success: false, message: 'Database error' });
     }
 });
 
-// --- NEW TRIP HISTORY & FARE ROUTES START ---
 
-// 1. GET endpoint to check for trips that need fare input
 router.get('/api/trips/needs-fare/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
