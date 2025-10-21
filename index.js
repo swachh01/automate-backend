@@ -847,6 +847,9 @@ router.get('/api/trips/stats/:userId', async (req, res) => {
 app.post("/addTravelPlan", async (req, res) => {
   try {
     const { userId, fromPlace, toPlace, time, toPlaceLat, toPlaceLng } = req.body;
+    console.log(`[DEBUG] Received 'time' from client: ${time}`);
+    const formattedTime = new Date(time);
+    console.log(`[DEBUG] Saving to DB as (UTC): ${formattedTime.toISOString()}`);
 
     if (!userId || !fromPlace || !toPlace || !time || toPlaceLat === undefined || toPlaceLng === undefined) {
       return res.status(400).json({
