@@ -1016,13 +1016,12 @@ router.get('/api/trips/needs-fare/:userId', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
     }
 
-    // CRITICAL FIX: Only auto-update trips that are past their time + 1 minute
     const updateQuery = `
       UPDATE travel_plans 
       SET status = 'completed' 
       WHERE user_id = ? 
         AND status = 'Active' 
-        AND time <= DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+        AND time <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE)
     `;
     const [updateResult] = await db.query(updateQuery, [parseInt(userId)]);
     
@@ -1092,7 +1091,7 @@ router.get('/api/trips/all/:userId', async (req, res) => {
       SET status = 'completed' 
       WHERE user_id = ? 
         AND status = 'Active' 
-        AND time <= DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+        AND time <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE)
     `;
     const [updateResult] = await db.query(updateQuery, [parseInt(userId)]);
     
