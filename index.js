@@ -242,6 +242,7 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
+
 app.post("/signup", async (req, res) => {
   try {
     const { name, college, gender, phone } = req.body || {};
@@ -498,43 +499,6 @@ app.post("/addTravelPlan", async (req, res) => {
   }
 });
 
-app.get("/getUserTravelPlan/:userId", async (req, res) => {
-  try {
-    const userId = req.params.userId;
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required"
-      });
-    }
-
-    const [results] = await db.query(
-      `SELECT
-        tp.id,
-        tp.from_place as fromPlace,
-        tp.to_place as toPlace,
-        tp.time,
-        u.name,
-        u.college,
-        u.gender,
-        u.profile_pic
-      FROM travel_plans tp
-      JOIN users u ON tp.user_id = u.id
-      WHERE tp.user_id = ? AND tp.time > NOW() AND tp.status = 'Active'
-      ORDER BY tp.time ASC`,
-      [userId]
-    );
-
-    res.json({ success: true, users: results || [] });
-  } catch (err) {
-    console.error(` Error fetching travel plan for user ${userId}:`, err);
-    res.status(500).json({
-      success: false,
-      message: "Database error",
-      users: []
-    });
-  }
-});
 
 app.get('/getMessages', async (req, res) => {
   try {
@@ -885,65 +849,7 @@ router.get('/travel-plans/by-destination', async (req, res) => {
 });
 
 
-router.get('/api/trips/needs-fare/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
 
-    // First, auto-update any active trips that have passed their time to 'completed'
-    const updateQuery = `
-      UPDATE travel_plans 
-      SET status = 'completed' 
-      WHERE user_id = ? 
-        AND status = 'Active' 
-        AND time < NOW()
-    `;
-    await db.query(updateQuery, [parseInt(userId)]);
-
-    // Now fetch trips that need fare
-    const query = `
-      SELECT 
-        id, 
-        from_place, 
-        to_place, 
-        time,
-        status
-      FROM travel_plans
-      WHERE user_id = ? 
-        AND status = 'completed' 
-        AND (fare IS NULL OR fare = 0)
-      ORDER BY time DESC
-      LIMIT 1
-    `;
-    
-    const [trips] = await db.query(query, [parseInt(userId)]);
-    
-    if (trips.length > 0) {
-      res.json({ 
-        success: true, 
-        needsFare: true,
-        trip: trips[0]
-      });
-    } else {
-      res.json({ 
-        success: true, 
-        needsFare: false,
-        trip: null
-      });
-    }
-  } catch (error) {
-    console.error('❌ Error checking trips needing fare:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error checking trips needing fare' 
-    });
-  }
-});
-
-// 2. POST endpoint to save fare for a completed trip
 router.post('/api/trips/:tripId/fare', async (req, res) => {
   try {
     const { tripId } = req.params;
@@ -1068,7 +974,116 @@ router.patch('/api/trips/:tripId/fare', async (req, res) => {
   }
 });
 
-// 4. GET endpoint to fetch ALL trips for a user (for Trip History screen)
+
+// ==========================================
+// FIXED: GET USER'S SCHEDULED (ACTIVE) TRIPS
+// ==========================================
+app.get("/getUserTravelPlan/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required"
+      });
+    }
+
+    // ONLY show Active trips that haven't happened yet
+    const [results] = await db.query(
+      `SELECT
+        tp.id,
+        tp.from_place as fromPlace,
+        tp.to_place as toPlace,
+        tp.time,
+        u.name,
+        u.college,
+        u.gender,
+        u.profile_pic
+      FROM travel_plans tp
+      JOIN users u ON tp.user_id = u.id
+      WHERE tp.user_id = ? 
+        AND tp.status = 'Active' 
+        AND tp.time > NOW()
+      ORDER BY tp.time ASC`,
+      [userId]
+    );
+
+    res.json({ success: true, users: results || [] });
+  } catch (err) {
+    console.error(`❌ Error fetching travel plan for user ${userId}:`, err);
+    res.status(500).json({
+      success: false,
+      message: "Database error",
+      users: []
+    });
+  }
+});
+
+// ==========================================
+// FIXED: CHECK IF USER NEEDS TO ADD FARE
+// ==========================================
+router.get('/api/trips/needs-fare/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId || isNaN(userId)) {
+      return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+
+    // CRITICAL FIX: Only auto-complete trips that are EXACTLY 1 minute past their time
+    // This prevents immediate completion and gives a 1-minute buffer
+    const updateQuery = `
+      UPDATE travel_plans 
+      SET status = 'completed' 
+      WHERE user_id = ? 
+        AND status = 'Active' 
+        AND time < DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+    `;
+    await db.query(updateQuery, [parseInt(userId)]);
+
+    // Now fetch the most recent completed trip that needs fare
+    const query = `
+      SELECT 
+        id, 
+        from_place, 
+        to_place, 
+        time,
+        status
+      FROM travel_plans
+      WHERE user_id = ? 
+        AND status = 'completed' 
+        AND (fare IS NULL OR fare = 0)
+      ORDER BY time DESC
+      LIMIT 1
+    `;
+    
+    const [trips] = await db.query(query, [parseInt(userId)]);
+    
+    if (trips.length > 0) {
+      res.json({ 
+        success: true, 
+        needsFare: true,
+        trip: trips[0]
+      });
+    } else {
+      res.json({ 
+        success: true, 
+        needsFare: false,
+        trip: null
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error checking trips needing fare:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error checking trips needing fare' 
+    });
+  }
+});
+
+// ==========================================
+// FIXED: GET ALL TRIPS (COMPLETE HISTORY)
+// ==========================================
 router.get('/api/trips/all/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1081,19 +1096,19 @@ router.get('/api/trips/all/:userId', async (req, res) => {
       });
     }
 
-    // First, auto-update any active trips that have passed
+    // CRITICAL FIX: Auto-update with 1-minute buffer
     const updateQuery = `
       UPDATE travel_plans 
       SET status = 'completed' 
       WHERE user_id = ? 
         AND status = 'Active' 
-        AND time < NOW()
+        AND time < DATE_SUB(NOW(), INTERVAL 1 MINUTE)
     `;
     await db.query(updateQuery, [parseInt(userId)]);
 
     const offset = (page - 1) * limit;
 
-    // Fetch all trips, sorted by time (newest first)
+    // Fetch ALL trips for this user (Active, completed, Cancelled)
     const tripsQuery = `
       SELECT 
         id,
@@ -1143,7 +1158,6 @@ router.get('/api/trips/all/:userId', async (req, res) => {
   }
 });
 
-// 5. GET endpoint for trip statistics
 router.get('/api/trips/stats/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
