@@ -836,21 +836,38 @@ router.get('/api/trips/stats/:userId', async (req, res) => {
   }
 });
 
-
 app.post("/addTravelPlan", async (req, res) => {
   try {
     const { userId, fromPlace, toPlace, time, toPlaceLat, toPlaceLng } = req.body;
-    console.log(`[DEBUG] Received 'time' from client: ${time}`);
-    console.log(`[DEBUG] Saving to DB as (UTC): ${formattedTime.toISOString()}`);
 
+    // 1. VALIDATE FIRST
     if (!userId || !fromPlace || !toPlace || !time || toPlaceLat === undefined || toPlaceLng === undefined) {
+      
+      // Log exactly what was missing
+      console.log(`[DEBUG] Validation Failed. Data received:`, req.body);
+      
       return res.status(400).json({
         success: false,
         message: "Missing required fields, including destination coordinates."
       });
     }
     
+    // 2. NOW that we know 'time' exists, we can safely log it
+    // =======================================================
+    console.log(`[DEBUG] Received 'time' from client: ${time}`);
     const formattedTime = new Date(time);
+    
+    // This check will prevent a crash if the time string is invalid
+    if (isNaN(formattedTime.getTime())) {
+      console.error(`[DEBUG] Invalid time format received: ${time}`);
+      return res.status(400).json({
+        success: false,
+        message: "Invalid time format provided."
+      });
+    }
+
+    console.log(`[DEBUG] Saving to DB as (UTC): ${formattedTime.toISOString()}`);
+    // =======================================================
     
     const query = `
       INSERT INTO travel_plans (user_id, from_place, to_place, time, status, to_place_lat, to_place_lng)
@@ -878,6 +895,10 @@ app.post("/addTravelPlan", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error saving travel plan:", err);
+    // Also log the invalid time if we get here
+    console.error(`[DEBUG] Error was likely caused by 'time' value: ${req.body.time}`);
+    
+    // THIS IS THE CORRECTED LINE:
     res.status(500).json({
       success: false,
       message: "Database error"
@@ -885,9 +906,6 @@ app.post("/addTravelPlan", async (req, res) => {
   }
 });
 
-// ==========================================
-// 2. GET USER'S SCHEDULED TRIPS (ACTIVE ONLY)
-// ==========================================
 app.get("/getUserTravelPlan/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
