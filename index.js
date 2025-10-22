@@ -1,7 +1,7 @@
 require("dotenv").config();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const bcrypt = require('bcrypt'); 
+const bcrypt = require('bcryptjs'); 
 
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
