@@ -771,6 +771,7 @@ app.get("/getUsersGoing", async (req, res) => {
                 DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
             FROM travel_plans tp
             JOIN users u ON tp.user_id = u.id
+            WHERE tp.status = 'Active'
             ORDER BY tp.time ASC
         `;
         const [rows] = await db.query(plansQuery);
@@ -856,7 +857,7 @@ router.get('/travel-plans/by-destination', async (req, res) => {
                 DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
             FROM travel_plans tp
             JOIN users u ON tp.user_id = u.id
-            WHERE tp.to_place = ?
+            WHERE tp.to_place = ? AND tp.status = 'Active'
             ORDER BY tp.time ASC
         `;
         const [users] = await db.query(plansQuery, [destination]);
