@@ -135,7 +135,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle user going offline manually
   socket.on('user_offline', async (userId) => {
     try {
       onlineUsers.delete(userId.toString());
