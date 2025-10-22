@@ -516,7 +516,7 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
         message: "User ID is required"
       });
     }
-
+      
     const [results] = await db.query(
       `SELECT
         tp.id,
@@ -528,21 +528,23 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
         u.gender,
         u.profile_pic
       FROM travel_plans tp
-      JOIN users u ON tp.user_id = u.id
-      WHERE tp.user_id = ? AND tp.time > NOW() AND tp.status = 'Active'
+      JOIN users u ON tp.user_id = u.id  
+      WHERE tp.user_id = ? 
+        AND tp.time > UTC_TIMESTAMP() 
+        AND tp.status = 'Active'
       ORDER BY tp.time ASC`,
       [userId]
     );
-
+      
     res.json({ success: true, users: results || [] });
   } catch (err) {
-    console.error(` Error fetching travel plan for user ${userId}:`, err);
+    console.error(`Error fetching travel plan for user ${userId}:`, err);
     res.status(500).json({
       success: false,
       message: "Database error",
       users: []
     });
-  }
+  }   
 });
 
 app.get('/getMessages', async (req, res) => {
