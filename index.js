@@ -111,16 +111,15 @@ io.on('connection', (socket) => {
 
       await updateUserPresence(userId, true);
 
-      // Broadcast to all other clients that this user is online
       socket.broadcast.emit('user_status_changed', {
         userId: userId.toString(),
         isOnline: true,
         lastSeen: new Date()
       });
 
-      console.log(` User ${userId} is now online`);
+      console.log(`✅ User ${userId} is now online`);
     } catch (error) {
-      console.error(' Error handling user_online:', error);
+      console.error('❌ Error handling user_online:', error);
     }
   });
 
@@ -135,9 +134,9 @@ io.on('connection', (socket) => {
         lastSeen: new Date()
       });
 
-      console.log(`User ${userId} manually went offline`);
+      console.log(`❌ User ${userId} manually went offline`);
     } catch (error) {
-      console.error(' Error handling user_offline:', error);
+      console.error('❌ Error handling user_offline:', error);
     }
   });
 
@@ -162,7 +161,7 @@ io.on('connection', (socket) => {
           lastSeen: new Date()
         });
 
-        console.log(` User ${disconnectedUserId} disconnected`);
+        console.log(`❌ User ${disconnectedUserId} disconnected`);
       }
     } catch (error) {
       console.error('❌ Error handling disconnect:', error);
@@ -242,7 +241,6 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-
 app.post("/signup", async (req, res) => {
   try {
     const { name, college, gender, phone } = req.body || {};
@@ -264,7 +262,7 @@ app.post("/signup", async (req, res) => {
     
     return res.json({ success: true, message: `Signup data received. Please verify OTP.` });
   } catch (err) {
-    console.error(" /signup error:", err);
+    console.error("❌ /signup error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -275,7 +273,7 @@ app.post("/sendOtp", (req, res) => {
     return res.status(400).json({ success: false, message: `Phone required` });
   }
   const otp = Math.floor(1000 + Math.random() * 9000);
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+  const expiresAt = Date.now() + 5 * 60 * 1000;
   otpStore[phone] = { otp: otp.toString(), expires: expiresAt };
   client.messages
     .create({
@@ -291,7 +289,7 @@ app.post("/sendOtp", (req, res) => {
       });
     })
     .catch(err => {
-      console.error(" SMS Error:", err);
+      console.error("❌ SMS Error:", err);
       res.status(500).json({ success: false, message: "Failed to send SMS" });
     });
 });
@@ -400,7 +398,6 @@ app.post("/login", async (req, res) => {
     } else {
       if (user.password === password) {
         isPasswordValid = true;
-        // Update to hashed password for future logins
         const hashedPassword = await bcrypt.hash(password, saltRounds);
         await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
       }
@@ -448,11 +445,94 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     const [rows] = await db.query(`SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, [userId]);
     res.json({ success: true, message: "Profile updated and signup complete!", user: rows[0] });
   } catch (err) {
-    console.error(" /updateProfile error:", err);
+    console.error("❌ /updateProfile error:", err);
     res.status(500).json({ success: false, message: `Internal Server Error` });
   }
 });
 
+app.post("/addTravelPlan", async (req, res) => {
+  try {
+    const { userId, fromPlace, toPlace, time, toPlaceLat, toPlaceLng } = req.body;
+
+    if (!userId || !fromPlace || !toPlace || !time || toPlaceLat === undefined || toPlaceLng === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields, including destination coordinates."
+      });
+    }
+    
+    const formattedTime = new Date(time);
+    
+    const query = `
+      INSERT INTO travel_plans (user_id, from_place, to_place, time, status, to_place_lat, to_place_lng)
+      VALUES (?, ?, ?, ?, 'Active', ?, ?)
+      ON DUPLICATE KEY UPDATE
+        from_place = VALUES(from_place),
+        to_place = VALUES(to_place),
+        time = VALUES(time),
+        status = 'Active',
+        to_place_lat = VALUES(to_place_lat),
+        to_place_lng = VALUES(to_place_lng)`;
+        
+    const [result] = await db.query(query, [userId, fromPlace, toPlace, formattedTime, toPlaceLat, toPlaceLng]);
+  
+    let message = "Plan submitted successfully";
+    if (result.affectedRows > 1) {
+      message = "Plan updated successfully";
+    }
+        
+    res.json({
+      success: true,
+      message: message,
+      id: result.insertId
+    });
+
+  } catch (err) {
+    console.error("❌ Error saving travel plan:", err);
+    res.status(500).json({
+      success: false,
+      message: "Database error"
+    });
+  }
+});
+
+app.get("/getUserTravelPlan/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required"
+      });
+    }
+
+    const [results] = await db.query(
+      `SELECT
+        tp.id,
+        tp.from_place as fromPlace,
+        tp.to_place as toPlace,
+        tp.time,
+        u.name,
+        u.college,
+        u.gender,
+        u.profile_pic
+      FROM travel_plans tp
+      JOIN users u ON tp.user_id = u.id
+      WHERE tp.user_id = ? AND tp.time > NOW() AND tp.status = 'Active'
+      ORDER BY tp.time ASC`,
+      [userId]
+    );
+
+    res.json({ success: true, users: results || [] });
+  } catch (err) {
+    console.error(`❌ Error fetching travel plan for user ${userId}:`, err);
+    res.status(500).json({
+      success: false,
+      message: "Database error",
+      users: []
+    });
+  }
+});
 
 app.get('/getMessages', async (req, res) => {
   try {
@@ -475,10 +555,10 @@ app.get('/getMessages', async (req, res) => {
     const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
     
     const decryptedMessages = visibleMessages.map(msg => {
-        return {
-            ...msg, 
-            message: decrypt(msg.message) 
-        };
+      return {
+        ...msg, 
+        message: decrypt(msg.message) 
+      };
     });
     
     res.json({ success: true, messages: decryptedMessages });
@@ -487,7 +567,6 @@ app.get('/getMessages', async (req, res) => {
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
-
 
 app.post('/sendMessage', async (req, res) => {
   try {
@@ -521,7 +600,6 @@ app.post('/sendMessage', async (req, res) => {
   }
 });
 
-
 app.get('/getChatUsers', async (req, res) => {
   try {
     const { userId } = req.query;
@@ -546,13 +624,10 @@ app.get('/getChatUsers', async (req, res) => {
             ORDER BY m.timestamp DESC
           ) as rn
         FROM messages m
-        
         LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
-        
         WHERE 
           (m.sender_id = ? OR m.receiver_id = ?) 
-          AND hm.message_id IS NULL -- This ensures we only get messages that are NOT hidden
-          
+          AND hm.message_id IS NULL
       ) latest ON u.id = latest.other_user_id AND latest.rn = 1
       ORDER BY latest.last_timestamp DESC
     `;
@@ -561,16 +636,16 @@ app.get('/getChatUsers', async (req, res) => {
     const [rows] = await db.execute(query, params);
 
     const decryptedChats = rows.map(chat => {
-        return {
-            ...chat,
-            lastMessage: decrypt(chat.lastMessage)
-        };
+      return {
+        ...chat,
+        lastMessage: decrypt(chat.lastMessage)
+      };
     });
 
     res.json({ success: true, chats: decryptedChats || [] });
 
   } catch (error) {
-    console.error('Error fetching chat users:', error);
+    console.error('❌ Error fetching chat users:', error);
     res.status(500).json({ success: false, message: `Failed to fetch chat users` });
   }
 });
@@ -592,7 +667,7 @@ app.post("/deleteMessageForMe", async (req, res) => {
     await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, [messageId, userId]);
     res.json({ success: true, message: "Message hidden successfully" });
   } catch (error) {
-    console.error('Error in /deleteMessageForMe:', error);
+    console.error('❌ Error in /deleteMessageForMe:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -606,7 +681,7 @@ app.post('/block', async (req, res) => {
     await db.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)', [blocker_id, blocked_id]);
     res.json({ success: true, message: 'User blocked successfully.' });
   } catch (err) {
-    console.error(" Error blocking user:", err);
+    console.error("❌ Error blocking user:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -620,7 +695,7 @@ app.post('/unblock', async (req, res) => {
     await db.query('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?', [blocker_id, blocked_id]);
     res.json({ success: true, message: 'User unblocked successfully.' });
   } catch (err) {
-    console.error(" Error unblocking user:", err);
+    console.error("❌ Error unblocking user:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
@@ -643,11 +718,72 @@ app.get('/checkBlockStatus', async (req, res) => {
       res.json({ success: true, isBlocked: false });
     }
   } catch (err) {
-    console.error(" Error checking block status:", err);
+    console.error("❌ Error checking block status:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
 });
 
+app.get("/getUsersGoing", async (req, res) => {
+  const { currentUserId } = req.query;
+
+  if (!currentUserId) {
+    return res.status(400).json({ success: false, message: 'Current user ID is required.' });
+  }
+
+  try {
+    const friendsQuery = `
+      SELECT DISTINCT
+        CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
+      FROM messages
+      WHERE sender_id = ? OR receiver_id = ?
+    `;
+    const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+    const friendIds = new Set(friendRows.map(row => row.friend_id));
+    friendIds.add(parseInt(currentUserId));
+
+    const plansQuery = `
+      SELECT
+        tp.user_id,
+        u.name,
+        u.profile_pic,
+        u.gender,
+        u.profile_visibility,
+        tp.from_place as fromPlace,
+        tp.to_place as toPlace,
+        DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
+      FROM travel_plans tp
+      JOIN users u ON tp.user_id = u.id
+      ORDER BY tp.time ASC
+    `;
+    const [rows] = await db.query(plansQuery);
+
+    const usersGoing = rows.map(user => {
+      let finalProfilePic = user.profile_pic;
+
+      if (user.profile_visibility === 'none') {
+        finalProfilePic = 'default';
+      } else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
+        finalProfilePic = 'default';
+      }
+
+      return {
+        id: user.user_id,
+        userId: user.user_id,
+        name: user.name,
+        fromPlace: user.fromPlace,
+        toPlace: user.toPlace,
+        time: user.time,
+        gender: user.gender,
+        profile_pic: finalProfilePic
+      };
+    });
+
+    res.json({ success: true, users: usersGoing });
+  } catch (err) {
+    console.error("❌ Error fetching users going:", err);
+    res.status(500).json({ success: false, message: "Database error" });
+  }
+});
 
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
@@ -665,650 +801,166 @@ app.get("/travel-plans/destinations", async (req, res) => {
         ROUND(to_place_lat, 3), 
         ROUND(to_place_lng, 3)
       ORDER BY 
-        userCount DESC; 
+        userCount DESC
     `;
     const [destinations] = await db.query(query);
     res.json({ success: true, destinations: destinations || [] });
   } catch (err) {
-    console.error(" Error fetching travel plan destinations:", err);
+    console.error("❌ Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
   }
 });
 
-
 router.get('/travel-plans/by-destination', async (req, res) => {
-    const { destination, currentUserId } = req.query;
+  const { destination, currentUserId } = req.query;
 
-    if (!destination || !currentUserId) {
-        return res.status(400).json({ success: false, message: 'Destination and currentUserId are required.' });
-    }
-
-    try {
-        // Get friends list
-        const friendsQuery = `
-            SELECT DISTINCT
-                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
-            FROM messages
-            WHERE sender_id = ? OR receiver_id = ?
-        `;
-        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
-        const friendIds = new Set(friendRows.map(row => row.friend_id));
-        friendIds.add(parseInt(currentUserId));
-
-        // CRITICAL: Only fetch ACTIVE plans with future times for this destination
-        const plansQuery = `
-            SELECT
-                u.id, u.name, u.college, u.gender, u.profile_pic, u.profile_visibility,
-                tp.from_place as fromPlace,
-                tp.to_place as toPlace,
-                DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
-            FROM travel_plans tp
-            JOIN users u ON tp.user_id = u.id
-            WHERE tp.to_place = ?
-              AND tp.status = 'Active'
-              AND tp.time > NOW()
-            ORDER BY tp.time ASC
-        `;
-        const [users] = await db.query(plansQuery, [destination]);
-
-        const filteredUsers = users.map(user => {
-            let finalProfilePic = user.profile_pic;
-
-            if (user.profile_visibility === 'none') {
-                finalProfilePic = 'default';
-            } else if (user.profile_visibility === 'friends' && !friendIds.has(user.id)) {
-                finalProfilePic = 'default';
-            }
-
-            return {
-                ...user,
-                profile_pic: finalProfilePic
-            };
-        });
-
-        res.json({ success: true, users: filteredUsers });
-
-    } catch (error) {
-        console.error('❌ Error fetching users by destination:', error);
-        res.status(500).json({ success: false, message: 'Database error' });
-    }
-});
-
-
-router.patch('/api/trips/:tripId/fare', async (req, res) => {
-  try {
-    const { tripId } = req.params;
-    const { fare, userId } = req.body;
-
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid trip ID' 
-      });
-    }
-
-    if (fare === undefined || fare === null || isNaN(fare)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Valid fare amount is required' 
-      });
-    }
-
-    // Verify the trip belongs to the user
-    const verifyQuery = `
-      SELECT id FROM travel_plans 
-      WHERE id = ? AND user_id = ?
-    `;
-    const [verifyResult] = await db.query(verifyQuery, [parseInt(tripId), parseInt(userId)]);
-
-    if (verifyResult.length === 0) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Trip not found or unauthorized' 
-      });
-    }
-
-    const updateQuery = `
-      UPDATE travel_plans 
-      SET fare = ?
-      WHERE id = ?
-    `;
-    
-    const [result] = await db.query(updateQuery, [parseFloat(fare), parseInt(tripId)]);
-    
-    if (result.affectedRows > 0) {
-      res.json({ 
-        success: true, 
-        message: 'Fare updated successfully' 
-      });
-    } else {
-      res.status(404).json({ 
-        success: false, 
-        message: 'Trip not found' 
-      });
-    }
-  } catch (error) {
-    console.error('❌ Error updating fare:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error updating fare' 
-    });
+  if (!destination || !currentUserId) {
+    return res.status(400).json({ success: false, message: 'Destination and currentUserId are required.' });
   }
-});
 
-
-router.get('/api/trips/stats/:userId', async (req, res) => {
   try {
-    const { userId } = req.params;
-    
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid user ID' 
-      });
-    }
-
-    const statsQuery = `
-      SELECT 
-        COUNT(*) as total_trips,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
-        COUNT(CASE WHEN status = 'Cancelled' THEN 1 END) as cancelled_trips,
-        COUNT(CASE WHEN status = 'Active' THEN 1 END) as active_trips,
-        COALESCE(SUM(CASE WHEN status = 'completed' THEN fare ELSE 0 END), 0) as total_spent,
-        COALESCE(AVG(CASE WHEN status = 'completed' AND fare > 0 THEN fare END), 0) as avg_fare,
-        COUNT(DISTINCT to_place) as unique_destinations
-      FROM travel_plans
-      WHERE user_id = ?
+    const friendsQuery = `
+      SELECT DISTINCT
+        CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
+      FROM messages
+      WHERE sender_id = ? OR receiver_id = ?
     `;
-    
-    const [stats] = await db.query(statsQuery, [parseInt(userId)]);
+    const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+    const friendIds = new Set(friendRows.map(row => row.friend_id));
+    friendIds.add(parseInt(currentUserId));
 
-    res.json({
-      success: true,
-      statistics: stats[0]
-    });
-  } catch (error) {
-    console.error('❌ Error fetching trip statistics:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error fetching statistics' 
-    });
-  }
-});
-
-app.post("/addTravelPlan", async (req, res) => {
-  try {
-    const { userId, fromPlace, toPlace, time, toPlaceLat, toPlaceLng } = req.body;
-
-    // 1. VALIDATE FIRST
-    if (!userId || !fromPlace || !toPlace || !time || toPlaceLat === undefined || toPlaceLng === undefined) {
-      
-      // Log exactly what was missing
-      console.log(`[DEBUG] Validation Failed. Data received:`, req.body);
-      
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields, including destination coordinates."
-      });
-    }
-    
-    // 2. NOW that we know 'time' exists, we can safely log it
-    // =======================================================
-    console.log(`[DEBUG] Received 'time' from client: ${time}`);
-    const formattedTime = new Date(time);
-    
-    // This check will prevent a crash if the time string is invalid
-    if (isNaN(formattedTime.getTime())) {
-      console.error(`[DEBUG] Invalid time format received: ${time}`);
-      return res.status(400).json({
-        success: false,
-        message: "Invalid time format provided."
-      });
-    }
-
-    console.log(`[DEBUG] Saving to DB as (UTC): ${formattedTime.toISOString()}`);
-    // =======================================================
-    
-    const query = `
-      INSERT INTO travel_plans (user_id, from_place, to_place, time, status, to_place_lat, to_place_lng)
-      VALUES (?, ?, ?, ?, 'Active', ?, ?)
-      ON DUPLICATE KEY UPDATE
-        from_place = VALUES(from_place),
-        to_place = VALUES(to_place),
-        time = VALUES(time),
-        status = 'Active',
-        to_place_lat = VALUES(to_place_lat),
-        to_place_lng = VALUES(to_place_lng)`;
-        
-    const [result] = await db.query(query, [userId, fromPlace, toPlace, formattedTime, toPlaceLat, toPlaceLng]);
-  
-    let message = "Plan submitted successfully";
-    if (result.affectedRows > 1) {
-      message = "Plan updated successfully";
-    }
-        
-    res.json({
-        success: true,
-        message: message,
-        id: result.insertId
-    });
-
-  } catch (err) {
-    console.error("❌ Error saving travel plan:", err);
-    // Also log the invalid time if we get here
-    console.error(`[DEBUG] Error was likely caused by 'time' value: ${req.body.time}`);
-    
-    // THIS IS THE CORRECTED LINE:
-    res.status(500).json({
-      success: false,
-      message: "Database error"
-    });
-  }
-});
-
-app.get("/getUserTravelPlan/:userId", async (req, res) => {
-  try {
-    const userId = req.params.userId;
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required"
-      });
-    }
-
-    // CRITICAL: DO NOT auto-update here - just show Active trips
-    const [results] = await db.query(
-      `SELECT
-        tp.id,
+    const plansQuery = `
+      SELECT
+        u.id, u.name, u.college, u.gender, u.profile_pic, u.profile_visibility,
         tp.from_place as fromPlace,
         tp.to_place as toPlace,
-        tp.time,
-        tp.status,
-        u.name,
-        u.college,
-        u.gender,
-        u.profile_pic
+        DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
       FROM travel_plans tp
       JOIN users u ON tp.user_id = u.id
-      WHERE tp.user_id = ? 
-        AND tp.status = 'Active'
-      ORDER BY tp.time ASC`,
-      [userId]
-    );
+      WHERE tp.to_place = ?
+      ORDER BY tp.time ASC
+    `;
+    const [users] = await db.query(plansQuery, [destination]);
 
-    res.json({ success: true, users: results || [] });
-  } catch (err) {
-    console.error(`❌ Error fetching scheduled trips for user ${userId}:`, err);
-    res.status(500).json({
-      success: false,
-      message: "Database error",
-      users: []
+    const filteredUsers = users.map(user => {
+      let finalProfilePic = user.profile_pic;
+
+      if (user.profile_visibility === 'none') {
+        finalProfilePic = 'default';
+      } else if (user.profile_visibility === 'friends' && !friendIds.has(user.id)) {
+        finalProfilePic = 'default';
+      }
+
+      return {
+        ...user,
+        profile_pic: finalProfilePic
+      };
     });
+
+    res.json({ success: true, users: filteredUsers });
+
+  } catch (error) {
+    console.error('❌ Error fetching users by destination:', error);
+    res.status(500).json({ success: false, message: 'Database error' });
   }
 });
 
-// ==========================================
-// 3. GET USERS GOING (For "See Who's Going" screen)
-// ==========================================
-app.get("/getUsersGoing", async (req, res) => {
-    const { currentUserId } = req.query;
-
-    if (!currentUserId) {
-        return res.status(400).json({ success: false, message: 'Current user ID is required.' });
-    }
-
-    try {
-        // Get friends list
-        const friendsQuery = `
-            SELECT DISTINCT
-                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
-            FROM messages
-            WHERE sender_id = ? OR receiver_id = ?
-        `;
-        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
-        const friendIds = new Set(friendRows.map(row => row.friend_id));
-        friendIds.add(parseInt(currentUserId));
-
-        // CRITICAL: Only fetch ACTIVE plans (do NOT auto-update here)
-        const plansQuery = `
-            SELECT
-                tp.user_id,
-                u.name,
-                u.profile_pic,
-                u.gender,
-                u.profile_visibility,
-                tp.from_place as fromPlace,
-                tp.to_place as toPlace,
-                DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time,
-                tp.status
-            FROM travel_plans tp
-            JOIN users u ON tp.user_id = u.id
-            WHERE tp.status = 'Active'
-            ORDER BY tp.time ASC
-        `;
-        const [rows] = await db.query(plansQuery);
-
-        const usersGoing = rows.map(user => {
-            let finalProfilePic = user.profile_pic;
-
-            if (user.profile_visibility === 'none') {
-                finalProfilePic = 'default';
-            } 
-            else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
-                finalProfilePic = 'default';
-            }
-
-            return {
-                id: user.user_id,
-                userId: user.user_id,
-                name: user.name,
-                fromPlace: user.fromPlace,
-                toPlace: user.toPlace,
-                time: user.time,
-                gender: user.gender,
-                profile_pic: finalProfilePic,
-                status: user.status
-            };
-        });
-
-        res.json({ success: true, users: usersGoing });
-    } catch (err) {
-        console.error("❌ Error fetching users going:", err);
-        res.status(500).json({ success: false, message: "Database error" });
-    }
-});
-
-// ==========================================
-// 4. CHECK IF TRIP NEEDS FARE (Called on homepage)
-// ==========================================
-router.get('/api/trips/needs-fare/:userId', async (req, res) => {
+router.get('/tripHistory/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    
+    const { page = 1, limit = 20 } = req.query;
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
     }
 
-    const updateQuery = `
-      UPDATE travel_plans 
-      SET status = 'completed' 
-      WHERE user_id = ? 
-        AND status = 'Active' 
-        AND time <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE)
-    `;
-    const [updateResult] = await db.query(updateQuery, [parseInt(userId)]);
-    
-    if (updateResult.affectedRows > 0) {
-      console.log(`✅ Auto-completed ${updateResult.affectedRows} trip(s) for user ${userId}`);
-    }
-
-    // Now fetch completed trips that need fare
-    const query = `
-      SELECT 
-        id, 
-        from_place, 
-        to_place, 
-        time,
-        status,
-        fare
-      FROM travel_plans
-      WHERE user_id = ? 
-        AND status = 'completed' 
-        AND (fare IS NULL OR fare = 0)
-      ORDER BY time DESC
-      LIMIT 1
-    `;
-    
-    const [trips] = await db.query(query, [parseInt(userId)]);
-    
-    if (trips.length > 0) {
-      res.json({ 
-        success: true, 
-        needsFare: true,
-        trip: trips[0]
-      });
-    } else {
-      res.json({ 
-        success: true, 
-        needsFare: false,
-        trip: null
-      });
-    }
-  } catch (error) {
-    console.error('❌ Error checking trips needing fare:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error checking trips needing fare' 
-    });
-  }
-});
-
-// ==========================================
-// 5. GET ALL TRIPS (Trip History Screen)
-// ==========================================
-router.get('/api/trips/all/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { page = 1, limit = 50 } = req.query;
-    
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid user ID' 
-      });
-    }
-
-    // CRITICAL FIX: Auto-update with 1-minute buffer
-    const updateQuery = `
-      UPDATE travel_plans 
-      SET status = 'completed' 
-      WHERE user_id = ? 
-        AND status = 'Active' 
-        AND time <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE)
-    `;
-    const [updateResult] = await db.query(updateQuery, [parseInt(userId)]);
-    
-    if (updateResult.affectedRows > 0) {
-      console.log(`✅ Auto-completed ${updateResult.affectedRows} trip(s) for user ${userId}`);
-    }
+    const updateStatusQuery = `
+      UPDATE travel_plans SET status = 'Completed' 
+      WHERE user_id = ? AND status = 'Active' AND time < NOW()`;
+    await db.query(updateStatusQuery, [parseInt(userId)]);
 
     const offset = (page - 1) * limit;
-
-    // Fetch ALL trips for this user
-    const tripsQuery = `
-      SELECT 
-        id,
-        from_place,
-        to_place,
-        DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as time,
-        fare,
-        status,
-        created_at
-      FROM travel_plans
-      WHERE user_id = ?
-      ORDER BY time DESC
+    
+    const historyQuery = `
+      SELECT
+        tp.id, 
+        tp.from_place, 
+        tp.to_place,
+        DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+        tp.fare, 
+        tp.status
+      FROM travel_plans tp
+      WHERE tp.user_id = ?
+      ORDER BY tp.time DESC
       LIMIT ? OFFSET ?
     `;
+    const [trips] = await db.query(historyQuery, [parseInt(userId), parseInt(limit), parseInt(offset)]);
     
-    const [trips] = await db.query(tripsQuery, [
-      parseInt(userId), 
-      parseInt(limit), 
-      parseInt(offset)
-    ]);
-
-    // Get total count
-    const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM travel_plans 
-      WHERE user_id = ?
-    `;
+    const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
     const [countResult] = await db.query(countQuery, [parseInt(userId)]);
     const totalTrips = countResult[0].total;
 
     res.json({
       success: true,
-      trips: trips,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(totalTrips / limit),
-        totalTrips: totalTrips,
-        hasMore: offset + trips.length < totalTrips
+      data: {
+        trips: trips,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalTrips / limit),
+          totalTrips: totalTrips,
+          hasMore: offset + trips.length < totalTrips
+        }
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching all trips:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error fetching trips' 
-    });
+    console.error('❌ Error fetching trip history:', error);
+    res.status(500).json({ success: false, message: 'Error fetching trip history' });
   }
 });
 
-// ==========================================
-// 6. SAVE TRIP FARE
-// ==========================================
-router.post('/api/trips/:tripId/fare', async (req, res) => {
+router.put('/trip/cancel/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
-    const { fare, userId } = req.body;
-
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid trip ID' 
-      });
-    }
-
-    if (fare === undefined || fare === null || isNaN(fare)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Valid fare amount is required' 
-      });
-    }
-
-    // Verify ownership
-    const verifyQuery = `
-      SELECT id, status FROM travel_plans 
-      WHERE id = ? AND user_id = ?
-    `;
-    const [verifyResult] = await db.query(verifyQuery, [parseInt(tripId), parseInt(userId)]);
-
-    if (verifyResult.length === 0) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Trip not found or unauthorized' 
-      });
-    }
-
-    // Update fare and ensure status is completed
-    const updateQuery = `
-      UPDATE travel_plans 
-      SET fare = ?, status = 'completed'
-      WHERE id = ?
-    `;
-    
-    const [result] = await db.query(updateQuery, [parseFloat(fare), parseInt(tripId)]);
-    
-    if (result.affectedRows > 0) {
-      res.json({ 
-        success: true, 
-        message: 'Fare saved successfully' 
-      });
-    } else {
-      res.status(404).json({ 
-        success: false, 
-        message: 'Trip not found' 
-      });
-    }
-  } catch (error) {
-    console.error('❌ Error saving fare:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error saving fare' 
-    });
-  }
-});
-
-// ==========================================
-// 7. CANCEL TRIP
-// ==========================================
-router.post('/api/trips/:tripId/cancel', async (req, res) => {
-  try {
-    const { tripId } = req.params;
-    const { userId } = req.body;
-
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid trip ID' 
-      });
-    }
-
-    // Verify ownership
-    const verifyQuery = `
-      SELECT id FROM travel_plans 
-      WHERE id = ? AND user_id = ?
-    `;
-    const [verifyResult] = await db.query(verifyQuery, [parseInt(tripId), parseInt(userId)]);
-
-    if (verifyResult.length === 0) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Trip not found or unauthorized' 
-      });
-    }
-
-    // Mark as cancelled
-    const updateQuery = `
-      UPDATE travel_plans 
-      SET status = 'Cancelled', fare = 0
-      WHERE id = ?
-    `;
-    
-    const [result] = await db.query(updateQuery, [parseInt(tripId)]);
-    
-    if (result.affectedRows > 0) {
-      res.json({ 
-        success: true, 
-        message: 'Trip marked as cancelled' 
-      });
-    } else {
-      res.status(404).json({ 
-        success: false, 
-        message: 'Trip not found' 
-      });
-    }
-  } catch (error) {
-    console.error('❌ Error cancelling trip:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error cancelling trip' 
-    });
-  }
-});
-
-// ==========================================
-// 8. DELETE TRIP (Permanent deletion)
-// ==========================================
-router.delete('/tripHistory/:tripId', async (req, res) => {
-  try {
-    const { tripId } = req.params;
-    const { userId } = req.body; // You should add userId to verify ownership
-    
     if (!tripId || isNaN(tripId)) {
       return res.status(400).json({ success: false, message: 'Invalid trip ID' });
     }
-    
-    // IMPORTANT: Verify the trip belongs to the user before deleting
-    const verifyQuery = `SELECT id FROM travel_plans WHERE id = ? AND user_id = ?`;
-    const [verifyResult] = await db.query(verifyQuery, [parseInt(tripId), parseInt(userId)]);
-    
-    if (verifyResult.length === 0) {
-      return res.status(403).json({ success: false, message: 'Trip not found or unauthorized' });
+    const [result] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', parseInt(tripId)]);
+    if (result.affectedRows > 0) {
+      res.json({ success: true, message: 'Trip cancelled successfully' });
+    } else {
+      res.status(404).json({ success: false, message: 'Trip not found' });
     }
-    
+  } catch (error) {
+    console.error('❌ Error cancelling trip:', error);
+    res.status(500).json({ success: false, message: 'Error cancelling trip' });
+  }
+});
+
+router.put('/trip/complete/:tripId', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { fare } = req.body;
+    if (!tripId || isNaN(tripId) || fare === undefined) {
+      return res.status(400).json({ success: false, message: 'Invalid trip ID or missing fare' });
+    }
+    const [result] = await db.query('UPDATE travel_plans SET fare = ? WHERE id = ?', [parseFloat(fare), parseInt(tripId)]);
+    if (result.affectedRows > 0) {
+      res.json({ success: true, message: 'Trip fare updated successfully' });
+    } else {
+      res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+  } catch (error) {
+    console.error('❌ Error completing trip:', error);
+    res.status(500).json({ success: false, message: 'Error updating trip fare' });
+  }
+});
+
+router.delete('/tripHistory/:tripId', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    if (!tripId || isNaN(tripId)) {
+      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
+    }
     const [result] = await db.query('DELETE FROM travel_plans WHERE id = ?', [parseInt(tripId)]);
-    
     if (result.affectedRows > 0) {
       res.json({ success: true, message: 'Trip deleted successfully' });
     } else {
@@ -1320,23 +972,110 @@ router.delete('/tripHistory/:tripId', async (req, res) => {
   }
 });
 
-// ==========================================
-// DEBUGGING: Check what's in database
-// ==========================================
-app.get("/debug/travel-plans/:userId", async (req, res) => {
+router.get('/checkCompletedTrips/:userId', async (req, res) => {
   try {
-    const userId = req.params.userId;
-    const [results] = await db.query(
-      `SELECT id, user_id, from_place, to_place, time, status, fare, created_at 
-       FROM travel_plans 
-       WHERE user_id = ? 
-       ORDER BY time DESC`,
-      [userId]
-    );
-    res.json({ success: true, plans: results });
-  } catch (err) {
-    console.error("Debug error:", err);
-    res.status(500).json({ success: false, message: err.message });
+    const { userId } = req.params;
+    if (!userId || isNaN(userId)) {
+      return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+
+    const query = `
+      SELECT tp.id, tp.from_place, tp.to_place, tp.time, u.name as user_name
+      FROM travel_plans tp
+      LEFT JOIN users u ON tp.user_id = u.id
+      WHERE tp.user_id = ? AND tp.status = 'Active' AND tp.time < NOW()
+      ORDER BY tp.time DESC
+    `;
+
+    const [completedTrips] = await db.query(query, [parseInt(userId)]);
+    res.json({ success: true, data: completedTrips });
+  } catch (error) {
+    console.error('❌ Error checking completed trips:', error);
+    res.status(500).json({ success: false, message: 'Error checking completed trips' });
+  }
+});
+
+router.put('/completeTrip/:tripId', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { fare, didGo } = req.body;
+
+    if (!tripId || isNaN(tripId)) {
+      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
+    }
+
+    let updateQuery, queryParams;
+    if (didGo === true) {
+      updateQuery = 'UPDATE travel_plans SET status = ?, fare = ? WHERE id = ?';
+      queryParams = ['Completed', parseFloat(fare) || 0.00, parseInt(tripId)];
+    } else {
+      updateQuery = 'UPDATE travel_plans SET status = ? WHERE id = ?';
+      queryParams = ['Cancelled', parseInt(tripId)];
+    }
+
+    const [result] = await db.query(updateQuery, queryParams);
+    if (result.affectedRows > 0) {
+      const status = didGo ? 'completed' : 'marked as cancelled';
+      res.json({ success: true, message: `Trip ${status} successfully` });
+    } else {
+      res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+  } catch (error) {
+    console.error('❌ Error completing trip:', error);
+    res.status(500).json({ success: false, message: 'Error completing trip' });
+  }
+});
+
+router.post('/autoUpdateCompletedTrips', async (req, res) => {
+  try {
+    const updateQuery = `
+      UPDATE travel_plans
+      SET status = 'Completed'
+      WHERE status = 'Active' AND time < DATE_SUB(NOW(), INTERVAL 2 HOUR)
+    `;
+    const [result] = await db.query(updateQuery);
+    res.json({ success: true, message: `Updated ${result.affectedRows} overdue trips` });
+  } catch (error) {
+    console.error('❌ Error auto-updating trips:', error);
+    res.status(500).json({ success: false, message: 'Error auto-updating trips' });
+  }
+});
+
+router.get('/tripStats/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId || isNaN(userId)) {
+      return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+
+    const statsQuery = `
+      SELECT
+        COUNT(*) as total_trips,
+        COUNT(DISTINCT to_place) as unique_destinations,
+        MIN(created_at) as first_trip_date,
+        MAX(created_at) as last_trip_date
+      FROM travel_plans
+      WHERE user_id = ?
+    `;
+    const [statsResult] = await db.query(statsQuery, [parseInt(userId)]);
+    
+    const destinationsQuery = `
+      SELECT to_place as destination, COUNT(*) as visit_count
+      FROM travel_plans
+      WHERE user_id = ?
+      GROUP BY to_place
+      ORDER BY visit_count DESC
+      LIMIT 5
+    `;
+    const [topDestinations] = await db.query(destinationsQuery, [parseInt(userId)]);
+
+    res.json({
+      success: true,
+      data: { statistics: statsResult[0], topDestinations: topDestinations }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching trip statistics:', error);
+    res.status(500).json({ success: false, message: 'Error fetching trip statistics' });
   }
 });
 
@@ -1353,7 +1092,7 @@ app.get("/getUserByPhone", async (req, res) => {
     const user = results[0];
     res.json({ success: true, userId: user.id, user });
   } catch (err) {
-    console.error(" /getUserByPhone error:", err);
+    console.error("❌ /getUserByPhone error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -1368,7 +1107,7 @@ app.post('/markMessagesRead', async (req, res) => {
     const [result] = await db.execute(query, [otherUserId, userId]);
     res.json({ success: true, message: 'Messages marked as read', markedCount: result.affectedRows });
   } catch (error) {
-    console.error('Error marking messages as read:', error);
+    console.error('❌ Error marking messages as read:', error);
     res.status(500).json({ success: false, message: 'Failed to mark messages as read' });
   }
 });
@@ -1383,7 +1122,7 @@ app.get('/getUnreadCount', async (req, res) => {
     const [rows] = await db.execute(query, [otherUserId, userId]);
     res.json({ success: true, unreadCount: rows[0].unreadCount });
   } catch (error) {
-    console.error('Error getting unread count:', error);
+    console.error('❌ Error getting unread count:', error);
     res.status(500).json({ success: false, message: 'Failed to get unread count' });
   }
 });
@@ -1398,7 +1137,7 @@ app.get('/getTotalUnreadCount/:userId', async (req, res) => {
     const [rows] = await db.execute(query, [userId]);
     res.json({ success: true, totalUnreadCount: rows[0].totalUnreadCount });
   } catch (error) {
-    console.error('Error getting total unread count:', error);
+    console.error('❌ Error getting total unread count:', error);
     res.status(500).json({ success: false, message: 'Failed to get total unread count' });
   }
 });
@@ -1418,7 +1157,7 @@ app.post("/hideChat", async (req, res) => {
 
     res.json({ success: true, message: 'Chat hidden successfully' });
   } catch (error) {
-    console.error('Error in /hideChat:', error);
+    console.error('❌ Error in /hideChat:', error);
     res.status(500).json({ success: false, message: 'Failed to hide chat' });
   }
 });
@@ -1440,160 +1179,160 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
       res.status(403).json({ success: false, message: 'Forbidden: You can only delete your own messages' });
     }
   } catch (error) {
-    console.error('Error deleting message:', error);
+    console.error('❌ Error deleting message:', error);
     res.status(500).json({ success: false, message: 'Failed to delete message' });
   }
 });
 
 router.get('/favorites/:userId', async (req, res) => {
-    const { userId } = req.params;
-    if (!userId) {
-        return res.status(400).json({ success: false, message: `User ID is required.` });
-    }
-    try {
-        const query = `
-            SELECT id, user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng
-            FROM favorites
-            WHERE user_id = ?
-            ORDER BY routeName ASC
-        `;
-        const [favorites] = await db.query(query, [userId]);
-        res.json({ success: true, favorites: favorites });
-    } catch (error) {
-        console.error(' Error fetching favorites:', error);
-        res.status(500).json({ success: false, message: `Database error while fetching favorites.` });
-    }
+  const { userId } = req.params;
+  if (!userId) {
+    return res.status(400).json({ success: false, message: `User ID is required.` });
+  }
+  try {
+    const query = `
+      SELECT id, user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng
+      FROM favorites
+      WHERE user_id = ?
+      ORDER BY routeName ASC
+    `;
+    const [favorites] = await db.query(query, [userId]);
+    res.json({ success: true, favorites: favorites });
+  } catch (error) {
+    console.error('❌ Error fetching favorites:', error);
+    res.status(500).json({ success: false, message: `Database error while fetching favorites.` });
+  }
 });
 
 router.post('/favorites', async (req, res) => {
-    const { userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
+  const { userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
 
-    if (!userId || !routeName || !fromPlace || !toPlace || fromPlaceLat === undefined || fromPlaceLng === undefined || toPlaceLat === undefined || toPlaceLng === undefined) {
-        return res.status(400).json({ success: false, message: 'Missing required fields, including all coordinates.' });
-    }
-    try {
-        const query = `
-            INSERT INTO favorites (user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `;
-        const values = [userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng];
-        const [result] = await db.query(query, values);
+  if (!userId || !routeName || !fromPlace || !toPlace || fromPlaceLat === undefined || fromPlaceLng === undefined || toPlaceLat === undefined || toPlaceLng === undefined) {
+    return res.status(400).json({ success: false, message: 'Missing required fields, including all coordinates.' });
+  }
+  try {
+    const query = `
+      INSERT INTO favorites (user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng];
+    const [result] = await db.query(query, values);
 
-        res.status(201).json({
-            success: true,
-            message: 'Favorite route added successfully.',
-            favoriteId: result.insertId
-        });
-    } catch (error) {
-        console.error(' Error adding favorite:', error);
-        res.status(500).json({ success: false, message: 'Database error while adding favorite.' });
-    }
+    res.status(201).json({
+      success: true,
+      message: 'Favorite route added successfully.',
+      favoriteId: result.insertId
+    });
+  } catch (error) {
+    console.error('❌ Error adding favorite:', error);
+    res.status(500).json({ success: false, message: 'Database error while adding favorite.' });
+  }
 });
 
 router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
-    const { userId, favoriteId } = req.params;
+  const { userId, favoriteId } = req.params;
 
-    if (!userId || !favoriteId) {
-        return res.status(400).json({ success: false, message: 'User ID and Favorite ID are required.' });
+  if (!userId || !favoriteId) {
+    return res.status(400).json({ success: false, message: 'User ID and Favorite ID are required.' });
+  }
+
+  try {
+    const query = `DELETE FROM favorites WHERE id = ? AND user_id = ?`;
+    const [result] = await db.query(query, [favoriteId, userId]);
+
+    if (result.affectedRows > 0) {
+      res.json({ success: true, message: 'Favorite deleted successfully.' });
+    } else {
+      res.status(404).json({ success: false, message: 'Favorite not found or you do not have permission.' });
     }
 
-    try {
-        const query = `DELETE FROM favorites WHERE id = ? AND user_id = ?`;
-        const [result] = await db.query(query, [favoriteId, userId]);
-
-        if (result.affectedRows > 0) {
-            res.json({ success: true, message: 'Favorite deleted successfully.' });
-        } else {
-            res.status(404).json({ success: false, message: 'Favorite not found or you do not have permission.' });
-        }
-
-    } catch (error) {
-        console.error(' Error deleting favorite:', error);
-        res.status(500).json({ success: false, message: 'Database error while deleting favorite.' });
-    }
+  } catch (error) {
+    console.error('❌ Error deleting favorite:', error);
+    res.status(500).json({ success: false, message: 'Database error while deleting favorite.' });
+  }
 });
 
 router.put('/settings/visibility', async (req, res) => {
-    const { userId, visibility } = req.body;
+  const { userId, visibility } = req.body;
 
-    const allowedVisibilities = ['everyone', 'friends', 'none'];
-    if (!userId || !visibility || !allowedVisibilities.includes(visibility)) {
-        return res.status(400).json({ success: false, message: 'Invalid input provided.' });
-    }
+  const allowedVisibilities = ['everyone', 'friends', 'none'];
+  if (!userId || !visibility || !allowedVisibilities.includes(visibility)) {
+    return res.status(400).json({ success: false, message: 'Invalid input provided.' });
+  }
 
-    try {
-        const query = 'UPDATE users SET profile_visibility = ? WHERE id = ?';
-        await db.query(query, [visibility, userId]);
-        res.json({ success: true, message: 'Visibility updated successfully.' });
-    } catch (error) {
-        console.error(' Error updating visibility:', error);
-        res.status(500).json({ success: false, message: 'Database error.' });
-    }
+  try {
+    const query = 'UPDATE users SET profile_visibility = ? WHERE id = ?';
+    await db.query(query, [visibility, userId]);
+    res.json({ success: true, message: 'Visibility updated successfully.' });
+  } catch (error) {
+    console.error('❌ Error updating visibility:', error);
+    res.status(500).json({ success: false, message: 'Database error.' });
+  }
 });
 
 app.post('/change-password', async (req, res) => {
-    try {
-        const { userId, currentPassword, newPassword } = req.body;
+  try {
+    const { userId, currentPassword, newPassword } = req.body;
 
-        if (!userId || !currentPassword || !newPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'All fields are required'
-            });
-        }
-
-        if (newPassword.length < 6) {
-            return res.status(400).json({
-                success: false,
-                message: 'New password must be at least 6 characters long'
-            });
-        }
-
-        const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
-
-        if (rows.length === 0) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'User not found' 
-            });
-        }
-
-        const user = rows[0];
-        const currentHashedPassword = user.password;
-
-        const isMatch = await bcrypt.compare(currentPassword, currentHashedPassword);
-
-        if (!isMatch) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Current password is incorrect' 
-            });
-        }
-
-        const isSamePassword = await bcrypt.compare(newPassword, currentHashedPassword);
-        
-        if (isSamePassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'New password must be different from current password'
-            });
-        }
-
-        const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
-        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
-
-        res.json({ 
-            success: true, 
-            message: 'Password changed successfully' 
-        });
-
-    } catch (error) {
-        console.error(' Error changing password:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Internal server error' 
-        });
+    if (!userId || !currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required'
+      });
     }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    const user = rows[0];
+    const currentHashedPassword = user.password;
+
+    const isMatch = await bcrypt.compare(currentPassword, currentHashedPassword);
+
+    if (!isMatch) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Current password is incorrect' 
+      });
+    }
+
+    const isSamePassword = await bcrypt.compare(newPassword, currentHashedPassword);
+    
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be different from current password'
+      });
+    }
+
+    const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
+    await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
+
+    res.json({ 
+      success: true, 
+      message: 'Password changed successfully' 
+    });
+
+  } catch (error) {
+    console.error('❌ Error changing password:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
+  }
 });
 
 app.get('/api/online-users', (req, res) => {
@@ -1605,7 +1344,7 @@ app.get('/api/online-users', (req, res) => {
     }));
     res.json({ success: true, onlineUsers: users });
   } catch (error) {
-    console.error(' Error getting online users:', error);
+    console.error('❌ Error getting online users:', error);
     res.status(500).json({ success: false, message: 'Error fetching online users' });
   }
 });
@@ -1645,7 +1384,7 @@ app.get('/api/user-status/:userId', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error(' Error checking user status:', error);
+    console.error('❌ Error checking user status:', error);
     res.status(500).json({ success: false, message: 'Error checking user status' });
   }
 });
