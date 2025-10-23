@@ -586,50 +586,97 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   }
 });
 
+
 app.post("/addTravelPlan", async (req, res) => {
-  try {
-    const { userId, fromPlace, toPlace, time, toPlaceLat, toPlaceLng } = req.body;
+    const TAG = "/addTravelPlan"; // Logging tag
+    try {
+        // Get data from request body, including 'from' coordinates
+        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
 
-    if (!userId || !fromPlace || !toPlace || !time || toPlaceLat === undefined || toPlaceLng === undefined) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields, including destination coordinates."
-      });
-    }
-    
-    const formattedTime = new Date(time);
-    
-    const query = `
-      INSERT INTO travel_plans (user_id, from_place, to_place, time, status, to_place_lat, to_place_lng)
-      VALUES (?, ?, ?, ?, 'Active', ?, ?)
-      ON DUPLICATE KEY UPDATE
-        from_place = VALUES(from_place),
-        to_place = VALUES(to_place),
-        time = VALUES(time),
-        status = 'Active',
-        to_place_lat = VALUES(to_place_lat),
-        to_place_lng = VALUES(to_place_lng)`;
-        
-    const [result] = await db.query(query, [userId, fromPlace, toPlace, formattedTime, toPlaceLat, toPlaceLng]);
-  
-    let message = "Plan submitted successfully";
-    if (result.affectedRows > 1) {
-      message = "Plan updated successfully";
-    }
-        
-    res.json({
-        success: true,
-        message: message,
-        id: result.insertId
-    });
+        // --- Validation ---
+        // Check for presence of all required fields
+        if (!userId || !fromPlace || !toPlace || !time ||
+            fromPlaceLat === undefined || fromPlaceLng === undefined || // Check 'from' coordinates
+            toPlaceLat === undefined || toPlaceLng === undefined) {      // Check 'to' coordinates
+             console.warn(TAG, `Request missing required fields for userId: ${userId || 'UNKNOWN'}`);
+            return res.status(400).json({
+                success: false,
+                message: "Missing required fields: userId, fromPlace, toPlace, time, and all coordinates (from/to)."
+            });
+        }
 
-  } catch (err) {
-    console.error(" Error saving travel plan:", err);
-    res.status(500).json({
-      success: false,
-      message: "Database error"
-    });
-  }
+        // Validate time format (ISO 8601 expected from Android) and ensure it's parseable
+        let formattedTime;
+        try {
+            formattedTime = new Date(time); // Attempt to parse the time string
+            if (isNaN(formattedTime.getTime())) { // Check if parsing resulted in a valid date object
+                throw new Error("Invalid date format received from client.");
+            }
+            // Optional: Ensure the travel time is in the future
+            // const now = new Date();
+            // if (formattedTime <= now) {
+            //    console.warn(TAG, `Attempt to add past travel plan for userId: ${userId}, Time: ${time}`);
+            //    return res.status(400).json({ success: false, message: "Travel time must be in the future." });
+            // }
+        } catch (timeError) {
+             console.warn(TAG, `Invalid time format received for userId ${userId}: ${time}`, timeError);
+             return res.status(400).json({ success: false, message: "Invalid time format provided. Please use ISO 8601 format (e.g., YYYY-MM-DDTHH:mm:ss.sssZ)." });
+        }
+        // --- End Validation ---
+
+
+        console.log(TAG, `Attempting to add new travel plan for userId: ${userId}`);
+
+        // --- UPDATED QUERY: Simple INSERT statement only ---
+        // Includes 'from' coordinates and automatically sets created_at/updated_at
+        const query = `
+          INSERT INTO travel_plans
+            (user_id, from_place, to_place, time, status,
+             from_place_lat, from_place_lng, to_place_lat, to_place_lng,
+             created_at, updated_at)
+          VALUES
+            (?, ?, ?, ?, 'Active', ?, ?, ?, ?, NOW(), NOW());
+        `;
+        // --- END UPDATED QUERY ---
+
+        // Execute the query, passing all required parameters in the correct order
+        const [result] = await db.query(query, [
+            userId,         // user_id
+            fromPlace,      // from_place
+            toPlace,        // to_place
+            formattedTime,  // time (Date object will be formatted by mysql2 driver)
+            // status is 'Active'
+            fromPlaceLat,   // from_place_lat
+            fromPlaceLng,   // from_place_lng
+            toPlaceLat,     // to_place_lat
+            toPlaceLng      // to_place_lng
+            // created_at and updated_at use NOW()
+        ]);
+
+        // Check if insertId exists (indicates successful insertion)
+        if (!result || !result.insertId) {
+             console.error(TAG, `Database insert failed for userId: ${userId}, but no error thrown. Result:`, result);
+             throw new Error("Database insert failed unexpectedly."); // Throw to trigger catch block
+        }
+
+        console.log(TAG, `Successfully added travel plan with ID: ${result.insertId} for userId: ${userId}`);
+
+        // Send success response with 201 Created status
+        res.status(201).json({
+            success: true,
+            message: "Plan submitted successfully",
+            id: result.insertId // Return the ID of the newly created plan row
+        });
+
+    } catch (err) {
+        // Handle database errors or other unexpected errors
+        console.error(TAG, `❌ Error saving travel plan:`, err);
+        // Send a generic server error response
+        res.status(500).json({
+            success: false,
+            message: "Server error occurred while saving the travel plan."
+        });
+    }
 });
 
 app.get("/getUserTravelPlan/:userId", async (req, res) => {
