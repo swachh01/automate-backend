@@ -1469,6 +1469,58 @@ router.post('/favorites', async (req, res) => {
     }
 });
 
+// ADD THIS ENTIRE BLOCK TO YOUR index.js FILE
+
+app.get("/user/:userId", async (req, res) => {
+    const TAG = "/user/:userId"; // Logging tag
+    try {
+        const { userId } = req.params; // Get the user ID from the URL path (e.g., "64")
+
+        // Validation
+        if (!userId || isNaN(userId)) {
+            console.warn(TAG, `Invalid or missing userId parameter: ${userId}`);
+            return res.status(400).json({ success: false, message: "Invalid or missing user ID." });
+        }
+
+        console.log(TAG, `Fetching profile data for userId: ${userId}`);
+
+        // --- Query the database for the user's details ---
+        // IMPORTANT: Explicitly list columns and EXCLUDE 'password'
+        const query = `
+            SELECT
+                id, name, college, gender, dob, degree, year, profile_pic, profile_visibility
+            FROM users
+            WHERE id = ?;
+        `;
+        
+        const [rows] = await db.query(query, [parseInt(userId)]);
+
+        // Check if a user was found
+        if (rows.length === 0) {
+            console.warn(TAG, `User not found with ID: ${userId}`);
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        const user = rows[0]; // The user data
+
+        // --- IMPORTANT: As requested, HIDE the phone number ---
+        // We didn't select 'phone' or 'country_code', so they won't be sent.
+
+        console.log(TAG, `Successfully found user, returning profile for ID: ${userId}`);
+        
+        // Send the successful response in the format GetUserResponse expects
+        res.json({ 
+            success: true, 
+            user: user // Send the user object
+        }); 
+
+    } catch (err) {
+        // Handle any unexpected server or database errors
+        console.error(TAG, `❌ Error fetching user profile for ID: ${req.params.userId}`, err);
+        res.status(500).json({ success: false, message: "Server error while fetching user profile." });
+    }
+});
+
 router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
     const { userId, favoriteId } = req.params;
 
