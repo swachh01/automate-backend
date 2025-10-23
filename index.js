@@ -1225,22 +1225,69 @@ router.get('/tripStats/:userId', async (req, res) => {
   }
 });
 
+// In index.js (replace the existing /getUserByPhone route)
+
 app.get("/getUserByPhone", async (req, res) => {
-  const phone = req.query.phone;
-  if (!phone) {
-    return res.status(400).json({ success: false, message: "Missing phone" });
-  }
-  try {
-    const [results] = await db.query(`SELECT * FROM users WHERE phone = ?`, [phone]);
-    if (results.length === 0) {
-      return res.status(404).json({ success: false, message: "User not found" });
+    const TAG = "/getUserByPhone"; // Logging tag
+    // Expecting 'phone' (e.g., "8850260443") and 'country_code' (e.g., "+91") as query parameters
+    const phone = req.query.phone;
+    const country_code = req.query.country_code; // Get country code from query parameters
+
+    // --- Validation ---
+    if (!phone || !country_code) { // Check if both parameters are provided
+        console.warn(TAG, "Request missing 'phone' or 'country_code' query parameter.");
+        // Send a clear error message back to the app
+        return res.status(400).json({ success: false, message: "Missing required phone number or country code." });
     }
-    const user = results[0];
-    res.json({ success: true, userId: user.id, user });
-  } catch (err) {
-    console.error(" /getUserByPhone error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
+
+    // Optional but recommended: Validate formats
+    // Check if country_code starts with '+' followed by 1 to 4 digits
+    if (!/^\+\d{1,4}$/.test(country_code)) {
+         console.warn(TAG, `Invalid country code format received: ${country_code}`);
+         return res.status(400).json({ success: false, message: "Invalid country code format (e.g., +91)." });
+    }
+     // Check if phone is exactly 10 digits (adjust regex if other lengths are valid)
+     if (!/^\d{10}$/.test(phone)) {
+         console.warn(TAG, `Invalid phone number format received: ${phone}`);
+         return res.status(400).json({ success: false, message: "Invalid phone number format (should be 10 digits)." });
+    }
+    // --- End Validation ---
+
+
+    try {
+        console.log(TAG, `Searching for user with phone: ${country_code}${phone}`);
+        // --- UPDATED QUERY: Select user WHERE both phone and country_code match ---
+        const query = `
+            SELECT id, name, college, phone, country_code, gender, dob, degree, year, profile_pic
+            FROM users
+            WHERE phone = ? AND country_code = ?;
+        `;
+        // Execute the query, passing both parameters safely
+        const [results] = await db.query(query, [phone, country_code]);
+        // --- END UPDATED QUERY ---
+
+        // Check if any user was found
+        if (results.length === 0) {
+            console.log(TAG, `User not found for ${country_code}${phone}.`);
+            // Return a 404 Not Found status code, indicating no user exists with this combination
+            return res.status(404).json({ success: false, message: "User not registered with this phone number and country code." });
+        }
+
+        // User found
+        const user = results[0];
+        console.log(TAG, `User found for ${country_code}${phone}. User ID: ${user.id}`);
+
+        // IMPORTANT: Ensure password hash is never sent back, even if selected with '*' previously
+        delete user.password;
+
+        // Send success response with user data
+        res.json({ success: true, userId: user.id, user: user });
+
+    } catch (err) {
+        // Handle unexpected database or server errors
+        console.error(TAG, `❌ Error searching for user ${country_code}${phone}:`, err);
+        res.status(500).json({ success: false, message: "Server error while checking user information." });
+    }
 });
 
 app.post('/markMessagesRead', async (req, res) => {
