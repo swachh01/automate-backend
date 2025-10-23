@@ -304,60 +304,127 @@ app.post("/sendOtp", (req, res) => {
     });
 });
 
+
 app.post("/verifyOtp", async (req, res) => {
   try {
     const { phone, otp } = req.body;
     if (!phone || !otp) {
       return res.status(400).json({ success: false, message: `Phone and OTP required` });
     }
+
     const entry = otpStore[phone];
-    if (!entry) {
-      return res.status(400).json({ success: false, message: `No OTP found for this phone.` });
+
+    // 1. Verify OTP existence, expiry, and match first
+    if (!entry || Date.now() > entry.expires || entry.otp !== otp.toString()) {
+         // Clean up expired/invalid OTP attempts immediately if an entry exists
+         if (phone && otpStore[phone]) {
+            Log.w(TAG, `Invalid or expired OTP attempt for phone: ${phone}`); // Optional logging
+            delete otpStore[phone];
+         }
+         return res.status(400).json({ success: false, message: `Invalid or expired OTP.` });
     }
-    if (Date.now() > entry.expires) {
-      delete otpStore[phone];
-      return res.status(400).json({ success: false, message: `OTP expired.` });
-    }
-    if (entry.otp !== otp.toString()) {
-      return res.status(400).json({ success: false, message: `Invalid OTP` });
-    }
+
+    // --- OTP is VALID at this point ---
+    Log.d(TAG, `Valid OTP received for phone: ${phone}`); // Optional logging
+
+    // 2. Check if there's corresponding temporary signup data
     const signupData = signupStore[phone];
-    if (!signupData) {
-      return res.status(400).json({ success: false, message: `Signup data missing.` });
-    }
+
+    // 3. Clear the used OTP from store immediately after validation
     delete otpStore[phone];
+    Log.d(TAG, `Cleared OTP from store for phone: ${phone}`);
 
-    const query = `
-      INSERT INTO users (name, college, phone, gender, password, created_at, signup_status) 
-      VALUES (?, ?, ?, ?, '', NOW(), 'pending')
-      ON DUPLICATE KEY UPDATE
-        name = VALUES(name),
-        college = VALUES(college),
-        gender = VALUES(gender);
-    `;
+    // 4. Determine the flow based on presence of signupData
+    if (signupData) {
+        // --- A. SIGNUP FLOW ---
+        // (User just completed signup stage 1 and OTP is valid)
+        Log.d(TAG, `OTP verified for SIGNUP flow, phone: ${phone}`);
 
-    await db.query(query, [signupData.name, signupData.college, phone, signupData.gender]);
-    
-    const [userRows] = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
-    const userId = userRows[0].id;
-    
-    delete signupStore[phone];
-    
-    return res.json({
-      success: true,
-      message: "OTP verified successfully",
-      userId: userId,
-      user: {
-        id: userId,
-        name: signupData.name,
-        college: signupData.college,
-        phone: phone,
-        gender: signupData.gender
-      }
-    });
+        // Clear the temporary signup data now that OTP is verified
+        delete signupStore[phone];
+        Log.d(TAG, `Cleared signup data from store for phone: ${phone}`);
+
+        // Insert or update user details from signup stage 1, set status to 'pending'
+        const signupQuery = `
+          INSERT INTO users (name, college, phone, gender, password, created_at, signup_status)
+          VALUES (?, ?, ?, ?, '', NOW(), 'pending')
+          ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            college = VALUES(college),
+            gender = VALUES(gender),
+            signup_status = IF(signup_status = 'completed', 'completed', 'pending'); 
+            -- ^ Keep 'completed' status if user tries to restart signup after completion
+        `;
+        await db.query(signupQuery, [signupData.name, signupData.college, phone, signupData.gender]);
+        Log.d(TAG, `Executed INSERT/UPDATE for signup user, phone: ${phone}`);
+
+        // Fetch the user's ID to return to the app
+        const [userRows] = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (userRows.length === 0) {
+             // This case is unlikely after insert/update but handle defensively
+             Log.e(TAG, `User ID not found after insert/update in signup flow, phone: ${phone}`);
+             throw new Error("User ID not found after database operation in signup flow.");
+        }
+        const userId = userRows[0].id;
+        Log.d(TAG, `Found userId ${userId} for signup flow, phone: ${phone}`);
+
+        // Return success response tailored for signup, including user details for next step
+        return res.json({
+          success: true,
+          message: "OTP verified successfully for signup.", // Specific message
+          userId: userId,
+          user: { // Include data needed by SignUpStage2CActivity
+            id: userId,
+            name: signupData.name,
+            college: signupData.college,
+            phone: phone,
+            gender: signupData.gender
+            // Add other necessary fields if SignUpStage2CActivity needs them
+          }
+        });
+
+    } else {
+        // --- B. PASSWORD RESET (or other non-signup) FLOW ---
+        // (No temporary signup data exists, user likely initiated password reset)
+        Log.d(TAG, `OTP verified for NON-SIGNUP flow (e.g., password reset), phone: ${phone}`);
+
+        // Ensure the user actually exists in the database before confirming OTP for reset
+        const [userRows] = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (userRows.length === 0) {
+             // If user doesn't exist, OTP verification fails for password reset
+             Log.w(TAG, `Password reset OTP verification failed: User not found for phone: ${phone}`);
+             // Although ForgotPasswordActivity should check first, handle defensively
+             return res.status(404).json({ success: false, message: `User with this phone number not found.` });
+        }
+
+        const userId = userRows[0].id; // Get user ID for context if needed
+        Log.d(TAG, `Found existing userId ${userId} for non-signup flow, phone: ${phone}`);
+
+        // Return a generic success response indicating OTP was valid
+        // Include userId if SetNewPasswordActivity needs it directly
+        return res.json({
+            success: true,
+            message: "OTP verified successfully.", // Generic success
+            userId: userId // Pass userId to the next step (SetNewPasswordActivity)
+        });
+    }
   } catch (err) {
-    console.error("❌ Error in /verifyOtp:", err);
-    return res.status(500).json({ success: false, message: `Database error: ` + err.message });
+    // Log detailed error on the server
+    Log.e(TAG, "❌ Error in /verifyOtp:", err);
+
+    // Attempt to clean up OTP store even on errors, if possible
+    const { phone } = req.body || {};
+    if (phone && otpStore[phone]) {
+        try { delete otpStore[phone]; } catch (cleanupErr) { Log.e(TAG, "Error cleaning up otpStore during catch block:", cleanupErr); }
+    }
+    // Also try cleaning up signup store if relevant
+    if (phone && signupStore[phone]) {
+        try { delete signupStore[phone]; } catch (cleanupErr) { Log.e(TAG, "Error cleaning up signupStore during catch block:", cleanupErr); }
+    }
+
+
+    // Send a generic server error response to the client
+    return res.status(500).json({ success: false, message: `Server error during OTP verification.` });
   }
 });
 
