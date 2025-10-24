@@ -786,25 +786,31 @@ app.post('/sendMessage', async (req, res) => {
   }
 });
 
-
 app.get('/getChatUsers', async (req, res) => {
+  const TAG = "/getChatUsers"; // For logging
   try {
     const { userId } = req.query;
     if (!userId) {
+      console.warn(TAG, "Request missing userId");
       return res.status(400).json({ success: false, message: 'userId is required' });
     }
 
+    // This query correctly finds the last *visible* message for each chat partner.
+    // If all messages are hidden (in hidden_messages), the INNER JOIN will
+    // automatically filter that user out, which is the correct behavior.
     const query = `
       SELECT DISTINCT
         u.id, 
-        u.name as username, 
-        u.college, 
+        u.name as username,
+        u.college,
         u.profile_pic,
         latest.last_message as lastMessage,
         latest.last_timestamp as timestamp,
-        0 as unreadCount
+        0 as unreadCount -- Note: unreadCount is handled separately
       FROM users u
       INNER JOIN (
+        -- This subquery finds the most recent message (rn = 1)
+        -- that is NOT hidden by the current user (hm.message_id IS NULL)
         SELECT
           CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END as other_user_id,
           m.message as last_message,
@@ -814,38 +820,40 @@ app.get('/getChatUsers', async (req, res) => {
             ORDER BY m.timestamp DESC
           ) as rn
         FROM messages m
+        -- Join hidden_messages table to check visibility
         LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
         WHERE
+          -- Find all conversations involving the current user
           (m.sender_id = ? OR m.receiver_id = ?)
-          AND hm.message_id IS NULL
+          -- Exclude messages that the current user has hidden
+          AND hm.message_id IS NULL 
       ) latest ON u.id = latest.other_user_id AND latest.rn = 1
-      
-      -- CRITICAL FIX: Exclude hidden chats
-      LEFT JOIN hidden_chats hc ON hc.user_id = ? AND hc.other_user_id = u.id
-      WHERE hc.id IS NULL
-      
+      -- Removed the redundant LEFT JOIN hidden_chats
+      -- WHERE hc.id IS NULL 
       ORDER BY latest.last_timestamp DESC
     `;
-
-    // Added one more userId parameter for the hidden_chats check
-    const params = [userId, userId, userId, userId, userId, userId];
+    
+    // The query now only needs 5 parameters for the userId
+    const params = [userId, userId, userId, userId, userId];
     const [rows] = await db.execute(query, params);
-
+    
+    // Decrypt the last message for each chat
     const decryptedChats = rows.map(chat => {
       return {
         ...chat,
-        lastMessage: decrypt(chat.lastMessage)
+        // Ensure decrypt function handles potential null or errors gracefully
+        lastMessage: chat.lastMessage ? decrypt(chat.lastMessage) : "" 
       };
     });
-
+    
     res.json({ success: true, chats: decryptedChats || [] });
 
   } catch (error) {
-    console.error('Error fetching chat users:', error);
-    res.status(500).json({ 
-      success: false, 
+    console.error(TAG, '❌ Error fetching chat users:', error);
+    res.status(500).json({
+      success: false,
       message: 'Failed to fetch chat users',
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -1392,64 +1400,137 @@ app.get('/getTotalUnreadCount/:userId', async (req, res) => {
   }
 });
 
-app.post('/hideChat', async (req, res) => {
-  try {
-    const { userId, otherUserId } = req.body;
 
-    // Validate input
-    if (!userId || !otherUserId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'userId and otherUserId are required' 
-      });
+// REPLACE your old /hideChat route with this one
+app.post("/hideChat", async (req, res) => {
+    const TAG = "/hideChat"; // Define TAG for logging context
+    try {
+        const { userId, otherUserId } = req.body;
+
+        // Validation
+        if (!userId || !otherUserId) {
+            console.warn(TAG, `Request missing userId (${userId}) or otherUserId (${otherUserId})`);
+            return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
+        }
+
+        if (userId === otherUserId) {
+             console.warn(TAG, `User ${userId} tried to hide chat with themselves.`);
+             return res.status(400).json({ success: false, message: 'Cannot hide chat with yourself' });
+        }
+        
+        console.log(TAG, `User ${userId} requested to hide chat with ${otherUserId}`);
+
+        // Step 1: Find all *existing* message IDs between these two users.
+        const [messages] = await db.query(
+            `SELECT id FROM messages 
+             WHERE (sender_id = ? AND receiver_id = ?) 
+                OR (sender_id = ? AND receiver_id = ?)`,
+            [userId, otherUserId, otherUserId, userId]
+        );
+
+        // If there are no messages, there's nothing to hide.
+        if (messages.length === 0) {
+            console.log(TAG, `No messages found between ${userId} and ${otherUserId}. Nothing to hide.`);
+            return res.json({ success: true, message: 'Chat hidden successfully (no messages).' });
+        }
+
+        // Step 2: Prepare to bulk-insert these message IDs into hidden_messages
+        // The values format is an array of arrays: [ [messageId1, userId], [messageId2, userId], ... ]
+        const valuesToHide = messages.map(msg => [msg.id, userId]);
+
+        // Step 3: Execute the bulk INSERT IGNORE query.
+        // 'INSERT IGNORE' prevents errors if a message was already hidden (e.g., "deleted for me").
+        const hideQuery = `
+            INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at)
+            VALUES ?
+        `; // The '?' will be replaced by the 'valuesToHide' array
+
+        const [result] = await db.query(hideQuery, [valuesToHide]);
+
+        console.log(TAG, `Successfully marked ${result.affectedRows} new messages as hidden for user ${userId} (chat with ${otherUserId}).`);
+
+        // Send success response to the app
+        res.json({ 
+            success: true, 
+            message: 'Chat history hidden successfully. New messages will appear here.' 
+        });
+
+    } catch (error) {
+        console.error(TAG, "❌ Error in /hideChat:", error);
+        res.status(500).json({ success: false, message: 'Failed to hide chat due to a server error.' });
     }
+});
 
-    // Prevent hiding chat with yourself
-    if (userId === otherUserId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Cannot hide chat with yourself' 
-      });
-    }
+// ADD THIS NEW ROUTE to your index.js file
 
-    // Check if already hidden
-    const checkQuery = `
-      SELECT id FROM hidden_chats 
-      WHERE user_id = ? AND other_user_id = ?
-    `;
-    const [existing] = await db.execute(checkQuery, [userId, otherUserId]);
-
-    if (existing.length > 0) {
-      // Already hidden, just return success
-      return res.json({ 
-        success: true, 
-        message: 'Chat already hidden' 
-      });
-    }
-
-    // Insert into hidden_chats table
-    const insertQuery = `
-      INSERT INTO hidden_chats (user_id, other_user_id, hidden_at) 
-      VALUES (?, ?, NOW())
-    `;
+app.post("/cleanupDeletedMessages", async (req, res) => {
+    const TAG = "/cleanupDeletedMessages";
     
-    await db.execute(insertQuery, [userId, otherUserId]);
+    // Optional: Add a simple secret/key check to prevent unauthorized calls
+    // const adminKey = req.headers['x-admin-key'];
+    // if (adminKey !== process.env.YOUR_ADMIN_CRON_KEY) {
+    //     console.warn(TAG, "Unauthorized cleanup attempt.");
+    //     return res.status(403).json({ success: false, message: "Unauthorized" });
+    // }
 
-    console.log(`Chat hidden: userId=${userId}, otherUserId=${otherUserId}`);
+    try {
+        console.log(TAG, "Starting scheduled cleanup task for mutually hidden messages...");
 
-    res.json({ 
-      success: true, 
-      message: 'Chat hidden successfully' 
-    });
+        // Step 1: Find all message IDs that appear 2 or more times in hidden_messages
+        // (meaning at least two users have hidden them).
+        const [deletableMessages] = await db.query(`
+            SELECT message_id
+            FROM hidden_messages
+            GROUP BY message_id
+            HAVING COUNT(DISTINCT user_id) >= 2
+        `);
 
-  } catch (error) {
-    console.error('Error hiding chat:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to hide chat',
-      error: error.message 
-    });
-  }
+        if (deletableMessages.length === 0) {
+            console.log(TAG, "Cleanup complete. No messages found for mutual deletion.");
+            return res.status(200).json({ success: true, message: "No messages to clean up." });
+        }
+
+        // Collect all message IDs to be deleted
+        const messageIdsToDelete = deletableMessages.map(msg => msg.message_id);
+        console.log(TAG, `Found ${messageIdsToDelete.length} messages for permanent deletion.`);
+
+        // Step 2: Use a transaction to delete from both tables safely
+        const connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        try {
+            // Delete from the main 'messages' table first
+            const [msgDeleteResult] = await connection.query(
+                `DELETE FROM messages WHERE id IN (?)`,
+                [messageIdsToDelete]
+            );
+
+            // Then, delete the corresponding entries from 'hidden_messages'
+            const [hiddenDeleteResult] = await connection.query(
+                `DELETE FROM hidden_messages WHERE message_id IN (?)`,
+                [messageIdsToDelete]
+            );
+
+            // If both succeed, commit the changes
+            await connection.commit();
+            connection.release();
+
+            const totalDeleted = msgDeleteResult.affectedRows;
+            console.log(TAG, `Cleanup successful. Permanently deleted ${totalDeleted} messages.`);
+            res.status(200).json({ success: true, message: `Cleaned up ${totalDeleted} messages.` });
+
+        } catch (txError) {
+            // If anything fails, roll back the entire transaction
+            await connection.rollback();
+            connection.release();
+            console.error(TAG, "❌ Error during cleanup transaction, rolling back:", txError);
+            throw txError; // Re-throw to be caught by the outer catch block
+        }
+
+    } catch (error) {
+        console.error(TAG, "❌ Error running cleanup task:", error);
+        res.status(500).json({ success: false, message: 'Server error during message cleanup.' });
+    }
 });
 
 app.delete('/deleteMessage/:messageId', async (req, res) => {
