@@ -1075,6 +1075,38 @@ router.get('/travel-plans/by-destination', async (req, res) => {
     }
 });
 
+// ADD THIS NEW ROUTE for removing profile pic
+router.delete("/user/profile/:userId", async (req, res) => {
+    const TAG = "/user/profile/:userId (DELETE)";
+    try {
+        const { userId } = req.params;
+
+        if (!userId || isNaN(userId)) {
+            console.warn(TAG, `Invalid userId: ${userId}`);
+            return res.status(400).json({ success: false, message: "User ID required" });
+        }
+
+        // Update the user's profile_pic column to NULL
+        await db.query("UPDATE users SET profile_pic = NULL WHERE id = ?", [parseInt(userId)]);
+
+        console.log(TAG, `Removed profile pic for user ID: ${userId}`);
+        
+        // Return a response that includes the updated user (or null pic)
+        // This helps updateLocalUserData in the app
+        res.json({ 
+            success: true, 
+            message: "Profile picture removed",
+            user: { profilePic: null } // Send back an object indicating the pic is null
+        });
+
+    } catch (err) {
+        console.error(TAG, "Error removing profile pic:", err);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
+// Make sure this is registered with app.use(router);
+
 
 router.get('/tripHistory/:userId', async (req, res) => {
   try {
