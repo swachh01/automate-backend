@@ -791,52 +791,62 @@ app.get('/getChatUsers', async (req, res) => {
   try {
     const { userId } = req.query;
     if (!userId) {
-      return res.status(400).json({ success: false, message: `userId is required` });
+      return res.status(400).json({ success: false, message: 'userId is required' });
     }
-    
+
     const query = `
       SELECT DISTINCT
-        u.id, u.name as username, u.college, u.profile_pic,
-        latest.last_message as lastMessage, 
-        latest.last_timestamp as timestamp, 
+        u.id, 
+        u.name as username, 
+        u.college, 
+        u.profile_pic,
+        latest.last_message as lastMessage,
+        latest.last_timestamp as timestamp,
         0 as unreadCount
       FROM users u
       INNER JOIN (
         SELECT
           CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END as other_user_id,
-          m.message as last_message, 
+          m.message as last_message,
           m.timestamp as last_timestamp,
           ROW_NUMBER() OVER (
             PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
             ORDER BY m.timestamp DESC
           ) as rn
         FROM messages m
-        
         LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
-        
-        WHERE 
-          (m.sender_id = ? OR m.receiver_id = ?) 
-          AND hm.message_id IS NULL -- This ensures we only get messages that are NOT hidden
-          
+        WHERE
+          (m.sender_id = ? OR m.receiver_id = ?)
+          AND hm.message_id IS NULL
       ) latest ON u.id = latest.other_user_id AND latest.rn = 1
+      
+      -- CRITICAL FIX: Exclude hidden chats
+      LEFT JOIN hidden_chats hc ON hc.user_id = ? AND hc.other_user_id = u.id
+      WHERE hc.id IS NULL
+      
       ORDER BY latest.last_timestamp DESC
     `;
-    
-    const params = [userId, userId, userId, userId, userId];
+
+    // Added one more userId parameter for the hidden_chats check
+    const params = [userId, userId, userId, userId, userId, userId];
     const [rows] = await db.execute(query, params);
 
     const decryptedChats = rows.map(chat => {
-        return {
-            ...chat,
-            lastMessage: decrypt(chat.lastMessage)
-        };
+      return {
+        ...chat,
+        lastMessage: decrypt(chat.lastMessage)
+      };
     });
 
     res.json({ success: true, chats: decryptedChats || [] });
 
   } catch (error) {
     console.error('Error fetching chat users:', error);
-    res.status(500).json({ success: false, message: `Failed to fetch chat users` });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch chat users',
+      error: error.message 
+    });
   }
 });
 
@@ -1382,23 +1392,63 @@ app.get('/getTotalUnreadCount/:userId', async (req, res) => {
   }
 });
 
-app.post("/hideChat", async (req, res) => {
+app.post('/hideChat', async (req, res) => {
   try {
     const { userId, otherUserId } = req.body;
+
+    // Validate input
     if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'userId and otherUserId are required' 
+      });
     }
 
-    const hideSentQuery = `UPDATE messages SET deleted_by_sender = TRUE WHERE sender_id = ? AND receiver_id = ?`;
-    await db.execute(hideSentQuery, [userId, otherUserId]);
+    // Prevent hiding chat with yourself
+    if (userId === otherUserId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cannot hide chat with yourself' 
+      });
+    }
 
-    const hideReceivedQuery = `UPDATE messages SET deleted_by_receiver = TRUE WHERE receiver_id = ? AND sender_id = ?`;
-    await db.execute(hideReceivedQuery, [userId, otherUserId]);
+    // Check if already hidden
+    const checkQuery = `
+      SELECT id FROM hidden_chats 
+      WHERE user_id = ? AND other_user_id = ?
+    `;
+    const [existing] = await db.execute(checkQuery, [userId, otherUserId]);
 
-    res.json({ success: true, message: 'Chat hidden successfully' });
+    if (existing.length > 0) {
+      // Already hidden, just return success
+      return res.json({ 
+        success: true, 
+        message: 'Chat already hidden' 
+      });
+    }
+
+    // Insert into hidden_chats table
+    const insertQuery = `
+      INSERT INTO hidden_chats (user_id, other_user_id, hidden_at) 
+      VALUES (?, ?, NOW())
+    `;
+    
+    await db.execute(insertQuery, [userId, otherUserId]);
+
+    console.log(`Chat hidden: userId=${userId}, otherUserId=${otherUserId}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Chat hidden successfully' 
+    });
+
   } catch (error) {
-    console.error('Error in /hideChat:', error);
-    res.status(500).json({ success: false, message: 'Failed to hide chat' });
+    console.error('Error hiding chat:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to hide chat',
+      error: error.message 
+    });
   }
 });
 
