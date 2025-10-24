@@ -1435,11 +1435,13 @@ app.post("/hideChat", async (req, res) => {
         }
 
         // Step 2: Prepare to bulk-insert these message IDs into hidden_messages
-        // The values format is an array of arrays: [ [messageId1, userId], [messageId2, userId], ... ]
-        const valuesToHide = messages.map(msg => [msg.id, userId]);
+        // The values format is an array of arrays: [ [messageId, userId, hidden_at_date], ... ]
+        
+        // --- THIS IS THE FIX ---
+        const valuesToHide = messages.map(msg => [msg.id, userId, new Date()]);
+        // --- END FIX ---
 
         // Step 3: Execute the bulk INSERT IGNORE query.
-        // 'INSERT IGNORE' prevents errors if a message was already hidden (e.g., "deleted for me").
         const hideQuery = `
             INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at)
             VALUES ?
@@ -1460,8 +1462,6 @@ app.post("/hideChat", async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to hide chat due to a server error.' });
     }
 });
-
-// ADD THIS NEW ROUTE to your index.js file
 
 app.post("/cleanupDeletedMessages", async (req, res) => {
     const TAG = "/cleanupDeletedMessages";
