@@ -1844,6 +1844,117 @@ app.get('/api/user-status/:userId', async (req, res) => {
   }
 });
 
+// Fetches all messages for a group and determines 'is_read' status
+app.get('/group/:groupId/messages', async (req, res) => {
+    const { groupId } = req.params;
+    const { userId } = req.query; // Get userId from query param
+
+    if (!userId || !groupId) {
+        return res.status(400).json({ success: false, message: 'Missing group or user ID' });
+    }
+
+    try {
+        // 1. Get the user's last_read_timestamp for this group
+        const [memberRows] = await db.execute(
+            'SELECT last_read_timestamp FROM group_members WHERE group_id = ? AND user_id = ?',
+            [groupId, userId]
+        );
+        
+        const lastRead = memberRows[0] ? new Date(memberRows[0].last_read_timestamp) : new Date(0);
+
+        // 2. Get all messages, joining with users to get sender_name
+        const [messages] = await db.execute(
+            `SELECT 
+                gm.message_id AS id, 
+                gm.sender_id, 
+                gm.message_content AS message, 
+                gm.timestamp,
+                u.name AS sender_name,
+                (gm.timestamp <= ?) AS is_read 
+            FROM group_messages gm
+            JOIN users u ON gm.sender_id = u.user_id
+            WHERE gm.group_id = ?
+            ORDER BY gm.timestamp ASC`,
+            [lastRead, groupId]
+        );
+        
+        // Note: You must also filter out messages the user has "deleted for me"
+        // This requires joining with your 'hidden_messages' table
+
+        res.json({ success: true, messages: messages });
+
+    } catch (error) {
+        console.error('Error fetching group messages:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// Sends a new message to a group
+app.post('/group/send', async (req, res) => {
+    // GroupMessageRequest maps to this body
+    const { sender_id, group_id, content } = req.body; 
+
+    if (!sender_id || !group_id || !content) {
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+    }
+
+    try {
+        await db.execute(
+            'INSERT INTO group_messages (group_id, sender_id, message_content) VALUES (?, ?, ?)',
+            [group_id, sender_id, content]
+        );
+        
+        res.json({ success: true, message: 'Message sent' });
+    } catch (error) {
+        console.error('Error sending group message:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// Gets all members of a specific group
+app.get('/group/:groupId/members', async (req, res) => {
+    const { groupId } = req.params;
+
+    try {
+        const [members] = await db.execute(
+            `SELECT u.user_id, u.name, u.profile_pic 
+            FROM users u
+            JOIN group_members gm ON u.user_id = gm.user_id
+            WHERE gm.group_id = ?`,
+            [groupId]
+        );
+        
+        // This matches the 'GroupMembersResponse' class
+        res.json({ success: true, members: members });
+
+    } catch (error) {
+        console.error('Error fetching group members:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// Marks all messages in a group as read for a user
+app.post('/group/read', async (req, res) => {
+    // MarkGroupReadRequest maps to this body
+    const { user_id, group_id } = req.body; 
+
+    if (!user_id || !group_id) {
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+    }
+
+    try {
+        await db.execute(
+            'UPDATE group_members SET last_read_timestamp = CURRENT_TIMESTAMP WHERE user_id = ? AND group_id = ?',
+            [user_id, group_id]
+        );
+        
+        res.json({ success: true, message: 'Messages marked as read' });
+    } catch (error) {
+        console.error('Error marking messages read:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
 app.use(router);
 
 const PORT = process.env.PORT || 8080;
