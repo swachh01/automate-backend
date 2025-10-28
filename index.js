@@ -700,42 +700,71 @@ app.post("/addTravelPlan", async (req, res) => {
 
 // In index.js
 
+// In index.js
+
 app.get('/users/destination', async (req, res) => {
-    // We get 'groupId' and 'userId' from the query parameters
-    const { groupId, userId } = req.query;
+    const TAG = "/users/destination"; // Logging tag
+    const { groupId, userId } = req.query; // Current viewer's ID
 
     if (!groupId || !userId) {
+        console.warn(TAG, "Missing groupId or userId query parameter.");
         return res.status(400).json({ success: false, message: 'Missing groupId or userId' });
     }
 
+    const currentGroupId = parseInt(groupId);
+    const currentUserId = parseInt(userId);
+
     try {
-        // This query finds all users in a group
-        // AND joins with the users table to get their details
-        // AND filters out the current user (WHERE u.id != ?)
-        const [users] = await db.execute(
-            `SELECT
-                u.id,
+        console.log(TAG, `Fetching active users for groupId: ${currentGroupId}, excluding userId: ${currentUserId}`);
+
+        // --- QUERY MODIFIED ---
+        // This query now ensures users are in the group AND have an ACTIVE plan for THIS destination.
+        const query = `
+            SELECT
+                u.id,           -- User's ID (matches GoingUser 'id')
+                u.id as userId, -- Include userId field explicitly if needed by GoingUserAdapter/Activity
                 u.name,
                 u.college,
                 u.profile_pic AS profilePic,
                 u.gender,
-                tp.time,
-                tp.from_place AS fromPlace,
-                tp.to_place AS toPlace
+                tp.time,        -- Time from the ACTIVE travel plan
+                tp.from_place AS fromPlace, -- From place from the ACTIVE travel plan
+                tp.to_place AS toPlace     -- To place from the ACTIVE travel plan
             FROM group_members gm
             JOIN users u ON gm.user_id = u.id
-            -- Subquery uses the new table name
-            LEFT JOIN travel_plans tp ON u.id = tp.user_id AND tp.to_place = (SELECT group_name FROM \`group_table\` WHERE group_id = ?)
-            WHERE gm.group_id = ? AND gm.user_id != ?`,
-            [groupId, groupId, userId] // Parameters remain the same
-        );
+            -- Use INNER JOIN to require a matching ACTIVE travel plan
+            INNER JOIN travel_plans tp ON u.id = tp.user_id
+                AND tp.status = 'Active' -- Only include users with an ACTIVE plan
+                -- Ensure the plan matches the destination name of the current group
+                AND tp.to_place = (SELECT group_name FROM \`group_table\` WHERE group_id = ?)
+            WHERE
+                gm.group_id = ?       -- Make sure they are a member of the requested group
+                AND gm.user_id != ?   -- Exclude the current user viewing the list
+            ORDER BY
+                tp.time ASC; -- Optional: Order by travel time
+        `;
+        // --- END QUERY MODIFICATION ---
 
-        // This matches your 'UsersGoingResponse' Java class
-        res.json({ success: true, users: users });
+        // Parameters: [groupId for subquery, groupId for WHERE, userId for exclusion]
+        const [users] = await db.execute(query, [currentGroupId, currentGroupId, currentUserId]);
+
+        console.log(TAG, `Found ${users.length} active users for groupId: ${currentGroupId}`);
+
+        // Ensure response structure matches what GoingUserAdapter expects
+        // Renaming 'id' to 'userId' or ensuring both are present might be needed
+        // depending on your GoingUser.java class.
+        const responseUsers = users.map(user => ({
+            ...user,
+            id: user.id, // Ensure 'id' field is present if needed
+            userId: user.id // Ensure 'userId' field is present if needed
+        }));
+
+
+        res.json({ success: true, users: responseUsers }); // Return the filtered list
 
     } catch (error) {
-        console.error('Error fetching users for destination:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error(TAG, `Error fetching active users for destination groupId ${currentGroupId}:`, error);
+        res.status(500).json({ success: false, message: 'Server error fetching users' });
     }
 });
 
