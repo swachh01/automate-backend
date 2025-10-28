@@ -334,7 +334,7 @@ app.post("/sendOtp", async (req, res) => { // Make it async
             })
             .catch(err => {
                 // Log Twilio error details
-v                console.error(TAG, `❌ Twilio SMS Error for phone ${phone}: Code=${err.code}, Message=${err.message}`, err);
+                console.error(TAG, `❌ Twilio SMS Error for phone ${phone}: Code=${err.code}, Message=${err.message}`, err);
                 // Inform the app that SMS sending failed
                 // Consider the user experience: Should the DB entry be deleted? For now, we leave it, user can retry.
                 res.status(500).json({ success: false, message: "Failed to send OTP SMS. Please check the number and try again." });
