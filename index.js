@@ -1057,18 +1057,29 @@ app.get("/getUsersGoing", async (req, res) => {
 
 // In index.js
 
+// In index.js
+
+// Modify this route
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
+    // --- Get currentUserId from query parameter ---
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'Current user ID (userId) is required as a query parameter.' });
+    }
+    const currentUserId = parseInt(userId); // Ensure it's a number
+    // ---------------------------------------------
+
+    // --- QUERY MODIFIED ---
     const query = `
       SELECT
         ANY_VALUE(tp.to_place) as destination,
         COUNT(tp.user_id) as userCount,
-        ANY_VALUE(g.group_id) as group_id
+        ANY_VALUE(g.group_id) as group_id,
+        -- This expression checks if the current user is among those going
+        SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing
       FROM travel_plans tp
-
-      -- Join uses the new table name
       JOIN \`group_table\` g ON tp.to_place = g.group_name
-
       WHERE
         tp.status = 'Active'
         AND tp.time > NOW()
@@ -1080,10 +1091,14 @@ app.get("/travel-plans/destinations", async (req, res) => {
       ORDER BY
         userCount DESC;
     `;
+    // --- END MODIFICATION ---
 
-    const [destinations] = await db.query(query);
-    // Response structure is the same, includes group_id
+    // Pass currentUserId as the first parameter to the query
+    const [destinations] = await db.query(query, [currentUserId]);
+
+    // The response now includes `isCurrentUserGoing` (will be 1 for true, 0 for false)
     res.json({ success: true, destinations: destinations || [] });
+
   } catch (err) {
     console.error(" Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
