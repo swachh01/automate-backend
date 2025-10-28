@@ -1952,48 +1952,89 @@ app.get('/api/user-status/:userId', async (req, res) => {
   }
 });
 
+// In index.js
+
 // Fetches all messages for a group and determines 'is_read' status
 app.get('/group/:groupId/messages', async (req, res) => {
+    const TAG = "/group/:groupId/messages"; // Logging Tag
     const { groupId } = req.params;
     const { userId } = req.query; // Get userId from query param
 
     if (!userId || !groupId) {
+        console.warn(TAG, "Missing groupId or userId");
         return res.status(400).json({ success: false, message: 'Missing group or user ID' });
     }
 
+    const currentGroupId = parseInt(groupId);
+    const currentUserId = parseInt(userId);
+
     try {
+        console.log(TAG, `Fetching messages for group ${currentGroupId}, requested by user ${currentUserId}`);
+
         // 1. Get the user's last_read_timestamp for this group
         const [memberRows] = await db.execute(
             'SELECT last_read_timestamp FROM group_members WHERE group_id = ? AND user_id = ?',
-            [groupId, userId]
+            [currentGroupId, currentUserId]
         );
-        
-        const lastRead = memberRows[0] ? new Date(memberRows[0].last_read_timestamp) : new Date(0);
+
+        // Use epoch (1970) if user hasn't read anything or isn't a member yet
+        const lastRead = memberRows[0]?.last_read_timestamp ? new Date(memberRows[0].last_read_timestamp) : new Date(0);
+        console.log(TAG, `User ${currentUserId}'s last read timestamp for group ${currentGroupId}: ${lastRead.toISOString()}`);
 
         // 2. Get all messages, joining with users to get sender_name
-        const [messages] = await db.execute(
-            `SELECT 
-                gm.message_id AS id, 
-                gm.sender_id, 
-                gm.message_content AS message, 
+        //    AND determine read status based on last_read_timestamp
+        const query = `
+            SELECT
+                gm.message_id AS id,
+                gm.sender_id,
+                gm.message_content AS message, -- Still encrypted here
                 gm.timestamp,
                 u.name AS sender_name,
-                (gm.timestamp <= ?) AS is_read 
+                -- A message is read if its timestamp is <= the user's last_read_timestamp
+                -- AND the message was NOT sent by the current user viewing the chat
+                (gm.timestamp <= ? AND gm.sender_id != ?) AS is_read
             FROM group_messages gm
-            JOIN users u ON gm.sender_id = u.user_id
+            -- Corrected JOIN condition uses u.id
+            JOIN users u ON gm.sender_id = u.id
             WHERE gm.group_id = ?
-            ORDER BY gm.timestamp ASC`,
-            [lastRead, groupId]
-        );
-        
-        // Note: You must also filter out messages the user has "deleted for me"
-        // This requires joining with your 'hidden_messages' table
+            -- Exclude messages hidden specifically by this user (requires another JOIN)
+            AND NOT EXISTS (
+                 SELECT 1 FROM hidden_messages hm
+                 WHERE hm.message_id = gm.message_id AND hm.user_id = ?
+            )
+            ORDER BY gm.timestamp ASC
+        `;
 
-        res.json({ success: true, messages: messages });
+        // Parameters: [lastReadTime, currentUserId (for is_read check), groupId, currentUserId (for hidden check)]
+        const [messages] = await db.execute(query, [lastRead, currentUserId, currentGroupId, currentUserId]);
+        console.log(TAG, `Fetched ${messages.length} visible messages for group ${currentGroupId}`);
+
+        // 3. Decrypt message content AFTER fetching
+        const decryptedMessages = messages.map(msg => {
+            try {
+                return {
+                    ...msg,
+                    message: decrypt(msg.message), // Decrypt the content
+                    // Convert is_read from 1/0 to true/false if needed by client,
+                    // although the SQL comparison already does this effectively
+                    isRead: !!msg.is_read
+                };
+            } catch (decryptError) {
+                 console.error(TAG, `Failed to decrypt message ID ${msg.id}:`, decryptError);
+                 return { ...msg, message: "[Failed to decrypt message]", isRead: !!msg.is_read }; // Show error on client
+            }
+        });
+
+        res.json({ success: true, messages: decryptedMessages });
 
     } catch (error) {
-        console.error('Error fetching group messages:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error(TAG, `Error fetching group messages for group ${currentGroupId}:`, error);
+        // Send back the specific SQL error message if available (useful for debugging)
+        res.status(500).json({
+             success: false,
+             message: 'Server error fetching messages',
+             error: error.sqlMessage || error.message // Include SQL error if present
+         });
     }
 });
 
