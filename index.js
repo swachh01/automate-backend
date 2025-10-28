@@ -347,7 +347,6 @@ app.post("/sendOtp", async (req, res) => { // Make it async
     }
 });
 
-// Remove the global otpStore object: const otpStore = {};
 
 app.post("/verifyOtp", async (req, res) => {
     const TAG = "/verifyOtp"; // Define TAG for logging context
