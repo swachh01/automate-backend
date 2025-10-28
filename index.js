@@ -587,95 +587,120 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
 });
 
 
+
+// In index.js
+
 app.post("/addTravelPlan", async (req, res) => {
     const TAG = "/addTravelPlan"; // Logging tag
+    let connection; // Define connection variable for potential transaction
+
     try {
-        // Get data from request body, including 'from' coordinates
         const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
 
-        // --- Validation ---
-        // Check for presence of all required fields
+        // --- Validation (Keep your existing validation) ---
         if (!userId || !fromPlace || !toPlace || !time ||
-            fromPlaceLat === undefined || fromPlaceLng === undefined || // Check 'from' coordinates
-            toPlaceLat === undefined || toPlaceLng === undefined) {      // Check 'to' coordinates
+            fromPlaceLat === undefined || fromPlaceLng === undefined ||
+            toPlaceLat === undefined || toPlaceLng === undefined) {
              console.warn(TAG, `Request missing required fields for userId: ${userId || 'UNKNOWN'}`);
             return res.status(400).json({
                 success: false,
                 message: "Missing required fields: userId, fromPlace, toPlace, time, and all coordinates (from/to)."
             });
         }
-
-        // Validate time format (ISO 8601 expected from Android) and ensure it's parseable
         let formattedTime;
         try {
-            formattedTime = new Date(time); // Attempt to parse the time string
-            if (isNaN(formattedTime.getTime())) { // Check if parsing resulted in a valid date object
-                throw new Error("Invalid date format received from client.");
-            }
-            // Optional: Ensure the travel time is in the future
-            // const now = new Date();
-            // if (formattedTime <= now) {
-            //    console.warn(TAG, `Attempt to add past travel plan for userId: ${userId}, Time: ${time}`);
-            //    return res.status(400).json({ success: false, message: "Travel time must be in the future." });
-            // }
+            formattedTime = new Date(time);
+            if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format received from client."); }
         } catch (timeError) {
              console.warn(TAG, `Invalid time format received for userId ${userId}: ${time}`, timeError);
              return res.status(400).json({ success: false, message: "Invalid time format provided. Please use ISO 8601 format (e.g., YYYY-MM-DDTHH:mm:ss.sssZ)." });
         }
         // --- End Validation ---
 
+        console.log(TAG, `Attempting to add travel plan for userId: ${userId} to destination: ${toPlace}`);
 
-        console.log(TAG, `Attempting to add new travel plan for userId: ${userId}`);
+        // --- Start Transaction (Optional but Recommended) ---
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+        // ----------------------------------------------------
 
-        // --- UPDATED QUERY: Simple INSERT statement only ---
-        // Includes 'from' coordinates and automatically sets created_at/updated_at
-        const query = `
+        // --- Step 1: Insert the travel plan (Existing Logic) ---
+        const planQuery = `
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
              created_at, updated_at)
-          VALUES
-            (?, ?, ?, ?, 'Active', ?, ?, ?, ?, NOW(), NOW());
+          VALUES (?, ?, ?, ?, 'Active', ?, ?, ?, ?, NOW(), NOW());
         `;
-        // --- END UPDATED QUERY ---
-
-        // Execute the query, passing all required parameters in the correct order
-        const [result] = await db.query(query, [
-            userId,         // user_id
-            fromPlace,      // from_place
-            toPlace,        // to_place
-            formattedTime,  // time (Date object will be formatted by mysql2 driver)
-            // status is 'Active'
-            fromPlaceLat,   // from_place_lat
-            fromPlaceLng,   // from_place_lng
-            toPlaceLat,     // to_place_lat
-            toPlaceLng      // to_place_lng
-            // created_at and updated_at use NOW()
+        const [planResult] = await connection.query(planQuery, [
+            userId, fromPlace, toPlace, formattedTime,
+            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng
         ]);
 
-        // Check if insertId exists (indicates successful insertion)
-        if (!result || !result.insertId) {
-             console.error(TAG, `Database insert failed for userId: ${userId}, but no error thrown. Result:`, result);
-             throw new Error("Database insert failed unexpectedly."); // Throw to trigger catch block
+        const newPlanId = planResult.insertId;
+        if (!newPlanId) {
+             await connection.rollback(); // Rollback if plan insertion fails
+             connection.release();
+             throw new Error("Travel plan insert failed unexpectedly.");
         }
+        console.log(TAG, `Successfully added travel plan ID: ${newPlanId}`);
 
-        console.log(TAG, `Successfully added travel plan with ID: ${result.insertId} for userId: ${userId}`);
+        // --- Step 2: Add/Ensure Group Exists ---
+        console.log(TAG, `Ensuring group exists for destination: ${toPlace}`);
+        // INSERT IGNORE will safely do nothing if a group with this name already exists
+        const groupQuery = `INSERT IGNORE INTO \`groups\` (group_name) VALUES (?)`;
+        await connection.query(groupQuery, [toPlace]);
 
-        // Send success response with 201 Created status
+        // --- Step 3: Get the group_id ---
+        const [groupRows] = await connection.query('SELECT group_id FROM \`groups\` WHERE group_name = ?', [toPlace]);
+        if (groupRows.length === 0) {
+            // This should ideally not happen if the INSERT IGNORE worked or the group already existed
+            await connection.rollback();
+            connection.release();
+            throw new Error(`Failed to find or create group_id for destination: ${toPlace}`);
+        }
+        const groupId = groupRows[0].group_id;
+        console.log(TAG, `Found/Created groupId: ${groupId} for destination: ${toPlace}`);
+
+        // --- Step 4: Add User to the Group ---
+        console.log(TAG, `Adding user ${userId} to group ${groupId}`);
+        // INSERT IGNORE prevents errors if the user is already in the group
+        const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
+        await connection.query(memberQuery, [groupId, userId]);
+
+        // --- Commit Transaction ---
+        await connection.commit();
+        // --------------------------
+
+        console.log(TAG, `Successfully added plan and added user ${userId} to group ${groupId}`);
+
+        // Send success response
         res.status(201).json({
             success: true,
-            message: "Plan submitted successfully",
-            id: result.insertId // Return the ID of the newly created plan row
+            message: "Plan submitted successfully and group joined",
+            id: newPlanId // Return the ID of the newly created plan row
         });
 
     } catch (err) {
-        // Handle database errors or other unexpected errors
-        console.error(TAG, `❌ Error saving travel plan:`, err);
-        // Send a generic server error response
-        res.status(500).json({
-            success: false,
-            message: "Server error occurred while saving the travel plan."
-        });
+        // --- Rollback Transaction on Error ---
+        if (connection) {
+            try {
+                await connection.rollback();
+                 console.log(TAG, "Transaction rolled back due to error.");
+            } catch (rollbackError) {
+                console.error(TAG, "❌ Failed to rollback transaction:", rollbackError);
+            }
+        }
+        // -----------------------------------
+        console.error(TAG, `❌ Error saving travel plan or updating group:`, err);
+        res.status(500).json({ success: false, message: "Server error occurred while saving the travel plan or joining the group." });
+    } finally {
+        // --- Release Connection ---
+        if (connection) {
+            connection.release();
+             console.log(TAG, "Database connection released.");
+        }
+        // --------------------------
     }
 });
 
