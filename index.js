@@ -2060,29 +2060,62 @@ app.post('/group/send', async (req, res) => {
     }
 });
 
+// In index.js
+
 // Gets all members of a specific group
 app.get('/group/:groupId/members', async (req, res) => {
+    const TAG = "/group/:groupId/members"; // Logging tag
     const { groupId } = req.params;
 
+    if (!groupId || isNaN(groupId)) {
+        console.warn(TAG, `Invalid or missing groupId: ${groupId}`);
+        return res.status(400).json({ success: false, message: 'Valid Group ID is required.' });
+    }
+    const currentGroupId = parseInt(groupId);
+
     try {
-        const [members] = await db.execute(
-            `SELECT u.user_id, u.name, u.profile_pic 
+        console.log(TAG, `Fetching members for groupId: ${currentGroupId}`);
+
+        // --- QUERY CORRECTED ---
+        const query = `
+            SELECT
+                u.id,           -- Select the correct primary key 'id'
+                u.id as userId, -- Also select as userId for consistency if needed
+                u.name,
+                u.profile_pic   -- Select profile picture if available
             FROM users u
-            JOIN group_members gm ON u.user_id = gm.user_id
-            WHERE gm.group_id = ?`,
-            [groupId]
-        );
-        
-        // This matches the 'GroupMembersResponse' class
-        res.json({ success: true, members: members });
+            -- Corrected JOIN: Use u.id to join with group_members.user_id
+            JOIN group_members gm ON u.id = gm.user_id
+            WHERE gm.group_id = ?
+            ORDER BY u.name ASC; -- Optional: Order alphabetically
+        `;
+        // --- END CORRECTION ---
+
+        const [members] = await db.execute(query, [currentGroupId]);
+
+        console.log(TAG, `Found ${members.length} members for groupId: ${currentGroupId}`);
+
+        // Ensure response structure matches GroupMembersResponse (includes 'members' array)
+        // Ensure fields match User model used in Android (id, name, profilePic)
+        const responseMembers = members.map(member => ({
+            id: member.id,          // Standard ID field
+            userId: member.id,      // Explicit userId if needed elsewhere
+            name: member.name,
+            profilePic: member.profile_pic // Map profile_pic to profilePic
+        }));
+
+        res.json({ success: true, members: responseMembers }); // Correct response structure
 
     } catch (error) {
-        console.error('Error fetching group members:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error(TAG, `Error fetching group members for groupId ${currentGroupId}:`, error);
+        res.status(500).json({
+             success: false,
+             message: 'Server error fetching members',
+             error: error.sqlMessage || error.message
+         });
     }
 });
 
-// Marks all messages in a group as read for a user
 app.post('/group/read', async (req, res) => {
     // MarkGroupReadRequest maps to this body
     const { user_id, group_id } = req.body; 
