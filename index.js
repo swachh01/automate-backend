@@ -679,6 +679,45 @@ app.post("/addTravelPlan", async (req, res) => {
     }
 });
 
+// Add this new route to your index.js
+app.get('/users/destination', async (req, res) => {
+    // We get 'groupId' and 'userId' from the query parameters
+    const { groupId, userId } = req.query;
+
+    if (!groupId || !userId) {
+        return res.status(400).json({ success: false, message: 'Missing groupId or userId' });
+    }
+
+    try {
+        // This query finds all users in a group
+        // AND joins with the users table to get their details
+        // AND filters out the current user (WHERE u.id != ?)
+        const [users] = await db.execute(
+            `SELECT 
+                u.id, 
+                u.name, 
+                u.college, 
+                u.profile_pic AS profilePic, 
+                u.gender,
+                tp.time, 
+                tp.from_place AS fromPlace, 
+                tp.to_place AS toPlace
+            FROM group_members gm
+            JOIN users u ON gm.user_id = u.id
+            LEFT JOIN travel_plans tp ON u.id = tp.user_id AND tp.to_place = (SELECT group_name FROM \`groups\` WHERE group_id = ?)
+            WHERE gm.group_id = ? AND gm.user_id != ?`,
+            [groupId, groupId, userId]
+        );
+
+        // This matches your 'UsersGoingResponse' Java class
+        res.json({ success: true, users: users });
+
+    } catch (error) {
+        console.error('Error fetching users for destination:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
 app.get("/getUserTravelPlan/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
@@ -997,29 +1036,39 @@ app.get("/getUsersGoing", async (req, res) => {
 
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
+    // --- THIS QUERY IS NOW FIXED ---
     const query = `
       SELECT
-        ANY_VALUE(to_place) as destination,
-        COUNT(user_id) as userCount
-      FROM travel_plans
+        ANY_VALUE(tp.to_place) as destination,
+        COUNT(tp.user_id) as userCount,
+        ANY_VALUE(g.group_id) as group_id 
+      FROM travel_plans tp
+      
+      -- We join with the 'groups' table to get the group_id
+      JOIN \`groups\` g ON tp.to_place = g.group_name
+
       WHERE 
-        status = 'Active' 
-        AND time > NOW() 
-        AND to_place_lat IS NOT NULL 
-        AND to_place_lng IS NOT NULL
+        tp.status = 'Active' 
+        AND tp.time > NOW() 
+        AND tp.to_place_lat IS NOT NULL 
+        AND tp.to_place_lng IS NOT NULL
       GROUP BY 
-        ROUND(to_place_lat, 3), 
-        ROUND(to_place_lng, 3)
+        ROUND(tp.to_place_lat, 3), 
+        ROUND(tp.to_place_lng, 3)
       ORDER BY 
         userCount DESC; 
     `;
+    // --- END OF FIX ---
+
     const [destinations] = await db.query(query);
+    // This now sends { destination: "...", userCount: 5, group_id: 123 }
     res.json({ success: true, destinations: destinations || [] });
   } catch (err) {
     console.error(" Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
   }
 });
+
 
 router.get('/travel-plans/by-destination', async (req, res) => {
     const { destination, currentUserId } = req.query;
