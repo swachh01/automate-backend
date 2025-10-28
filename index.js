@@ -334,7 +334,7 @@ app.post("/sendOtp", async (req, res) => { // Make it async
             })
             .catch(err => {
                 // Log Twilio error details
-                console.error(TAG, `❌ Twilio SMS Error for phone ${phone}: Code=${err.code}, Message=${err.message}`, err);
+v                console.error(TAG, `❌ Twilio SMS Error for phone ${phone}: Code=${err.code}, Message=${err.message}`, err);
                 // Inform the app that SMS sending failed
                 // Consider the user experience: Should the DB entry be deleted? For now, we leave it, user can retry.
                 res.status(500).json({ success: false, message: "Failed to send OTP SMS. Please check the number and try again." });
@@ -586,8 +586,6 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   }
 });
 
-
-
 // In index.js
 
 app.post("/addTravelPlan", async (req, res) => {
@@ -619,12 +617,12 @@ app.post("/addTravelPlan", async (req, res) => {
 
         console.log(TAG, `Attempting to add travel plan for userId: ${userId} to destination: ${toPlace}`);
 
-        // --- Start Transaction (Optional but Recommended) ---
+        // --- Start Transaction ---
         connection = await db.getConnection();
         await connection.beginTransaction();
-        // ----------------------------------------------------
+        // ------------------------
 
-        // --- Step 1: Insert the travel plan (Existing Logic) ---
+        // --- Step 1: Insert the travel plan ---
         const planQuery = `
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
@@ -639,22 +637,20 @@ app.post("/addTravelPlan", async (req, res) => {
 
         const newPlanId = planResult.insertId;
         if (!newPlanId) {
-             await connection.rollback(); // Rollback if plan insertion fails
+             await connection.rollback();
              connection.release();
              throw new Error("Travel plan insert failed unexpectedly.");
         }
         console.log(TAG, `Successfully added travel plan ID: ${newPlanId}`);
 
-        // --- Step 2: Add/Ensure Group Exists ---
+        // --- Step 2: Add/Ensure Group Exists (Using new table name) ---
         console.log(TAG, `Ensuring group exists for destination: ${toPlace}`);
-        // INSERT IGNORE will safely do nothing if a group with this name already exists
-        const groupQuery = `INSERT IGNORE INTO \`groups\` (group_name) VALUES (?)`;
+        const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; // Changed table name
         await connection.query(groupQuery, [toPlace]);
 
-        // --- Step 3: Get the group_id ---
-        const [groupRows] = await connection.query('SELECT group_id FROM \`groups\` WHERE group_name = ?', [toPlace]);
+        // --- Step 3: Get the group_id (Using new table name) ---
+        const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [toPlace]); // Changed table name
         if (groupRows.length === 0) {
-            // This should ideally not happen if the INSERT IGNORE worked or the group already existed
             await connection.rollback();
             connection.release();
             throw new Error(`Failed to find or create group_id for destination: ${toPlace}`);
@@ -664,7 +660,6 @@ app.post("/addTravelPlan", async (req, res) => {
 
         // --- Step 4: Add User to the Group ---
         console.log(TAG, `Adding user ${userId} to group ${groupId}`);
-        // INSERT IGNORE prevents errors if the user is already in the group
         const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
         await connection.query(memberQuery, [groupId, userId]);
 
@@ -678,7 +673,7 @@ app.post("/addTravelPlan", async (req, res) => {
         res.status(201).json({
             success: true,
             message: "Plan submitted successfully and group joined",
-            id: newPlanId // Return the ID of the newly created plan row
+            id: newPlanId
         });
 
     } catch (err) {
@@ -704,7 +699,8 @@ app.post("/addTravelPlan", async (req, res) => {
     }
 });
 
-// Add this new route to your index.js
+// In index.js
+
 app.get('/users/destination', async (req, res) => {
     // We get 'groupId' and 'userId' from the query parameters
     const { groupId, userId } = req.query;
@@ -718,20 +714,21 @@ app.get('/users/destination', async (req, res) => {
         // AND joins with the users table to get their details
         // AND filters out the current user (WHERE u.id != ?)
         const [users] = await db.execute(
-            `SELECT 
-                u.id, 
-                u.name, 
-                u.college, 
-                u.profile_pic AS profilePic, 
+            `SELECT
+                u.id,
+                u.name,
+                u.college,
+                u.profile_pic AS profilePic,
                 u.gender,
-                tp.time, 
-                tp.from_place AS fromPlace, 
+                tp.time,
+                tp.from_place AS fromPlace,
                 tp.to_place AS toPlace
             FROM group_members gm
             JOIN users u ON gm.user_id = u.id
-            LEFT JOIN travel_plans tp ON u.id = tp.user_id AND tp.to_place = (SELECT group_name FROM \`groups\` WHERE group_id = ?)
+            -- Subquery uses the new table name
+            LEFT JOIN travel_plans tp ON u.id = tp.user_id AND tp.to_place = (SELECT group_name FROM \`group_table\` WHERE group_id = ?)
             WHERE gm.group_id = ? AND gm.user_id != ?`,
-            [groupId, groupId, userId]
+            [groupId, groupId, userId] // Parameters remain the same
         );
 
         // This matches your 'UsersGoingResponse' Java class
@@ -1059,41 +1056,40 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 });
 
+// In index.js
+
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
-    // --- THIS QUERY IS NOW FIXED ---
     const query = `
       SELECT
         ANY_VALUE(tp.to_place) as destination,
         COUNT(tp.user_id) as userCount,
-        ANY_VALUE(g.group_id) as group_id 
+        ANY_VALUE(g.group_id) as group_id
       FROM travel_plans tp
-      
-      -- We join with the 'groups' table to get the group_id
-      JOIN \`groups\` g ON tp.to_place = g.group_name
 
-      WHERE 
-        tp.status = 'Active' 
-        AND tp.time > NOW() 
-        AND tp.to_place_lat IS NOT NULL 
+      -- Join uses the new table name
+      JOIN \`group_table\` g ON tp.to_place = g.group_name
+
+      WHERE
+        tp.status = 'Active'
+        AND tp.time > NOW()
+        AND tp.to_place_lat IS NOT NULL
         AND tp.to_place_lng IS NOT NULL
-      GROUP BY 
-        ROUND(tp.to_place_lat, 3), 
+      GROUP BY
+        ROUND(tp.to_place_lat, 3),
         ROUND(tp.to_place_lng, 3)
-      ORDER BY 
-        userCount DESC; 
+      ORDER BY
+        userCount DESC;
     `;
-    // --- END OF FIX ---
 
     const [destinations] = await db.query(query);
-    // This now sends { destination: "...", userCount: 5, group_id: 123 }
+    // Response structure is the same, includes group_id
     res.json({ success: true, destinations: destinations || [] });
   } catch (err) {
     console.error(" Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
   }
 });
-
 
 router.get('/travel-plans/by-destination', async (req, res) => {
     const { destination, currentUserId } = req.query;
