@@ -1084,28 +1084,23 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 });
 
-// REPLACE the existing /travel-plans/destinations route with this:
-
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
+    // --- Get currentUserId from query parameter ---
     const { userId } = req.query;
     if (!userId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Current user ID (userId) is required as a query parameter.' 
-      });
+      return res.status(400).json({ success: false, message: 'Current user ID (userId) is required as a query parameter.' });
     }
-    const currentUserId = parseInt(userId);
+    const currentUserId = parseInt(userId); // Ensure it's a number
+    // ---------------------------------------------
 
+    // --- QUERY MODIFIED ---
     const query = `
       SELECT
         ANY_VALUE(tp.to_place) as destination,
-        -- Count all users going to this destination
-        COUNT(tp.user_id) as totalCount,
-        -- Count users EXCLUDING the current user
-        SUM(CASE WHEN tp.user_id != ? THEN 1 ELSE 0 END) as userCount,
+        COUNT(tp.user_id) as userCount,
         ANY_VALUE(g.group_id) as group_id,
-        -- Check if current user is going
+        -- This expression checks if the current user is among those going
         SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing
       FROM travel_plans tp
       JOIN \`group_table\` g ON tp.to_place = g.group_name
@@ -1118,15 +1113,18 @@ app.get("/travel-plans/destinations", async (req, res) => {
         ROUND(tp.to_place_lat, 3),
         ROUND(tp.to_place_lng, 3)
       ORDER BY
-        totalCount DESC;
+        userCount DESC;
     `;
+    // --- END MODIFICATION ---
 
-    const [destinations] = await db.query(query, [currentUserId, currentUserId]);
+    // Pass currentUserId as the first parameter to the query
+    const [destinations] = await db.query(query, [currentUserId]);
 
+    // The response now includes `isCurrentUserGoing` (will be 1 for true, 0 for false)
     res.json({ success: true, destinations: destinations || [] });
 
   } catch (err) {
-    console.error("Error fetching travel plan destinations:", err);
+    console.error(" Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
   }
 });
