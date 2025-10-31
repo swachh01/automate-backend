@@ -2090,9 +2090,6 @@ app.get('/api/user-status/:userId', async (req, res) => {
   }
 });
 
-// In index.js
-
-// Fetches all messages for a group and determines 'is_read' status
 app.get('/group/:groupId/messages', async (req, res) => {
     const TAG = "/group/:groupId/messages"; // Logging Tag
     const { groupId } = req.params;
@@ -2109,42 +2106,43 @@ app.get('/group/:groupId/messages', async (req, res) => {
     try {
         console.log(TAG, `Fetching messages for group ${currentGroupId}, requested by user ${currentUserId}`);
 
-        // 1. Get the user's last_read_timestamp for this group
-        const [memberRows] = await db.execute(
-            'SELECT last_read_timestamp FROM group_members WHERE group_id = ? AND user_id = ?',
-            [currentGroupId, currentUserId]
-        );
-
-        // Use epoch (1970) if user hasn't read anything or isn't a member yet
-        const lastRead = memberRows[0]?.last_read_timestamp ? new Date(memberRows[0].last_read_timestamp) : new Date(0);
-        console.log(TAG, `User ${currentUserId}'s last read timestamp for group ${currentGroupId}: ${lastRead.toISOString()}`);
-
-        // 2. Get all messages, joining with users to get sender_name
-        //    AND determine read status based on last_read_timestamp
+        // This query joins the messages with two sub-queries:
+        // 1. (read_by_count): Counts how many people *besides the sender* have read it.
+        // 2. (total_participants): Counts the total members in the group.
         const query = `
-            SELECT
-                gm.message_id AS id,
+            SELECT 
+                gm.message_id AS id, 
                 gm.sender_id,
-                gm.message_content AS message, -- Still encrypted here
+                gm.message_content AS message, -- Still encrypted
                 gm.timestamp,
-                u.name AS sender_name,
-                -- A message is read if its timestamp is <= the user's last_read_timestamp
-                -- AND the message was NOT sent by the current user viewing the chat
-                (gm.timestamp <= ? AND gm.sender_id != ?) AS is_read
+                u.name as sender_name,
+                
+                -- 1. Count how many users have a "read" entry for this message.
+                --    We subtract 1 if the sender is in this count,
+                --    as we only care about *other* people reading it.
+                (SELECT COUNT(DISTINCT gmr.user_id) 
+                 FROM group_message_read_status gmr 
+                 WHERE gmr.message_id = gm.message_id 
+                   AND gmr.user_id != gm.sender_id) AS read_by_count,
+                   
+                -- 2. Count the total members in the group.
+                (SELECT COUNT(*) 
+                 FROM group_members gmemb 
+                 WHERE gmemb.group_id = gm.group_id) AS total_participants
+                 
             FROM group_messages gm
-            -- Corrected JOIN condition uses u.id
+            
+            -- Get the sender's name
             JOIN users u ON gm.sender_id = u.id
-            WHERE gm.group_id = ?
-            -- Exclude messages hidden specifically by this user (requires another JOIN)
-            AND NOT EXISTS (
-                 SELECT 1 FROM hidden_messages hm
-                 WHERE hm.message_id = gm.message_id AND hm.user_id = ?
-            )
-            ORDER BY gm.timestamp ASC
+            
+            -- Filter out messages this user has hidden
+            LEFT JOIN hidden_messages hm ON gm.message_id = hm.message_id AND hm.user_id = ?
+            
+            WHERE gm.group_id = ? AND hm.message_id IS NULL
+            ORDER BY gm.timestamp ASC;
         `;
-
-        // Parameters: [lastReadTime, currentUserId (for is_read check), groupId, currentUserId (for hidden check)]
-        const [messages] = await db.execute(query, [lastRead, currentUserId, currentGroupId, currentUserId]);
+        
+        const [messages] = await db.execute(query, [currentUserId, currentGroupId]);
         console.log(TAG, `Fetched ${messages.length} visible messages for group ${currentGroupId}`);
 
         // 3. Decrypt message content AFTER fetching
@@ -2153,13 +2151,10 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 return {
                     ...msg,
                     message: decrypt(msg.message), // Decrypt the content
-                    // Convert is_read from 1/0 to true/false if needed by client,
-                    // although the SQL comparison already does this effectively
-                    isRead: !!msg.is_read
                 };
             } catch (decryptError) {
-                 console.error(TAG, `Failed to decrypt message ID ${msg.id}:`, decryptError);
-                 return { ...msg, message: "[Failed to decrypt message]", isRead: !!msg.is_read }; // Show error on client
+                console.error(TAG, `Failed to decrypt message ID ${msg.id}:`, decryptError);
+                return { ...msg, message: "[Failed to decrypt message]" }; // Show error on client
             }
         });
 
@@ -2167,16 +2162,14 @@ app.get('/group/:groupId/messages', async (req, res) => {
 
     } catch (error) {
         console.error(TAG, `Error fetching group messages for group ${currentGroupId}:`, error);
-        // Send back the specific SQL error message if available (useful for debugging)
         res.status(500).json({
-             success: false,
-             message: 'Server error fetching messages',
-             error: error.sqlMessage || error.message // Include SQL error if present
-         });
+            success: false,
+            message: 'Server error fetching messages',
+            error: error.sqlMessage || error.message 
+        });
     }
 });
 
-// Sends a new message to a group
 app.post('/group/send', async (req, res) => {
     // GroupMessageRequest maps to this body
     const { sender_id, group_id, content } = req.body; 
@@ -2256,19 +2249,39 @@ app.get('/group/:groupId/members', async (req, res) => {
 
 app.post('/group/read', async (req, res) => {
     // MarkGroupReadRequest maps to this body
-    const { user_id, group_id } = req.body; 
+    // Your Android code sends 'userId' and 'groupId'
+    const { userId, groupId } = req.body; 
 
-    if (!user_id || !group_id) {
+    if (!userId || !groupId) {
         return res.status(400).json({ success: false, message: 'Missing fields' });
-    }
-
+    }    
+    
     try {
-        await db.execute(
-            'UPDATE group_members SET last_read_timestamp = CURRENT_TIMESTAMP WHERE user_id = ? AND group_id = ?',
-            [user_id, group_id]
-        );
+        // This query finds all messages in the group (gm)
+        // that do NOT have a matching entry in the read_status table (gmrs)
+        // for this user, and then inserts them.
+        const query = `
+            INSERT INTO group_message_read_status (message_id, user_id, group_id)
+            SELECT 
+                gm.message_id AS message_id,
+                ? AS user_id,
+                gm.group_id
+            FROM 
+                group_messages gm
+            WHERE 
+                gm.group_id = ?
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM group_message_read_status gmrs
+                    WHERE 
+                        gmrs.message_id = gm.message_id
+                        AND gmrs.user_id = ?
+                )
+        `;
         
-        res.json({ success: true, message: 'Messages marked as read' });
+        const [result] = await db.execute(query, [userId, groupId, userId]);
+        
+        res.json({ success: true, message: 'Messages marked as read', newReadCount: result.affectedRows });
     } catch (error) {
         console.error('Error marking messages read:', error);
         res.status(500).json({ success: false, message: 'Server error' });
