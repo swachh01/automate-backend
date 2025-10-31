@@ -814,11 +814,12 @@ app.get('/getMessages', async (req, res) => {
     if (!sender_id || !receiver_id) {
       return res.status(400).json({ success: false, message: 'sender_id and receiver_id are required' });
     }
-    
+
+    // 'SELECT *' will now also get the 'status' column
     const sql = `
       SELECT * FROM messages
       WHERE (sender_id = ? AND receiver_id = ?)
-         OR (sender_id = ? AND receiver_id = ?)
+           OR (sender_id = ? AND receiver_id = ?)
       ORDER BY timestamp ASC
     `;
     const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
@@ -827,26 +828,51 @@ app.get('/getMessages', async (req, res) => {
     const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
     const hiddenIds = hiddenMessages.map(h => h.message_id);
     const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
-    
+        
     const decryptedMessages = visibleMessages.map(msg => {
         return {
-            ...msg, 
-            message: decrypt(msg.message) 
+            ...msg,
+            message: decrypt(msg.message)
         };
     });
-    
+        
     res.json({ success: true, messages: decryptedMessages });
   } catch (error) {
     console.error('❌ Error fetching messages:', error);
     res.status(500).json({ success: false, message: 'Database error' });
-  }
+  } 
 });
 
+app.post('/messages/delivered', async (req, res) => {
+  try {
+    // We use the same 'userId' and 'otherUserId' as your markMessagesRead route
+    const { userId, otherUserId } = req.body;
+    if (!userId || !otherUserId) {
+      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
+    }
+
+    // This query updates the status from 0 (Sent) to 1 (Received)
+    // for all messages sent from 'otherUserId' to 'userId'
+    const query = `
+      UPDATE messages
+      SET status = 1
+      WHERE sender_id = ? AND receiver_id = ? AND status = 0
+    `;
+    
+    // Note the order: [otherUserId, userId]
+    const [result] = await db.execute(query, [otherUserId, userId]);
+
+    res.json({ success: true, message: 'Messages marked as delivered', updatedCount: result.affectedRows });
+  } catch (error) {
+    console.error('Error marking messages as delivered:', error);
+    res.status(500).json({ success: false, message: 'Failed to mark messages as delivered' });
+  }
+});
 
 app.post('/sendMessage', async (req, res) => {
   try {
     const { sender_id, receiver_id, message } = req.body;
-    
+      
     const blockCheckQuery = `
       SELECT * FROM blocked_users
       WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
@@ -859,13 +885,15 @@ app.post('/sendMessage', async (req, res) => {
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'sender_id, receiver_id, and message are required' });
     }
-
+      
     const encryptedMessage = encrypt(message);
-    
+        
+    // --- UPDATED QUERY ---
+    // Added the 'status' column and set it to 0 (Sent)
     const query = `
-      INSERT INTO messages (sender_id, receiver_id, message, timestamp)
-      VALUES (?, ?, ?, NOW())
-    `;
+      INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
+      VALUES (?, ?, ?, NOW(), 0)
+    `;  
     const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
     
     res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
@@ -874,8 +902,6 @@ app.post('/sendMessage', async (req, res) => {
     res.status(500).json({ success: false, message: `Failed to send message` });
   }
 });
-
-// In index.js
 
 app.get('/getChatUsers', async (req, res) => {
     const TAG = "/getChatUsers"; // Logging tag
@@ -1602,8 +1628,19 @@ app.post('/markMessagesRead', async (req, res) => {
     if (!userId || !otherUserId) {
       return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
     }
-    const query = `UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0`;
-    const [result] = await db.execute(query, [otherUserId, userId]);
+
+    // --- UPDATED QUERY ---
+    // This now sets the status to 2 (Read) for any message
+    // from 'otherUserId' to 'userId' that is not already read (status < 2).
+    const query = `
+      UPDATE messages 
+      SET status = 2 
+      WHERE sender_id = ? AND receiver_id = ? AND status < 2
+    `;
+    
+    // Note the order: [otherUserId, userId]
+    const [result] = await db.execute(query, [otherUserId, userId]);  
+    
     res.json({ success: true, message: 'Messages marked as read', markedCount: result.affectedRows });
   } catch (error) {
     console.error('Error marking messages as read:', error);
