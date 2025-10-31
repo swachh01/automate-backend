@@ -1713,14 +1713,15 @@ app.get('/getTotalUnreadCount', async (req, res) => {
         
         console.log(`Unread count for user ${currentUserId}: Individual=${individualCount}, Group=${groupCount}, Total=${totalUnreadCount}`);
         
-        res.json({ success: true, totalUnreadCount: totalUnreadCount });
+        // --- THIS IS THE FIX ---
+        // We now send "unreadCount" to match your UnreadCountResponse.java
+        res.json({ success: true, unreadCount: totalUnreadCount });
 
     } catch (error) {
         console.error('Error getting total unread count:', error);
         res.status(500).json({ success: false, message: 'Server error', error: error.sqlMessage || error.message });
     }
 });
-
 app.post("/hideChat", async (req, res) => {
     const TAG = "/hideChat"; // Define TAG for logging context
     try {
