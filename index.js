@@ -2235,30 +2235,62 @@ app.get('/group/:groupId/messages', async (req, res) => {
     }
 });
 
+/**
+ * SEND GROUP MESSAGE
+ *
+ * This route is now UPDATED to fix the bug.
+ * 1. It will first try to add the sender to the 'group_members' table.
+ * 2. 'INSERT IGNORE' will silently do nothing if the user is already a member.
+ * 3. It will then insert the message as normal.
+ */
 app.post('/group/send', async (req, res) => {
-    // GroupMessageRequest maps to this body
-    const { sender_id, group_id, content } = req.body; 
+    // Assuming your Android app sends 'senderId', 'groupId', 'content'
+    const { senderId, groupId, content } = req.body;
+    const TAG = '/group/send';
 
-    if (!sender_id || !group_id || !content) {
-        return res.status(400).json({ success: false, message: 'Missing fields' });
+    if (!senderId || !groupId || !content) {
+        console.warn(TAG, 'Missing fields', req.body);
+        return res.status(400).json({ success: false, message: 'senderId, groupId, and content are required' });
     }
 
+    // --- NEW LOGIC (STEP 1) ---
+    // First, ensure the user is a member of this group.
+    // 'INSERT IGNORE' will add them if they aren't, or do nothing if they are.
+    // This requires the UNIQUE key (user_id, group_id) on your table.
     try {
-        await db.execute(
-            'INSERT INTO group_messages (group_id, sender_id, message_content) VALUES (?, ?, ?)',
-            [group_id, sender_id, content]
-        );
-        
-        res.json({ success: true, message: 'Message sent' });
+        const addMemberQuery = `
+            INSERT IGNORE INTO group_members (user_id, group_id, joined_at) 
+            VALUES (?, ?, NOW())
+        `;
+        await db.execute(addMemberQuery, [senderId, groupId]);
+        console.log(TAG, `Ensured user ${senderId} is member of group ${groupId}`);
     } catch (error) {
-        console.error('Error sending group message:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error(TAG, `Error ensuring group membership for user ${senderId}:`, error);
+        // Don't stop the message, but log the error.
+        // A more robust system might use a transaction here.
+    }
+    // --- END OF NEW LOGIC ---
+
+    // --- ORIGINAL LOGIC (STEP 2) ---
+    // Now, insert the message
+    try {
+        const encryptedMessage = encrypt(content);
+        
+        const insertMessageQuery = `
+            INSERT INTO group_messages (group_id, sender_id, message_content, timestamp)
+            VALUES (?, ?, ?, NOW())
+        `;
+        
+        const [result] = await db.execute(insertMessageQuery, [groupId, senderId, encryptedMessage]);
+
+        res.json({ success: true, message: 'Message sent', messageId: result.insertId });
+
+    } catch (error) {
+        console.error(TAG, `Error sending group message for user ${senderId}:`, error);
+        res.status(500).json({ success: false, message: 'Failed to send message' });
     }
 });
 
-// In index.js
-
-// Gets all members of a specific group
 app.get('/group/:groupId/members', async (req, res) => {
     const TAG = "/group/:groupId/members"; // Logging tag
     const { groupId } = req.params;
