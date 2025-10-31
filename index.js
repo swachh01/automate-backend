@@ -2106,9 +2106,6 @@ app.get('/group/:groupId/messages', async (req, res) => {
     try {
         console.log(TAG, `Fetching messages for group ${currentGroupId}, requested by user ${currentUserId}`);
 
-        // This query joins the messages with two sub-queries:
-        // 1. (read_by_count): Counts how many people *besides the sender* have read it.
-        // 2. (total_participants): Counts the total members in the group.
         const query = `
             SELECT 
                 gm.message_id AS id, 
@@ -2117,19 +2114,29 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.timestamp,
                 u.name as sender_name,
                 
-                -- 1. Count how many users have a "read" entry for this message.
-                --    We subtract 1 if the sender is in this count,
-                --    as we only care about *other* people reading it.
+                -- 1. (FOR "Read by X") - Counts how many other users have read it.
                 (SELECT COUNT(DISTINCT gmr.user_id) 
                  FROM group_message_read_status gmr 
                  WHERE gmr.message_id = gm.message_id 
                    AND gmr.user_id != gm.sender_id) AS read_by_count,
                    
-                -- 2. Count the total members in the group.
+                -- 2. (FOR "Total Members") - Counts total members.
                 (SELECT COUNT(*) 
                  FROM group_members gmemb 
-                 WHERE gmemb.group_id = gm.group_id) AS total_participants
+                 WHERE gmemb.group_id = gm.group_id) AS total_participants,
                  
+                -- 3. (FOR "Unread Header") - Check if the CURRENT user has read it.
+                --    We use 'CASE' to return 2 (Read) or 0 (Sent/Unread).
+                (CASE 
+                    WHEN EXISTS (
+                        SELECT 1 
+                        FROM group_message_read_status gmr_user 
+                        WHERE gmr_user.message_id = gm.message_id 
+                          AND gmr_user.user_id = ? -- Check against the current user
+                    ) THEN 2
+                    ELSE 0 
+                END) AS status
+                     
             FROM group_messages gm
             
             -- Get the sender's name
@@ -2142,10 +2149,14 @@ app.get('/group/:groupId/messages', async (req, res) => {
             ORDER BY gm.timestamp ASC;
         `;
         
-        const [messages] = await db.execute(query, [currentUserId, currentGroupId]);
+        // Note the parameters now:
+        // 1. currentUserId (for the 'status' subquery)
+        // 2. currentUserId (for the 'hidden_messages' join)
+        // 3. currentGroupId (for the main 'WHERE' clause)
+        const [messages] = await db.execute(query, [currentUserId, currentUserId, currentGroupId]);
         console.log(TAG, `Fetched ${messages.length} visible messages for group ${currentGroupId}`);
 
-        // 3. Decrypt message content AFTER fetching
+        // Decrypt message content AFTER fetching
         const decryptedMessages = messages.map(msg => {
             try {
                 return {
