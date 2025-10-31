@@ -902,7 +902,6 @@ app.post('/sendMessage', async (req, res) => {
     res.status(500).json({ success: false, message: `Failed to send message` });
   }
 });
-
 app.get('/getChatUsers', async (req, res) => {
     const TAG = "/getChatUsers"; // Logging tag
     try {
@@ -912,9 +911,9 @@ app.get('/getChatUsers', async (req, res) => {
             return res.status(400).json({ success: false, message: 'userId is required as a query parameter.' });
         }
         const currentUserId = parseInt(userId); // Ensure it's a number
-
+        
         console.log(TAG, `Fetching combined chat list for userId: ${currentUserId}`);
-
+        
         // --- Combined Query using UNION ALL ---
         // Fetches latest message details and calculates unread counts for both chat types.
         const combinedQuery = `
@@ -958,11 +957,9 @@ app.get('/getChatUsers', async (req, res) => {
                 FROM group_messages gm
                 -- Ensure the current user is a member of the group associated with the message
                 JOIN group_members gmem ON gm.group_id = gmem.group_id AND gmem.user_id = ?
-                -- Optional: Add filter for hidden group messages if you implement that feature later
-                -- LEFT JOIN hidden_group_messages hgm ON gm.message_id = hgm.message_id AND hgm.user_id = ?
+                -- Note: No hidden group message logic included here
                 WHERE
-                    gmem.user_id = ? -- Redundant check, but ensures we only consider groups the user is in
-                    -- AND hgm.message_id IS NULL -- Uncomment if hidden group messages are implemented
+                    gmem.user_id = ? -- Redundant check, but good for clarity
             )
             -- Final Selection: Combine details for the latest message (rn=1) from each chat
             SELECT
@@ -971,56 +968,63 @@ app.get('/getChatUsers', async (req, res) => {
                 lc.last_message_content, -- Still encrypted at this stage
                 lc.last_timestamp,
                 lc.last_sender_id,
+
+                -- *** FIX #1: Get the name of the last sender ***
+                u_sender.name AS last_sender_name,
+
                 -- Get Individual Chat Partner Details (Name, Profile Pic)
-                CASE WHEN lc.chat_type = 'individual' THEN u.name ELSE NULL END AS username,
-                CASE WHEN lc.chat_type = 'individual' THEN u.profile_pic ELSE NULL END AS profile_pic,
+                CASE WHEN lc.chat_type = 'individual' THEN u_partner.name ELSE NULL END AS username,
+                CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_pic ELSE NULL END AS profile_pic,
+                
                 -- Get Group Chat Details (Name)
                 CASE WHEN lc.chat_type = 'group' THEN gt.group_name ELSE NULL END AS group_name,
 
                 -- Calculate Unread Count (Individual)
-                -- Counts messages where the current user is the receiver, the sender is the chat partner, and is_read is 0
                  (SELECT COUNT(*) FROM messages m_unread
-                  WHERE lc.chat_type = 'individual' -- Only calculate if it's an individual chat row
+                  WHERE lc.chat_type = 'individual'
                     AND m_unread.receiver_id = ?    -- Current user received the message
-                    AND m_unread.sender_id = lc.chat_id -- Sender is the other person in this chat
-                    AND m_unread.status < 2        
+                    AND m_unread.sender_id = lc.chat_id -- Sender is the other person
+                    AND m_unread.status < 2         -- Message is Sent(0) or Received(1)
                  ) AS individual_unread_count,
 
-                -- Calculate Unread Count (Group)
-                -- Counts messages in the group with timestamp > user's last_read_timestamp for that group, AND not sent by the current user
-                 (SELECT COUNT(*) FROM group_messages gm_unread
-                  -- Find the current user's membership record for this specific group to get their last_read_timestamp
-                  LEFT JOIN group_members gmem_unread ON gm_unread.group_id = gmem_unread.group_id AND gmem_unread.user_id = ?
-                  WHERE lc.chat_type = 'group' -- Only calculate if it's a group chat row
-                    AND gm_unread.group_id = lc.chat_id -- Message belongs to this group
-                    -- Message timestamp is after the user's last read time (use epoch if never read)
-                    AND gm_unread.timestamp > COALESCE(gmem_unread.last_read_timestamp, '1970-01-01 00:00:00')
-                    -- Message was sent by someone else
-                    AND gm_unread.sender_id != ?
+                -- *** FIX #2: Correctly calculate group unread count ***
+                 (SELECT COUNT(*) 
+                  FROM group_messages gm_unread
+                  WHERE lc.chat_type = 'group'
+                    AND gm_unread.group_id = lc.chat_id -- For this group
+                    AND gm_unread.sender_id != ?        -- Not sent by me
+                    AND NOT EXISTS ( -- And no read receipt exists for me
+                        SELECT 1 
+                        FROM group_message_read_status gmrs
+                        WHERE gmrs.message_id = gm_unread.message_id
+                          AND gmrs.user_id = ?
+                    )
                  ) AS group_unread_count
 
             FROM LatestChats lc
-            -- Join User details only for individual chat rows
-            LEFT JOIN users u ON lc.chat_type = 'individual' AND lc.chat_id = u.id
-            -- Join Group details only for group chat rows (using the correct table name)
+            -- Join User details only for individual chat partners
+            LEFT JOIN users u_partner ON lc.chat_type = 'individual' AND lc.chat_id = u_partner.id
+            -- Join Group details only for group chat rows
             LEFT JOIN \`group_table\` gt ON lc.chat_type = 'group' AND lc.chat_id = gt.group_id
+            -- Join User details for the sender of the last message
+            LEFT JOIN users u_sender ON lc.last_sender_id = u_sender.id
+            
             WHERE lc.rn = 1 -- Select only the latest message row from each partition (chat)
-            ORDER BY lc.last_timestamp DESC; -- Order the final combined list by the most recent activity first
+            ORDER BY lc.last_timestamp DESC; -- Order the final combined list
         `;
 
         // Parameters needed for the query (must match the ? placeholders IN ORDER)
         const params = [
-            currentUserId, // for individual CASE WHEN (sender)
-            currentUserId, // for individual PARTITION BY (sender)
-            currentUserId, // for individual LEFT JOIN hidden_messages
-            currentUserId, // for individual WHERE (sender)
-            currentUserId, // for individual WHERE (receiver)
-            currentUserId, // for group JOIN group_members
-            currentUserId, // for group WHERE user_id check
-            // --- Parameters for Subqueries ---
-            currentUserId, // for individual_unread_count receiver_id check
-            currentUserId, // for group_unread_count user_id in JOIN
-            currentUserId  // for group_unread_count sender_id exclusion
+            currentUserId, // 1. (Individual) chat_id CASE
+            currentUserId, // 2. (Individual) PARTITION BY
+            currentUserId, // 3. (Individual) hidden_messages
+            currentUserId, // 4. (Individual) WHERE sender_id
+            currentUserId, // 5. (Individual) WHERE receiver_id
+            currentUserId, // 6. (Group) JOIN group_members
+            currentUserId, // 7. (Group) WHERE user_id
+            currentUserId, // 8. (Individual Unread) receiver_id
+            currentUserId, // 9. (Group Unread) sender_id != ?
+            currentUserId  // 10. (Group Unread) gmrs.user_id = ?
         ];
 
         console.log(TAG, `Executing combined chat query for userId: ${currentUserId}`);
@@ -1031,20 +1035,16 @@ app.get('/getChatUsers', async (req, res) => {
         const chatListItems = rows.map(row => {
             let lastMessage = "";
             try {
-                // Ensure decryption happens only if content exists
                 lastMessage = row.last_message_content ? decrypt(row.last_message_content) : "";
             } catch (e) {
                 console.error(TAG, `Failed to decrypt message content for chat_id ${row.chat_id}, type ${row.chat_type}:`, e.message);
-                lastMessage = "[Encrypted Message]"; // Provide fallback text
+                lastMessage = "[Encrypted Message]";
             }
 
-            // Determine final chat details based on type
             const isGroup = row.chat_type === 'group';
-            const chatId = row.chat_id; // This is either the other user's ID or the group's ID
+            const chatId = row.chat_id; 
             const chatName = isGroup ? row.group_name : row.username;
-            // Use a specific placeholder for group icons, or fetch dynamically if you store group icons
-            const profilePicUrl = isGroup ? 'default_group_icon' : row.profile_pic;
-            // Select the correct unread count based on chat type
+            const profilePicUrl = isGroup ? 'default_group_icon' : row.profile_pic; 
             const unreadCount = isGroup ? row.group_unread_count : row.individual_unread_count;
 
             // Construct the final object matching ChatListItem.java
@@ -1053,10 +1053,11 @@ app.get('/getChatUsers', async (req, res) => {
                 chatId: chatId,
                 chatName: chatName,
                 lastMessage: lastMessage,
-                timestamp: row.last_timestamp, // Send raw timestamp, formatting done on client
+                timestamp: row.last_timestamp, 
                 unreadCount: unreadCount,
                 profilePicUrl: profilePicUrl,
-                lastSenderId: row.last_sender_id // Needed for "You: " prefix logic on client
+                lastSenderId: row.last_sender_id,
+                lastSenderName: row.last_sender_name // *** SEND THE NEW FIELD ***
             };
         });
 
@@ -1068,7 +1069,6 @@ app.get('/getChatUsers', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch chat list',
-            // Include SQL error details during development for easier debugging
             error: error.sqlMessage || error.message
         });
     }
