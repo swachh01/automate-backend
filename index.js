@@ -2248,11 +2248,12 @@ app.get('/group/:groupId/members', async (req, res) => {
 });
 
 app.post('/group/read', async (req, res) => {
-    // MarkGroupReadRequest maps to this body
-    // Your Android code sends 'userId' and 'groupId'
-    const { userId, groupId } = req.body; 
+    // --- THIS IS THE FIX ---
+    // We are now using 'user_id' and 'group_id' (snake_case)
+    // to match what your Android app is sending.
+    const { user_id, group_id } = req.body; 
 
-    if (!userId || !groupId) {
+    if (!user_id || !group_id) {
         return res.status(400).json({ success: false, message: 'Missing fields' });
     }    
     
@@ -2279,7 +2280,8 @@ app.post('/group/read', async (req, res) => {
                 )
         `;
         
-        const [result] = await db.execute(query, [userId, groupId, userId]);
+        // Use the snake_case variables in the query
+        const [result] = await db.execute(query, [user_id, group_id, user_id]);
         
         res.json({ success: true, message: 'Messages marked as read', newReadCount: result.affectedRows });
     } catch (error) {
