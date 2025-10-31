@@ -1663,23 +1663,64 @@ app.get('/getUnreadCount', async (req, res) => {
   }
 });
 
-app.get('/getTotalUnreadCount/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
+/**
+ * GET TOTAL UNREAD COUNT
+ *
+ * This route calculates the total number of unread messages for a user
+ * from BOTH individual and group chats, and returns a single count.
+ * This is used for the notification badge on the HomeActivity.
+ */
+app.get('/getTotalUnreadCount', async (req, res) => {
+    const { userId } = req.query;
     if (!userId) {
-      return res.status(400).json({ success: false, message: 'userId is required' });
+        return res.status(400).json({ success: false, message: 'userId is required' });
     }
-    const query = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND status < 2`;
-    const [rows] = await db.execute(query, [userId]);
-    res.json({ success: true, totalUnreadCount: rows[0].totalUnreadCount });
-  } catch (error) {
-    console.error('Error getting total unread count:', error);
-    res.status(500).json({ success: false, message: 'Failed to get total unread count' });
-  }
+    const currentUserId = parseInt(userId);
+
+    try {
+        // 1. Count unread INDIVIDUAL messages
+        const individualQuery = `
+            SELECT COUNT(*) as totalUnreadCount 
+            FROM messages 
+            WHERE receiver_id = ? AND status < 2
+        `;
+        const [individualRows] = await db.execute(individualQuery, [currentUserId]);
+        const individualCount = individualRows[0].totalUnreadCount;
+
+        // 2. Count unread GROUP messages
+        const groupQuery = `
+            SELECT COUNT(*) as totalUnreadCount
+            FROM group_messages gm
+            WHERE 
+                -- The user must be a member of the group
+                gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)
+                -- The message must NOT be from the user
+                AND gm.sender_id != ?
+                -- And there must NOT be a "read" receipt for this user and this message
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM group_message_read_status gmrs
+                    WHERE gmrs.message_id = gm.message_id
+                      AND gmrs.user_id = ?
+                );
+        `;
+        // Note: The userId is passed three times
+        const [groupRows] = await db.execute(groupQuery, [currentUserId, currentUserId, currentUserId]);
+        const groupCount = groupRows[0].totalUnreadCount;
+
+        // 3. Add them together
+        const totalUnreadCount = individualCount + groupCount;
+        
+        console.log(`Unread count for user ${currentUserId}: Individual=${individualCount}, Group=${groupCount}, Total=${totalUnreadCount}`);
+        
+        res.json({ success: true, totalUnreadCount: totalUnreadCount });
+
+    } catch (error) {
+        console.error('Error getting total unread count:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.sqlMessage || error.message });
+    }
 });
 
-
-// REPLACE your old /hideChat route with this one
 app.post("/hideChat", async (req, res) => {
     const TAG = "/hideChat"; // Define TAG for logging context
     try {
