@@ -1663,6 +1663,7 @@ app.get('/getUnreadCount', async (req, res) => {
   }
 });
 
+
 /**
  * GET TOTAL UNREAD COUNT
  *
@@ -1671,11 +1672,16 @@ app.get('/getUnreadCount', async (req, res) => {
  * This is used for the notification badge on the HomeActivity.
  */
 app.get('/getTotalUnreadCount', async (req, res) => {
+    const TAG = "/getTotalUnreadCount"; // Add logging tag
     const { userId } = req.query;
+    
     if (!userId) {
+        console.warn(TAG, "Missing userId query parameter");
         return res.status(400).json({ success: false, message: 'userId is required' });
     }
+    
     const currentUserId = parseInt(userId);
+    console.log(TAG, `Calculating total unread count for userId: ${currentUserId}`);
 
     try {
         // 1. Count unread INDIVIDUAL messages
@@ -1704,24 +1710,30 @@ app.get('/getTotalUnreadCount', async (req, res) => {
                       AND gmrs.user_id = ?
                 );
         `;
-        // Note: The userId is passed three times
         const [groupRows] = await db.execute(groupQuery, [currentUserId, currentUserId, currentUserId]);
         const groupCount = groupRows[0].totalUnreadCount;
 
         // 3. Add them together
         const totalUnreadCount = individualCount + groupCount;
         
-        console.log(`Unread count for user ${currentUserId}: Individual=${individualCount}, Group=${groupCount}, Total=${totalUnreadCount}`);
+        console.log(TAG, `Unread count for user ${currentUserId}: Individual=${individualCount}, Group=${groupCount}, Total=${totalUnreadCount}`);
         
-        // --- THIS IS THE FIX ---
-        // We now send "unreadCount" to match your UnreadCountResponse.java
-        res.json({ success: true, unreadCount: totalUnreadCount });
+        // *** FIX: Return 'totalUnreadCount' to match TotalUnreadCountResponse.java ***
+        res.json({ 
+            success: true, 
+            totalUnreadCount: totalUnreadCount  // Changed from 'unreadCount' to 'totalUnreadCount'
+        });
 
     } catch (error) {
-        console.error('Error getting total unread count:', error);
-        res.status(500).json({ success: false, message: 'Server error', error: error.sqlMessage || error.message });
+        console.error(TAG, '❌ Error getting total unread count:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error', 
+            error: error.sqlMessage || error.message 
+        });
     }
 });
+
 app.post("/hideChat", async (req, res) => {
     const TAG = "/hideChat"; // Define TAG for logging context
     try {
