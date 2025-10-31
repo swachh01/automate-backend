@@ -1669,7 +1669,7 @@ app.get('/getTotalUnreadCount/:userId', async (req, res) => {
     if (!userId) {
       return res.status(400).json({ success: false, message: 'userId is required' });
     }
-    const query = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND is_read = 0`;
+    const query = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND status < 2`;
     const [rows] = await db.execute(query, [userId]);
     res.json({ success: true, totalUnreadCount: rows[0].totalUnreadCount });
   } catch (error) {
