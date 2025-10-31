@@ -983,7 +983,7 @@ app.get('/getChatUsers', async (req, res) => {
                   WHERE lc.chat_type = 'individual' -- Only calculate if it's an individual chat row
                     AND m_unread.receiver_id = ?    -- Current user received the message
                     AND m_unread.sender_id = lc.chat_id -- Sender is the other person in this chat
-                    AND m_unread.is_read = 0        -- Message is marked as unread
+                    AND m_unread.status < 2        
                  ) AS individual_unread_count,
 
                 -- Calculate Unread Count (Group)
@@ -1654,7 +1654,7 @@ app.get('/getUnreadCount', async (req, res) => {
     if (!userId || !otherUserId) {
       return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
     }
-    const query = `SELECT COUNT(*) as unreadCount FROM messages WHERE sender_id = ? AND receiver_id = ? AND is_read = 0`;
+    const query = `SELECT COUNT(*) as unreadCount FROM messages WHERE sender_id = ? AND receiver_id = ? AND status < 2`;
     const [rows] = await db.execute(query, [otherUserId, userId]);
     res.json({ success: true, unreadCount: rows[0].unreadCount });
   } catch (error) {
