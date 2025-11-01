@@ -123,8 +123,7 @@ io.on('connection', (socket) => {
       });
       console.log(` User ${userId} is now online`);
 
-      // --- CRITICAL FIX: JOIN THE ROOM ---
-      // This was missing from your server. Now it will work.
+      // --- CRITICAL FIX: JOIN THE PRIVATE CHAT ROOM ---
       socket.join(`chat_${userId}`);
       console.log(`User ${userId} joined private chat room: chat_${userId}`);
 
@@ -179,6 +178,7 @@ io.on('connection', (socket) => {
   socket.on('typing_start', (data) => {
     // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
     // We send this *only* to the receiver's private room
+    console.log(`User ${data.userId} is typing to ${data.chatWithUserId}`);
     socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
       userId: data.userId,
       isTyping: true
@@ -187,6 +187,7 @@ io.on('connection', (socket) => {
 
   socket.on('typing_stop', (data) => {
     // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
+    console.log(`User ${data.userId} stopped typing to ${data.chatWithUserId}`);
     socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
       userId: data.userId,
       isTyping: false
@@ -204,17 +205,17 @@ io.on('connection', (socket) => {
 
   // --- 4. NEW READ RECEIPT LOGIC ---
   socket.on('i_delivered_messages', (data) => {
-    // data = { senderId: 45 (the person I'm chatting with) }
+    // data = { partnerId: 45 (the person I'm chatting with, the sender) }
     // Tell the sender that I have received their messages.
-    console.log(`Relaying 'delivered' status to room: chat_${data.senderId}`);
-    socket.to(`chat_${data.senderId}`).emit('partner_delivered_messages');
+    console.log(`Relaying 'delivered' status to room: chat_${data.partnerId}`);
+    socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages');
   });
 
   socket.on('i_read_messages', (data) => {
-    // data = { senderId: 45 (the person I'm chatting with) }
+    // data = { partnerId: 45 (the person I'm chatting with, the sender) }
     // Tell the sender that I have read their messages.
-    console.log(`Relaying 'read' status to room: chat_${data.senderId}`);
-    socket.to(`chat_${data.senderId}`).emit('partner_read_messages');
+    console.log(`Relaying 'read' status to room: chat_${data.partnerId}`);
+    socket.to(`chat_${data.partnerId}`).emit('partner_read_messages');
   });
 
 }); // --- END OF io.on('connection', ...) BLOCK ---
