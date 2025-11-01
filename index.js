@@ -102,11 +102,9 @@ async function updateUserPresence(userId, isOnline) {
 }
 
 
-// --- FULL UPDATED SOCKET.IO LOGIC ---
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  // --- 1. Your existing Online/Offline Presence Logic (GOOD!) ---
   socket.on('user_online', async (userId) => {
     try {
       onlineUsers.set(userId.toString(), {
@@ -117,16 +115,15 @@ io.on('connection', (socket) => {
 
       await updateUserPresence(userId, true);
 
-      // Broadcast to all other clients that this user is online
       socket.broadcast.emit('user_status_changed', {
         userId: userId.toString(),
         isOnline: true,
         lastSeen: new Date()
       });
 
-      console.log(` User ${userId} is now online`);
+      console.log(`✅ User ${userId} is now online`);
     } catch (error) {
-      console.error(' Error handling user_online:', error);
+      console.error('❌ Error handling user_online:', error);
     }
   });
 
@@ -141,13 +138,12 @@ io.on('connection', (socket) => {
         lastSeen: new Date()
       });
 
-      console.log(`User ${userId} manually went offline`);
+      console.log(`❌ User ${userId} manually went offline`);
     } catch (error) {
-      console.error(' Error handling user_offline:', error);
+      console.error('❌ Error handling user_offline:', error);
     }
   });
 
-  // --- 2. Your existing (and better) Disconnect Logic ---
   socket.on('disconnect', async () => {
     try {
       let disconnectedUserId = null;
@@ -169,46 +165,56 @@ io.on('connection', (socket) => {
           lastSeen: new Date()
         });
 
-        console.log(` User ${disconnectedUserId} disconnected`);
+        console.log(`🔌 User ${disconnectedUserId} disconnected`);
       }
     } catch (error) {
       console.error('❌ Error handling disconnect:', error);
     }
   });
 
-  // --- 3. NEW Logic for 1-on-1 Chat ---
-  
-  // When ChatActivity opens, it joins a private room
   socket.on('join', (userId) => {
     socket.join(`chat_${userId}`);
-    console.log(`User ${userId} joined private chat room: chat_${userId}`);
+    console.log(`👤 User ${userId} joined private chat room: chat_${userId}`);
   });
 
-  // This replaces your 'typing_start'
   socket.on('typing', (data) => {
-    // data = { senderId: 12, receiverId: 45 }
-    // Send this event ONLY to the receiver's private room
     socket.to(`chat_${data.receiverId}`).emit('typing', data);
   });
 
-  // This replaces your 'typing_stop'
   socket.on('stop typing', (data) => {
-    // data = { senderId: 12, receiverId: 45 }
     socket.to(`chat_${data.receiverId}`).emit('stop typing', data);
   });
   
-  // (Optional but recommended) For instant new messages
   socket.on('new message', (data) => {
-    // data = { receiverId: 45, messageObject: {...} }
     socket.to(`chat_${data.receiverId}`).emit('new message', data.messageObject);
   });
-  // --- END OF NEW LOGIC ---
 
-  // --- REMOVED your old typing_start / typing_stop ---
-  // The Android code I gave you uses 'typing' and 'stop typing'
+  // ========================================
+  // NEW: Message Delivered Event
+  // ========================================
+  socket.on('message_delivered', (data) => {
+    // data = { messageId: 123, receiverId: 45, senderId: 12 }
+    // Notify the sender that their message was delivered
+    socket.to(`chat_${data.senderId}`).emit('message_delivered', {
+      messageId: data.messageId,
+      status: 1 // Delivered
+    });
+    console.log(`✅ Message ${data.messageId} delivered to user ${data.receiverId}`);
+  });
+
+  // ========================================
+  // NEW: Message Read Event
+  // ========================================
+  socket.on('message_read', (data) => {
+    // data = { messageId: 123, senderId: 12, receiverId: 45 }
+    // Notify the sender that their message was read
+    socket.to(`chat_${data.senderId}`).emit('message_read', {
+      messageId: data.messageId,
+      status: 2 // Read
+    });
+    console.log(`👁️ Message ${data.messageId} read by user ${data.receiverId}`);
+  });
 });
-// --- END OF SOCKET.IO BLOCK ---
-
 
 async function getUserByPhone(phone) {
   try {
@@ -935,13 +941,40 @@ app.post('/sendMessage', async (req, res) => {
       
     const encryptedMessage = encrypt(message);
         
-    // --- UPDATED QUERY ---
-    // Added the 'status' column and set it to 0 (Sent)
     const query = `
       INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
       VALUES (?, ?, ?, NOW(), 0)
     `;  
     const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
+    
+    // ========================================
+    // NEW: Emit the message via Socket.IO
+    // ========================================
+    const newMessageId = result.insertId;
+    
+    // Get the timestamp that was just inserted
+    const [insertedMsg] = await db.query(
+      'SELECT timestamp FROM messages WHERE id = ?', 
+      [newMessageId]
+    );
+    
+    // Create the complete message object to send via socket
+    const messageToEmit = {
+      id: newMessageId,
+      sender_id: sender_id,
+      receiver_id: receiver_id,
+      message: message, // Send DECRYPTED for real-time display
+      timestamp: insertedMsg[0].timestamp,
+      status: 0 // Sent
+    };
+    
+    // Emit to the RECEIVER's room
+    io.to(`chat_${receiver_id}`).emit('new message', messageToEmit);
+    
+    console.log(`📨 Emitted new message (ID: ${newMessageId}) to chat_${receiver_id}`);
+    // ========================================
+    // END OF FIX
+    // ========================================
     
     res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
   } catch (error) {
@@ -949,6 +982,7 @@ app.post('/sendMessage', async (req, res) => {
     res.status(500).json({ success: false, message: `Failed to send message` });
   }
 });
+
 app.get('/getChatUsers', async (req, res) => {
     const TAG = "/getChatUsers"; // Logging tag
     try {
