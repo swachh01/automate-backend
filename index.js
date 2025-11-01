@@ -570,75 +570,66 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
-  const TAG = "/updateProfile"; // Add a tag for logging
   try {
+    console.log("=== Update Profile Request ===");
+    console.log("Body:", req.body);
+    console.log("File:", req.file);
+    
     const { userId, dob, degree, year } = req.body || {};
     
     if (!userId) {
-      console.warn(TAG, "Request missing userId");
-      return res.status(400).json({ success: false, message: `Missing userId` });
+      console.log("ERROR: Missing userId");
+      return res.status(400).json({ success: false, message: "Missing userId" });
     }
     
     const sets = [];
     const params = [];
-
-    // --- THIS IS THE UPDATED LOGIC ---
     
-    // Check if the property was sent, not just if it's "truthy"
-    // We convert "" to null, because a database INT/DATE column
-    // can store NULL, but will crash on an empty string.
-    
-    if (dob !== undefined) { 
-      sets.push("dob = ?"); 
-      params.push(dob === "" ? null : dob); 
-    }
-    if (degree !== undefined) { 
-      sets.push("degree = ?"); 
-      params.push(degree === "" ? null : degree); 
-    }
-    if (year !== undefined) {
-      sets.push("year = ?");
-      params.push(year === "" ? null : year); 
-    }
+    if (dob) { sets.push("dob = ?"); params.push(dob); }
+    if (degree) { sets.push("degree = ?"); params.push(degree); }
+    if (year) { sets.push("year = ?"); params.push(year); }
     if (req.file && req.file.path) {
       sets.push("profile_pic = ?");
       params.push(req.file.path);
     }
-    // --- END OF UPDATED LOGIC ---
-
+    
     if (sets.length === 0) {
-      console.warn(TAG, `User ${userId} sent an update with no changes.`);
-      return res.status(400).json({ success: false, message: `Nothing to update` });
+      console.log("ERROR: Nothing to update");
+      return res.status(400).json({ success: false, message: "Nothing to update" });
     }
-
+    
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
     params.push(userId);
     
-    console.log(TAG, `Executing query for user ${userId}: ${sql} with params: ${params}`);
+    console.log("SQL:", sql);
+    console.log("Params:", params);
     
     const [result] = await db.query(sql, params);
     
+    console.log("Update result:", result);
+    
     if (result.affectedRows === 0) {
-      console.warn(TAG, `User ${userId} not found for update.`);
-      return res.status(404).json({ success: false, message: `User not found` });
+      console.log("ERROR: User not found");
+      return res.status(404).json({ success: false, message: "User not found" });
     }
       
-    // This is fine, sets 'completed' status
-    await db.query(`UPDATE users SET signup_status = 'completed' WHERE id = ? AND signup_status != 'completed'`, [userId]);
+    await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
     
-    // Get the fully updated user
-    const [rows] = await db.query(`SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, [userId]);
+    const [rows] = await db.query("SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?", [userId]);
     
-    console.log(TAG, `Successfully updated profile for user ${userId}`);
+    console.log("Updated user:", rows[0]);
+    
     res.json({ success: true, message: "Profile updated and signup complete!", user: rows[0] });
-
   } catch (err) {
-    // This is where your 500 error is coming from
-    console.error("❌ /updateProfile error:", err);
+    console.error("=== /updateProfile ERROR ===");
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    
+    // Send proper JSON error response
     res.status(500).json({ 
       success: false, 
-      message: 'Internal Server Error',
-      error: err.sqlMessage || err.message // Send the database error back
+      message: "Internal Server Error",
+      error: err.message
     });
   } 
 });
