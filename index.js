@@ -926,43 +926,78 @@ app.post('/messages/delivered', async (req, res) => {
   }
 });
 
+// REPLACE your existing /sendMessage route with this fixed version
+
 app.post('/sendMessage', async (req, res) => {
+  const TAG = "/sendMessage"; // Add logging tag
   try {
     const { sender_id, receiver_id, message } = req.body;
+    
+    // Validation
+    if (!sender_id || !receiver_id || !message) {
+      console.warn(TAG, 'Missing required fields');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'sender_id, receiver_id, and message are required' 
+      });
+    }
+    
+    console.log(TAG, `User ${sender_id} sending message to ${receiver_id}`);
       
+    // Check if either user has blocked the other
     const blockCheckQuery = `
       SELECT * FROM blocked_users
       WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
     `;
     const [blockedRows] = await db.query(blockCheckQuery, [sender_id, receiver_id, receiver_id, sender_id]);
+    
     if (blockedRows.length > 0) {
-      return res.status(403).json({ success: false, message: 'This user cannot be messaged.' });
+      console.warn(TAG, `Blocked: User ${sender_id} cannot message ${receiver_id}`);
+      return res.status(403).json({ 
+        success: false, 
+        message: 'This user cannot be messaged.' 
+      });
     }
     
-    if (!sender_id || !receiver_id || !message) {
-      return res.status(400).json({ success: false, message: 'sender_id, receiver_id, and message are required' });
-    }
-      
+    // Encrypt the message
     const encryptedMessage = encrypt(message);
+    console.log(TAG, 'Message encrypted successfully');
         
+    // Insert the message with UTC_TIMESTAMP() for consistency
     const query = `
       INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
-      VALUES (?, ?, ?, NOW(), 0)
+      VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
     `;  
     const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
     
-    // ========================================
-    // NEW: Emit the message via Socket.IO
-    // ========================================
-    const newMessageId = result.insertId;
+    if (!result.insertId) {
+      console.error(TAG, 'Failed to insert message - no insertId returned');
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to save message to database' 
+      });
+    }
     
-    // Get the timestamp that was just inserted
+    const newMessageId = result.insertId;
+    console.log(TAG, `Message saved with ID: ${newMessageId}`);
+    
+    // Get the actual timestamp that was inserted
     const [insertedMsg] = await db.query(
       'SELECT timestamp FROM messages WHERE id = ?', 
       [newMessageId]
     );
     
-    // Create the complete message object to send via socket
+    if (!insertedMsg || insertedMsg.length === 0) {
+      console.error(TAG, 'Could not retrieve inserted message timestamp');
+      // Still return success since message was saved
+      return res.json({ 
+        success: true, 
+        message: 'Message sent successfully', 
+        messageId: newMessageId 
+      });
+    }
+    
+    // Create the complete message object for Socket.IO
     const messageToEmit = {
       id: newMessageId,
       sender_id: sender_id,
@@ -973,17 +1008,31 @@ app.post('/sendMessage', async (req, res) => {
     };
     
     // Emit to the RECEIVER's room
-    io.to(`chat_${receiver_id}`).emit('new message', messageToEmit);
+    try {
+      io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
+      console.log(TAG, `Emitted 'new_message_received' (ID: ${newMessageId}) to chat_${receiver_id}`);
+    } catch (socketError) {
+      console.error(TAG, 'Error emitting socket event:', socketError);
+      // Don't fail the request if socket emit fails
+    }
     
-    console.log(`📨 Emitted new message (ID: ${newMessageId}) to chat_${receiver_id}`);
-    // ========================================
-    // END OF FIX
-    // ========================================
+    // Send success response
+    res.json({ 
+      success: true, 
+      message: 'Message sent successfully', 
+      messageId: newMessageId 
+    });
     
-    res.json({ success: true, message: 'Message sent successfully', messageId: result.insertId });
   } catch (error) {
-    console.error('❌ Error sending message:', error);
-    res.status(500).json({ success: false, message: `Failed to send message` });
+    console.error(TAG, '❌ Error in /sendMessage:', error);
+    console.error(TAG, 'Error stack:', error.stack);
+    
+    // Send proper error response
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to send message',
+      error: error.message 
+    });
   }
 });
 
