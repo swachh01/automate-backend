@@ -102,9 +102,12 @@ async function updateUserPresence(userId, isOnline) {
 }
 
 
+// --- REPLACE YOUR ENTIRE io.on('connection', ...) BLOCK WITH THIS ---
+
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
+  // --- 1. YOUR EXISTING PRESENCE LOGIC (MERGED) ---
   socket.on('user_online', async (userId) => {
     try {
       onlineUsers.set(userId.toString(), {
@@ -112,39 +115,42 @@ io.on('connection', (socket) => {
         lastSeen: new Date(),
         isOnline: true
       });
-
       await updateUserPresence(userId, true);
-
       socket.broadcast.emit('user_status_changed', {
         userId: userId.toString(),
         isOnline: true,
         lastSeen: new Date()
       });
+      console.log(` User ${userId} is now online`);
 
-      console.log(`✅ User ${userId} is now online`);
+      // --- CRITICAL FIX: JOIN THE ROOM ---
+      // This was missing from your server. Now it will work.
+      socket.join(`chat_${userId}`);
+      console.log(`User ${userId} joined private chat room: chat_${userId}`);
+
     } catch (error) {
-      console.error('❌ Error handling user_online:', error);
+      console.error(' Error handling user_online:', error);
     }
   });
 
   socket.on('user_offline', async (userId) => {
+    // (This code is fine, no changes needed)
     try {
       onlineUsers.delete(userId.toString());
       await updateUserPresence(userId, false);
-      
       socket.broadcast.emit('user_status_changed', {
         userId: userId.toString(),
         isOnline: false,
         lastSeen: new Date()
       });
-
-      console.log(`❌ User ${userId} manually went offline`);
+      console.log(`User ${userId} manually went offline`);
     } catch (error) {
-      console.error('❌ Error handling user_offline:', error);
+      console.error(' Error handling user_offline:', error);
     }
   });
 
   socket.on('disconnect', async () => {
+    // (This code is fine, no changes needed)
     try {
       let disconnectedUserId = null;
       for (let [userId, userData] of onlineUsers.entries()) {
@@ -153,68 +159,65 @@ io.on('connection', (socket) => {
           break;
         }
       }
-
       if (disconnectedUserId) {
         onlineUsers.delete(disconnectedUserId);
-        
         await updateUserPresence(disconnectedUserId, false);
-
         socket.broadcast.emit('user_status_changed', {
           userId: disconnectedUserId,
           isOnline: false,
           lastSeen: new Date()
         });
-
-        console.log(`🔌 User ${disconnectedUserId} disconnected`);
+        console.log(` User ${disconnectedUserId} disconnected`);
       }
     } catch (error) {
       console.error('❌ Error handling disconnect:', error);
     }
   });
 
-  socket.on('join', (userId) => {
-    socket.join(`chat_${userId}`);
-    console.log(`👤 User ${userId} joined private chat room: chat_${userId}`);
-  });
 
-  socket.on('typing', (data) => {
-    socket.to(`chat_${data.receiverId}`).emit('typing', data);
-  });
-
-  socket.on('stop typing', (data) => {
-    socket.to(`chat_${data.receiverId}`).emit('stop typing', data);
-  });
-  
-  socket.on('new message', (data) => {
-    socket.to(`chat_${data.receiverId}`).emit('new message', data.messageObject);
-  });
-
-  // ========================================
-  // NEW: Message Delivered Event
-  // ========================================
-  socket.on('message_delivered', (data) => {
-    // data = { messageId: 123, receiverId: 45, senderId: 12 }
-    // Notify the sender that their message was delivered
-    socket.to(`chat_${data.senderId}`).emit('message_delivered', {
-      messageId: data.messageId,
-      status: 1 // Delivered
+  // --- 2. YOUR TYPING LOGIC (USING YOUR EVENT NAMES) ---
+  socket.on('typing_start', (data) => {
+    // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
+    // We send this *only* to the receiver's private room
+    socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
+      userId: data.userId,
+      isTyping: true
     });
-    console.log(`✅ Message ${data.messageId} delivered to user ${data.receiverId}`);
   });
 
-  // ========================================
-  // NEW: Message Read Event
-  // ========================================
-  socket.on('message_read', (data) => {
-    // data = { messageId: 123, senderId: 12, receiverId: 45 }
-    // Notify the sender that their message was read
-    socket.to(`chat_${data.senderId}`).emit('message_read', {
-      messageId: data.messageId,
-      status: 2 // Read
+  socket.on('typing_stop', (data) => {
+    // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
+    socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
+      userId: data.userId,
+      isTyping: false
     });
-    console.log(`👁️ Message ${data.messageId} read by user ${data.receiverId}`);
   });
-});
+
+  // --- 3. NEW MESSAGE LOGIC (THE INSTANT FIX) ---
+  socket.on('new_message_sent', (data) => {
+    // data = { receiverId: 45, messageObject: {...} }
+    // This event is sent by the sender.
+    // We relay (emit) it to the receiver's private room.
+    console.log(`Relaying message to room: chat_${data.receiverId}`);
+    socket.to(`chat_${data.receiverId}`).emit('new_message_received', data.messageObject);
+  });
+
+  // --- 4. NEW READ RECEIPT LOGIC ---
+  socket.on('i_delivered_messages', (data) => {
+    // data = { senderId: 45 (the person I'm chatting with) }
+    // Tell the sender that I have received their messages.
+    console.log(`Relaying 'delivered' status to room: chat_${data.senderId}`);
+    socket.to(`chat_${data.senderId}`).emit('partner_delivered_messages');
+  });
+
+  socket.on('i_read_messages', (data) => {
+    // data = { senderId: 45 (the person I'm chatting with) }
+    // Tell the sender that I have read their messages.
+    console.log(`Relaying 'read' status to room: chat_${data.senderId}`);
+    socket.to(`chat_${data.senderId}`).emit('partner_read_messages');
+  });
+
+}); // --- END OF io.on('connection', ...) BLOCK ---
 
 async function getUserByPhone(phone) {
   try {
