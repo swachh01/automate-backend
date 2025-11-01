@@ -571,12 +571,20 @@ app.post("/login", async (req, res) => {
 
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
+    console.log("=== Update Profile Request ===");
+    console.log("Body:", req.body);
+    console.log("File:", req.file);
+    
     const { userId, dob, degree, year } = req.body || {};
+    
     if (!userId) {
+      console.log("ERROR: Missing userId");
       return res.status(400).json({ success: false, message: `Missing userId` });
     }
+    
     const sets = [];
     const params = [];
+    
     if (dob) { sets.push("dob = ?"); params.push(dob); }
     if (degree) { sets.push("degree = ?"); params.push(degree); }
     if (year) { sets.push("year = ?"); params.push(year); }
@@ -584,29 +592,53 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       sets.push("profile_pic = ?");
       params.push(req.file.path);
     }
+    
     if (sets.length === 0) {
+      console.log("ERROR: Nothing to update");
       return res.status(400).json({ success: false, message: `Nothing to update` });
     }
+    
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
     params.push(userId);
+    
+    console.log("SQL:", sql);
+    console.log("Params:", params);
+    
     const [result] = await db.query(sql, params);
+    
+    console.log("Update result:", result);
+    
     if (result.affectedRows === 0) {
+      console.log("ERROR: User not found");
       return res.status(404).json({ success: false, message: `User not found` });
     }
       
-    // ✅ FIXED: Removed template literal syntax
+    // Update signup status
     await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
     
-    // ✅ FIXED: Removed template literal syntax
+    // Fetch updated user data
     const [rows] = await db.query("SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?", [userId]);
+    
+    console.log("Updated user:", rows[0]);
     
     res.json({ success: true, message: "Profile updated and signup complete!", user: rows[0] });
   } catch (err) {
-    console.error("/updateProfile error:", err);
-    res.status(500).json({ success: false, message: `Internal Server Error` });
+    // ✅ PROPER ERROR LOGGING
+    console.error("=== /updateProfile ERROR ===");
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    console.error("Error code:", err.code);
+    console.error("Error errno:", err.errno);
+    console.error("SQL State:", err.sqlState);
+    console.error("SQL Message:", err.sqlMessage);
+    
+    res.status(500).json({ 
+      success: false, 
+      message: `Internal Server Error`,
+      error: err.message // Include error in response for debugging
+    });
   } 
 });
-
 app.post("/addTravelPlan", async (req, res) => {
     const TAG = "/addTravelPlan"; // Logging tag
     let connection; // Define connection variable for potential transaction
