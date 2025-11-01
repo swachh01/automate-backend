@@ -18,11 +18,13 @@ const multer = require("multer");
 const mysql = require("mysql2");
 
 const http = require('http');
-const socketIo = require('socket.io');
+// --- RENAMED to 'Server' to follow Socket.IO v4 convention ---
+const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
+// --- Use 'new Server()' ---
+const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
@@ -42,13 +44,14 @@ cloudinary.config({
 
 const onlineUsers = new Map();
 
-app.use(cors());
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-cloudinary.config({
-  secure: true,
-});
+// --- REMOVED DUPLICATE app.use/config calls ---
+// app.use(cors());
+// app.use(express.json({ limit: "10mb" }));
+// app.use(express.urlencoded({ extended: true }));
+// cloudinary.config({
+//   secure: true,
+// });
+// --- END REMOVAL ---
 
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -106,9 +109,12 @@ async function updateUserPresence(userId, isOnline) {
   }
 }
 
+
+// --- FULL UPDATED SOCKET.IO LOGIC ---
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
+  // --- 1. Your existing Online/Offline Presence Logic (GOOD!) ---
   socket.on('user_online', async (userId) => {
     try {
       onlineUsers.set(userId.toString(), {
@@ -149,6 +155,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // --- 2. Your existing (and better) Disconnect Logic ---
   socket.on('disconnect', async () => {
     try {
       let disconnectedUserId = null;
@@ -177,22 +184,39 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('typing_start', (data) => {
-    socket.broadcast.emit('user_typing', {
-      userId: data.userId,
-      chatWithUserId: data.chatWithUserId,
-      isTyping: true
-    });
+  // --- 3. NEW Logic for 1-on-1 Chat ---
+  
+  // When ChatActivity opens, it joins a private room
+  socket.on('join', (userId) => {
+    socket.join(`chat_${userId}`);
+    console.log(`User ${userId} joined private chat room: chat_${userId}`);
   });
 
-  socket.on('typing_stop', (data) => {
-    socket.broadcast.emit('user_typing', {
-      userId: data.userId,
-      chatWithUserId: data.chatWithUserId,
-      isTyping: false
-    });
+  // This replaces your 'typing_start'
+  socket.on('typing', (data) => {
+    // data = { senderId: 12, receiverId: 45 }
+    // Send this event ONLY to the receiver's private room
+    socket.to(`chat_${data.receiverId}`).emit('typing', data);
   });
+
+  // This replaces your 'typing_stop'
+  socket.on('stop typing', (data) => {
+    // data = { senderId: 12, receiverId: 45 }
+    socket.to(`chat_${data.receiverId}`).emit('stop typing', data);
+  });
+  
+  // (Optional but recommended) For instant new messages
+  socket.on('new message', (data) => {
+    // data = { receiverId: 45, messageObject: {...} }
+    socket.to(`chat_${data.receiverId}`).emit('new message', data.messageObject);
+  });
+  // --- END OF NEW LOGIC ---
+
+  // --- REMOVED your old typing_start / typing_stop ---
+  // The Android code I gave you uses 'typing' and 'stop typing'
 });
+// --- END OF SOCKET.IO BLOCK ---
+
 
 async function getUserByPhone(phone) {
   try {
@@ -221,12 +245,15 @@ app.get("/debug/stores", (req, res) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(403).json({ message: "Not available in production" });
   }
+  // --- FIXED: otpStore is not defined in this file ---
+  // You moved to DB-based OTPs, so this route is mostly for signupStore
   res.json({
-    otpStore: Object.keys(otpStore).map(phone => ({
-      phone,
-      hasOtp: !!otpStore[phone].otp,
-      expires: new Date(otpStore[phone].expires)
-    })),
+    // otpStore: Object.keys(otpStore).map(phone => ({
+    //   phone,
+    //   hasOtp: !!otpStore[phone].otp,
+    //   expires: new Date(otpStore[phone].expires)
+    // })),
+    otpStore: "OTP is now stored in the database ('otp' table).",
     signupStore: Object.keys(signupStore).map(phone => ({
       phone,
       data: signupStore[phone]
@@ -1718,10 +1745,10 @@ app.get('/getTotalUnreadCount', async (req, res) => {
         
         console.log(TAG, `Unread count for user ${currentUserId}: Individual=${individualCount}, Group=${groupCount}, Total=${totalUnreadCount}`);
         
-        // *** FIX: Return 'totalUnreadCount' to match TotalUnreadCountResponse.java ***
+        // *** FIX: Return 'unreadCount' to match UnreadCountResponse.java ***
         res.json({ 
             success: true, 
-            totalUnreadCount: totalUnreadCount  // Changed from 'unreadCount' to 'totalUnreadCount'
+            unreadCount: totalUnreadCount  // Changed from 'totalUnreadCount'
         });
 
     } catch (error) {
@@ -2390,6 +2417,7 @@ app.post('/group/read', async (req, res) => {
 app.use(router);
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
+// --- FINAL FIX: Use server.listen() instead of app.listen() ---
+server.listen(PORT, () => {
+  console.log(`✅ Server (with Socket.IO) listening on http://0.0.0.0:${PORT}`);
 });
