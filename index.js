@@ -44,14 +44,6 @@ cloudinary.config({
 
 const onlineUsers = new Map();
 
-// --- REMOVED DUPLICATE app.use/config calls ---
-// app.use(cors());
-// app.use(express.json({ limit: "10mb" }));
-// app.use(express.urlencoded({ extended: true }));
-// cloudinary.config({
-//   secure: true,
-// });
-// --- END REMOVAL ---
 
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -601,18 +593,19 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: `User not found` });
     }
-
-    await db.query(`UPDATE users SET signup_status = 'completed' WHERE id = ?`, [userId]);
+      
+    // ✅ FIXED: Removed template literal syntax
+    await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
     
-    const [rows] = await db.query(`SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, [userId]);
+    // ✅ FIXED: Removed template literal syntax
+    const [rows] = await db.query("SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?", [userId]);
+    
     res.json({ success: true, message: "Profile updated and signup complete!", user: rows[0] });
   } catch (err) {
-    console.error(" /updateProfile error:", err);
+    console.error("/updateProfile error:", err);
     res.status(500).json({ success: false, message: `Internal Server Error` });
-  }
+  } 
 });
-
-// In index.js
 
 app.post("/addTravelPlan", async (req, res) => {
     const TAG = "/addTravelPlan"; // Logging tag
