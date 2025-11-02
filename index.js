@@ -218,7 +218,28 @@ io.on('connection', (socket) => {
     socket.to(`chat_${data.partnerId}`).emit('partner_read_messages');
   });
 
-}); // --- END OF io.on('connection', ...) BLOCK ---
+  socket.on('join_group', (groupId) => {
+    socket.join(`group_${groupId}`);
+    console.log(`Socket ${socket.id} joined group room: group_${groupId}`);
+  });
+
+  socket.on('new_group_message_sent', (data) => {
+    // data = { groupId: 5, messageObject: {...} }
+    console.log(`Relaying group message to room: group_${data.groupId}`);
+    socket.to(`group_${data.groupId}`).emit('new_group_message', data.messageObject);
+});
+
+// When someone reads group messages, notify all group members
+socket.on('group_read', (data) => {
+    // data = { userId: 12, groupId: 5 }
+    console.log(`User ${data.userId} read messages in group ${data.groupId}`);
+    socket.to(`group_${data.groupId}`).emit('group_messages_read', {
+        userId: data.userId,
+        groupId: data.groupId
+    });
+});
+
+}); 
 
 async function getUserByPhone(phone) {
   try {
@@ -2369,44 +2390,21 @@ app.get('/group/:groupId/messages', async (req, res) => {
     }
 });
 
-/**
- * SEND GROUP MESSAGE
- *
- * This route is now UPDATED to fix the bug.
- * 1. It will first try to add the sender to the 'group_members' table.
- * 2. 'INSERT IGNORE' will silently do nothing if the user is already a member.
- * 3. It will then insert the message as normal.
- */
 app.post('/group/send', async (req, res) => {
-    // Assuming your Android app sends 'senderId', 'groupId', 'content'
     const { senderId, groupId, content } = req.body;
     const TAG = '/group/send';
 
     if (!senderId || !groupId || !content) {
-        console.warn(TAG, 'Missing fields', req.body);
         return res.status(400).json({ success: false, message: 'senderId, groupId, and content are required' });
     }
 
-    // --- NEW LOGIC (STEP 1) ---
-    // First, ensure the user is a member of this group.
-    // 'INSERT IGNORE' will add them if they aren't, or do nothing if they are.
-    // This requires the UNIQUE key (user_id, group_id) on your table.
     try {
-        const addMemberQuery = `
-            INSERT IGNORE INTO group_members (user_id, group_id, joined_at) 
-            VALUES (?, ?, NOW())
-        `;
+        const addMemberQuery = `INSERT IGNORE INTO group_members (user_id, group_id, joined_at) VALUES (?, ?, NOW())`;
         await db.execute(addMemberQuery, [senderId, groupId]);
-        console.log(TAG, `Ensured user ${senderId} is member of group ${groupId}`);
     } catch (error) {
-        console.error(TAG, `Error ensuring group membership for user ${senderId}:`, error);
-        // Don't stop the message, but log the error.
-        // A more robust system might use a transaction here.
+        console.error(TAG, `Error ensuring group membership:`, error);
     }
-    // --- END OF NEW LOGIC ---
 
-    // --- ORIGINAL LOGIC (STEP 2) ---
-    // Now, insert the message
     try {
         const encryptedMessage = encrypt(content);
         
@@ -2416,11 +2414,36 @@ app.post('/group/send', async (req, res) => {
         `;
         
         const [result] = await db.execute(insertMessageQuery, [groupId, senderId, encryptedMessage]);
+        const newMessageId = result.insertId;
 
-        res.json({ success: true, message: 'Message sent', messageId: result.insertId });
+        // Get the inserted message details for socket emission
+        const [insertedMsg] = await db.query(
+            `SELECT gm.message_id as id, gm.sender_id, gm.message_content as message, 
+                    gm.timestamp, u.name as sender_name,
+                    (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as total_participants
+             FROM group_messages gm
+             JOIN users u ON gm.sender_id = u.id
+             WHERE gm.message_id = ?`,
+            [groupId, newMessageId]
+        );
+
+        if (insertedMsg && insertedMsg.length > 0) {
+            const messageToEmit = {
+                ...insertedMsg[0],
+                message: content, // Send decrypted
+                readByCount: 0,
+                status: 0
+            };
+
+            // Emit to all group members
+            io.to(`group_${groupId}`).emit('new_group_message', messageToEmit);
+            console.log(TAG, `Emitted new_group_message to group_${groupId}`);
+        }
+
+        res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
     } catch (error) {
-        console.error(TAG, `Error sending group message for user ${senderId}:`, error);
+        console.error(TAG, `Error sending group message:`, error);
         res.status(500).json({ success: false, message: 'Failed to send message' });
     }
 });
