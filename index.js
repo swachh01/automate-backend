@@ -229,6 +229,72 @@ io.on('connection', (socket) => {
     socket.to(`group_${data.groupId}`).emit('new_group_message', data.messageObject);
 });
 
+// Add these handlers inside your io.on('connection', (socket) => { ... }) block
+// Place them after the existing socket handlers
+
+// --- GROUP TYPING INDICATORS ---
+
+socket.on('group_typing_start', async (data) => {
+  // data = { userId: 12, groupId: 5, isTyping: true }
+  try {
+    const { userId, groupId } = data;
+    
+    // Get the user's name from the database
+    const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
+    
+    if (userRows.length > 0) {
+      const userName = userRows[0].name;
+      
+      // Broadcast to all other members in the group room
+      socket.to(`group_${groupId}`).emit('group_user_typing', {
+        userId: userId,
+        userName: userName,
+        groupId: groupId,
+        isTyping: true
+      });
+      
+      console.log(`User ${userName} (${userId}) started typing in group ${groupId}`);
+    }
+  } catch (error) {
+    console.error('Error handling group_typing_start:', error);
+  }
+});
+
+socket.on('group_typing_stop', async (data) => {
+  // data = { userId: 12, groupId: 5, isTyping: false }
+  try {
+    const { userId, groupId } = data;
+    
+    // Get the user's name from the database
+    const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
+    
+    if (userRows.length > 0) {
+      const userName = userRows[0].name;
+      
+      // Broadcast to all other members in the group room
+      socket.to(`group_${groupId}`).emit('group_user_typing', {
+        userId: userId,
+        userName: userName,
+        groupId: groupId,
+        isTyping: false
+      });
+      
+      console.log(`User ${userName} (${userId}) stopped typing in group ${groupId}`);
+    }
+  } catch (error) {
+    console.error('Error handling group_typing_stop:', error);
+  }
+});
+
+// --- END GROUP TYPING INDICATORS ---
+
+
+// Also make sure you have the join_group handler:
+socket.on('join_group', (groupId) => {
+  socket.join(`group_${groupId}`);
+  console.log(`Socket ${socket.id} joined group room: group_${groupId}`);
+});
+
 // When someone reads group messages, notify all group members
 socket.on('group_read', (data) => {
     // data = { userId: 12, groupId: 5 }
