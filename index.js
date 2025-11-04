@@ -203,20 +203,23 @@ io.on('connection', (socket) => {
     socket.to(`chat_${data.receiverId}`).emit('new_message_received', data.messageObject);
   });
 
-  // --- 4. NEW READ RECEIPT LOGIC ---
-  socket.on('i_delivered_messages', (data) => {
-    // data = { partnerId: 45 (the person I'm chatting with, the sender) }
-    // Tell the sender that I have received their messages.
+  // In index.js, update these handlers:
+
+socket.on('i_delivered_messages', (data) => {
+    // data = { partnerId: 45 }
     console.log(`Relaying 'delivered' status to room: chat_${data.partnerId}`);
-    socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages');
+    socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages', {
+        userId: data.partnerId // Include the user ID for context
+    });
   });
 
-  socket.on('i_read_messages', (data) => {
-    // data = { partnerId: 45 (the person I'm chatting with, the sender) }
-    // Tell the sender that I have read their messages.
+socket.on('i_read_messages', (data) => {
+    // data = { partnerId: 45 }
     console.log(`Relaying 'read' status to room: chat_${data.partnerId}`);
-    socket.to(`chat_${data.partnerId}`).emit('partner_read_messages');
-  });
+    socket.to(`chat_${data.partnerId}`).emit('partner_read_messages', {
+        userId: data.partnerId // Include the user ID for context
+    });
+});  
 
   socket.on('join_group', (groupId) => {
     socket.join(`group_${groupId}`);
