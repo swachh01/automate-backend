@@ -7,7 +7,6 @@ const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = new twilio(accountSid, authToken);
-const signupStore = {};
 
 const express = require("express");
 const cors = require("cors");
@@ -369,264 +368,87 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-app.post("/signup", async (req, res) => {
-  try {
-    const { name, college, gender, phone } = req.body || {};
-    if (!name || !college || !gender || !phone) {
-      return res.status(400).json({ success: false, message: `Missing required fields.` });
-    }
-    if (name.trim().length < 4) {
-      return res.status(400).json({ success: false, message: `Name must be at least 4 characters long` });
-    }
 
-    const [existingUser] = await db.query(`SELECT id, signup_status FROM users WHERE phone = ?`, [phone]);
-    
-    if (existingUser.length > 0 && existingUser[0].signup_status === 'completed') {
-      return res.status(400).json({ success: false, message: `A user with this phone number already has a completed account.` });
-    }
-
-    const signupData = { name: name.trim(), college: college.trim(), gender };
-    signupStore[phone] = signupData;
-    
-    return res.json({ success: true, message: `Signup data received. Please verify OTP.` });
-  } catch (err) {
-    console.error(" /signup error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-
-// Remove the global otpStore object: const otpStore = {};
-
-app.post("/sendOtp", async (req, res) => { // Make it async
-    const TAG = "/sendOtp"; // Define TAG for logging context
-    const { phone } = req.body;
-
-    if (!phone) {
-        console.warn(TAG, "Request missing phone number."); // Use console.warn
-        return res.status(400).json({ success: false, message: `Phone number required` });
-    }
-
-    // Basic phone number format validation (adjust if needed)
-    if (phone.length !== 10 || !/^\d+$/.test(phone)) {
-        console.warn(TAG, `Invalid phone number format received: ${phone}`);
-        return res.status(400).json({ success: false, message: "Please enter a valid 10-digit phone number." });
-    }
-
-
-    const otp = Math.floor(1000 + Math.random() * 9000).toString(); // Generate 4-digit OTP
-    const otpValiditySeconds = 60; // OTP valid for 60 seconds (1 minute)
-    console.log(TAG, `Generated OTP ${otp} for phone ${phone}`); // Log generated OTP
-
+app.post("/create-account", async (req, res) => {
+    const TAG = "/create-account";
     try {
-        // Store/Update OTP and expiry time in the database
-        const query = `
-            INSERT INTO otp (phone, otp_code, expiry_time)
-            VALUES (?, ?, UTC_TIMESTAMP() + INTERVAL ? SECOND)
-            ON DUPLICATE KEY UPDATE
-                otp_code = VALUES(otp_code),
-                expiry_time = VALUES(expiry_time),
-                created_at = CURRENT_TIMESTAMP; -- Also update created_at on resend
-        `;
-        // Execute the database query
-        await db.query(query, [phone, otp, otpValiditySeconds]);
-        console.log(TAG, `Stored/Updated OTP in DB for phone ${phone}, valid for ${otpValiditySeconds}s.`);
+        const { name, college, gender, phone, country_code, password } = req.body;
 
-        // Proceed to send OTP via Twilio ONLY after successful DB storage
-        console.log(TAG, `Attempting to send OTP SMS via Twilio to +91${phone}`);
-        client.messages
-            .create({
-                body: `Your Automate verification code is ${otp}`, // Consider mentioning your app name
-                from: process.env.TWILIO_PHONE_NUMBER,
-                // Ensure phone number format matches Twilio requirements (e.g., +91)
-                to: `+91${phone}` // Assuming Indian numbers, adjust if needed
-            })
-            .then(message => {
-                console.log(TAG, `OTP SMS sent successfully via Twilio to ${phone}, SID: ${message.sid}`);
-                // Send success response back to the app
-                res.json({
-                    success: true,
-                    message: "OTP sent successfully",
-                    // IMPORTANT: Only include OTP in response during development/debugging
-                    ...(process.env.NODE_ENV !== 'production' && { otp }) // Show OTP if NOT in production
-                });
-            })
-            .catch(err => {
-                // Log Twilio error details
-                console.error(TAG, `❌ Twilio SMS Error for phone ${phone}: Code=${err.code}, Message=${err.message}`, err);
-                // Inform the app that SMS sending failed
-                // Consider the user experience: Should the DB entry be deleted? For now, we leave it, user can retry.
-                res.status(500).json({ success: false, message: "Failed to send OTP SMS. Please check the number and try again." });
-            });
-
-    } catch (dbError) {
-        // Handle errors during database interaction
-        console.error(TAG, `❌ Database error storing OTP for phone ${phone}:`, dbError);
-        res.status(500).json({ success: false, message: "Server error saving OTP information. Please try again later." });
-    }
-});
-
-
-app.post("/verifyOtp", async (req, res) => {
-    const TAG = "/verifyOtp"; // Define TAG for logging context
-    let phoneToCheck = null; // Variable to hold phone for cleanup in catch block
-
-    try {
-        const { phone, otp } = req.body;
-        phoneToCheck = phone; // Store for potential cleanup
-
-        if (!phone || !otp) {
-            console.warn(TAG, `Request missing phone or OTP.`);
-            return res.status(400).json({ success: false, message: `Phone and OTP required` });
+        // 1. --- Validation ---
+        if (!name || !college || !gender || !phone || !country_code || !password) {
+            console.warn(TAG, "Request missing required fields.");
+            return res.status(400).json({ success: false, message: "All fields are required." });
         }
 
-        // Basic validation for OTP format
-        if (otp.length !== 4 || !/^\d+$/.test(otp)) {
-             console.warn(TAG, `Invalid OTP format received for phone ${phone}: ${otp}`);
-             return res.status(400).json({ success: false, message: `Invalid OTP format.` });
+        // Add your password validation rules (same as /savePassword)
+        if (password.length < 7 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password) || !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(password)) {
+            return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
         }
 
-        // 1. Fetch OTP details from the database
-        console.log(TAG, `Fetching OTP details from DB for phone: ${phone}`);
-        const [otpRows] = await db.query(
-            'SELECT otp_code, expiry_time FROM otp WHERE phone = ?',
-            [phone]
+        console.log(TAG, `Attempting to create account for phone: ${country_code}${phone}`);
+
+        // 2. --- Check for existing 'completed' user ---
+        const [existingUser] = await db.query(
+            `SELECT id, signup_status FROM users WHERE phone = ? AND country_code = ?`,
+            [phone, country_code]
         );
 
-        // 2. Check if OTP record exists
-        if (otpRows.length === 0) {
-            console.warn(TAG, `No OTP record found in DB for phone: ${phone}`);
-            return res.status(400).json({ success: false, message: `Invalid or expired OTP.` }); // Generic message for security
+        if (existingUser.length > 0 && existingUser[0].signup_status === 'completed') {
+            console.warn(TAG, `User already exists and is 'completed' for phone: ${country_code}${phone}`);
+            return res.status(409).json({ success: false, message: "A user with this phone number already exists." });
         }
+        
+        // 3. --- Hash the password ---
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-        const storedOtp = otpRows[0].otp_code;
-        const expiryTime = new Date(otpRows[0].expiry_time); // Convert DB timestamp to Date object
-
-        // Get current UTC time directly from the database for accurate comparison
-        const [currentTimeRows] = await db.query('SELECT UTC_TIMESTAMP() as now');
-        const currentTime = new Date(currentTimeRows[0].now);
-        console.log(TAG, `Current DB UTC Time: ${currentTime.toISOString()}, OTP Expiry Time: ${expiryTime.toISOString()}`);
-
-        // 3. Check if OTP has expired
-        if (currentTime > expiryTime) {
-            console.warn(TAG, `OTP expired for phone: ${phone}.`);
-            // Optionally delete the expired OTP from DB here for cleanup
-            try {
-                 await db.query('DELETE FROM otp WHERE phone = ?', [phone]);
-                 console.log(TAG, `Deleted expired OTP from DB for phone: ${phone}`);
-            } catch (deleteError) {
-                 console.error(TAG, `Error deleting expired OTP for ${phone}:`, deleteError);
-            }
-            return res.status(400).json({ success: false, message: `OTP expired.` });
-        }
-
-        // 4. Check if the submitted OTP matches the stored OTP
-        if (storedOtp !== otp.toString()) {
-            console.warn(TAG, `Invalid OTP entered for phone: ${phone}. Entered: ${otp}, Expected: ${storedOtp}`);
-            // Do NOT delete the OTP here, allow user to retry if within expiry time
-            return res.status(400).json({ success: false, message: `Invalid OTP.` });
-        }
-
-        // --- OTP IS VALID ---
-        console.log(TAG, `Valid OTP received for phone: ${phone}`);
-
-        // 5. (CRITICAL) Delete the used OTP from the database IMMEDIATELY to prevent reuse
-        try {
-            await db.query('DELETE FROM otp WHERE phone = ?', [phone]);
-            console.log(TAG, `Deleted used OTP from DB for phone: ${phone}`);
-        } catch (deleteError) {
-            console.error(TAG, `CRITICAL: Error deleting used OTP for phone ${phone} after successful validation:`, deleteError);
-            // Decide how to handle this - potentially return an error as verification isn't fully complete?
-            // For now, log critically and continue, but this needs monitoring.
-            // return res.status(500).json({ success: false, message: "Server error completing verification." });
-        }
-
-        // 6. Check for temporary signup data (same logic as before, using signupStore)
-        const signupData = signupStore[phone]; // Still use in-memory signupStore for stage 1 data
-
-        if (signupData) {
-            // --- A. SIGNUP FLOW ---
-            console.log(TAG, `Processing SIGNUP flow for phone: ${phone}`);
-            delete signupStore[phone]; // Clear temporary signup data
-            console.log(TAG, `Cleared signup data from store for phone: ${phone}`);
-
-            const signupQuery = `
-              INSERT INTO users (name, college, phone, gender, password, created_at, signup_status)
-              VALUES (?, ?, ?, ?, '', NOW(), 'pending')
-              ON DUPLICATE KEY UPDATE
+        // 4. --- Create or Overwrite 'pending' user ---
+        // This query will INSERT a new user.
+        // If a user with that phone+country_code already exists (e.g., 'pending'),
+        // it will UPDATE their details instead. This is exactly the flow you wanted.
+        const query = `
+            INSERT INTO users (name, college, gender, phone, country_code, password, signup_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
+            ON DUPLICATE KEY UPDATE
                 name = VALUES(name),
                 college = VALUES(college),
                 gender = VALUES(gender),
-                signup_status = IF(signup_status = 'completed', 'completed', 'pending');
-            `;
-            await db.query(signupQuery, [signupData.name, signupData.college, phone, signupData.gender]);
-            console.log(TAG, `Executed INSERT/UPDATE for signup user, phone: ${phone}`);
+                password = VALUES(password),
+                signup_status = 'pending', -- Reset to pending in case they aborted
+                updated_at = NOW();
+        `;
+        
+        await db.query(query, [name, college, gender, phone, country_code, hashedPassword]);
+        console.log(TAG, `Successfully inserted/updated user for phone: ${country_code}${phone}`);
 
-            const [userRows] = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
-            if (userRows.length === 0) {
-                 console.error(TAG, `User ID not found after signup DB operation, phone: ${phone}`);
-                 throw new Error("User ID not found after database operation in signup flow.");
-            }
-            const userId = userRows[0].id;
-            console.log(TAG, `Found userId ${userId} for signup flow, phone: ${phone}`);
-
-            return res.json({
-              success: true, message: "OTP verified successfully for signup.", userId: userId,
-              user: { id: userId, name: signupData.name, college: signupData.college, phone: phone, gender: signupData.gender }
-            });
-
-        } else {
-            // --- B. PASSWORD RESET (or other non-signup) FLOW ---
-            console.log(TAG, `Processing NON-SIGNUP flow, phone: ${phone}`);
-
-            const [userRows] = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
-            if (userRows.length === 0) {
-                 console.warn(TAG, `Password reset flow failed: User not found for phone: ${phone}`);
-                 return res.status(404).json({ success: false, message: `User with this phone number not found.` });
-            }
-            const userId = userRows[0].id;
-            console.log(TAG, `Found existing userId ${userId} for non-signup flow, phone: ${phone}`);
-
-            return res.json({ success: true, message: "OTP verified successfully.", userId: userId });
+        // 5. --- Fetch and return the new user data ---
+        // (We fetch it again to get the auto-incremented ID)
+        const [userRows] = await db.query(
+            'SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND country_code = ?',
+            [phone, country_code]
+        );
+        
+        if (userRows.length === 0) {
+             console.error(TAG, `CRITICAL: User not found immediately after insert/update for phone: ${country_code}${phone}`);
+             return res.status(500).json({ success: false, message: "Failed to create account." });
         }
+        
+        const newUser = userRows[0];
+
+        // Send back the new user data so the app can log them in
+        res.status(201).json({
+            success: true,
+            message: "Account created successfully. Please complete your profile.",
+            user: newUser
+        });
+
     } catch (err) {
-        // Log detailed error on the server
-        console.error(TAG, "❌ Error during OTP verification process:", err);
-
-        // Attempt to clean up signup store if relevant on error
-        if (phoneToCheck && signupStore[phoneToCheck]) {
-            try { delete signupStore[phoneToCheck]; } catch (cleanupErr) { console.error(TAG, "Error cleaning up signupStore during catch block:", cleanupErr); }
-        }
-        // Do NOT clean up OTP table here in catch block, as the OTP might still be valid for another try if the error wasn't related to OTP check itself
-
-        // Send a generic server error response to the client
-        return res.status(500).json({ success: false, message: `Server error during OTP verification.` });
+        console.error(TAG, "❌ Error in /create-account:", err);
+        res.status(500).json({ 
+            success: false, 
+            message: "Server error during account creation.",
+            error: err.message
+        });
     }
-});
-
-app.post("/savePassword", async (req, res) => {
-  try {
-    const { phone, newPassword } = req.body;
-    if (!phone || !newPassword) {
-      return res.status(400).json({ success: false, message: `Phone and password required` });
-    }
-    if (newPassword.length < 7 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) || !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(newPassword)) {
-      return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
-    }
-
-    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
-    const [updateResult] = await db.query(`UPDATE users SET password = ? WHERE phone = ?`, [hashedPassword, phone]);
-    
-    if (updateResult.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: `User not found` });
-    }
-    const [userRows] = await db.query(`SELECT id FROM users WHERE phone = ?`, [phone]);
-    const userId = userRows[0].id;
-    return res.json({ success: true, message: `Password updated successfully`, userId: userId });
-  } catch (err) {
-    console.error("❌ Error in /savePassword:", err);
-    return res.status(500).json({ success: false, message: `Database error` });
-  }
 });
 
 app.post("/login", async (req, res) => {
