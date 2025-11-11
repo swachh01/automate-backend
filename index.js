@@ -1356,7 +1356,7 @@ router.delete("/user/profile/:userId", async (req, res) => {
     }
 });
 
-// REPLACE your existing /tripHistory/:userId route with this
+// REPLACE your existing /tripHistory/:userId route with this fixed version
 
 router.get('/tripHistory/:userId', async (req, res) => {
   const TAG = "GET /tripHistory/:userId";
@@ -1381,7 +1381,7 @@ router.get('/tripHistory/:userId', async (req, res) => {
 
     const offset = (page - 1) * limit;
     
-    // UPDATED QUERY - Now includes 'added_fare' field
+    // FIXED QUERY - Returns proper field names and converts fare properly
     const historyQuery = `
       SELECT
         tp.id, 
@@ -1390,7 +1390,10 @@ router.get('/tripHistory/:userId', async (req, res) => {
         DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
         tp.fare, 
         tp.status,
-        tp.added_fare
+        -- Convert MySQL boolean (1/0) to actual boolean for JSON
+        CAST(COALESCE(tp.added_fare, 0) AS UNSIGNED) as hasAddedFare,
+        -- Also send the fare value separately if it exists
+        tp.fare as addedFare
       FROM travel_plans tp
       WHERE tp.user_id = ?
       ORDER BY tp.time DESC
@@ -1403,21 +1406,33 @@ router.get('/tripHistory/:userId', async (req, res) => {
       parseInt(offset)
     ]);
     
+    // Process trips to ensure proper data types
+    const processedTrips = trips.map(trip => ({
+      id: trip.id,
+      from_place: trip.from_place,
+      to_place: trip.to_place,
+      travel_time: trip.travel_time,
+      fare: trip.fare ? parseFloat(trip.fare) : null,
+      status: trip.status,
+      hasAddedFare: Boolean(trip.hasAddedFare), // Ensure it's a boolean
+      addedFare: trip.addedFare ? parseFloat(trip.addedFare) : null
+    }));
+    
     const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
     const [countResult] = await db.query(countQuery, [parseInt(userId)]);
     const totalTrips = countResult[0].total;
 
-    console.log(TAG, `Found ${trips.length} trips for userId: ${userId}`);
+    console.log(TAG, `Found ${processedTrips.length} trips for userId: ${userId}`);
 
     res.json({
       success: true,
       data: {
-        trips: trips,
+        trips: processedTrips,
         pagination: {
           currentPage: parseInt(page),
           totalPages: Math.ceil(totalTrips / limit),
           totalTrips: totalTrips,
-          hasMore: offset + trips.length < totalTrips
+          hasMore: offset + processedTrips.length < totalTrips
         }
       }
     });
