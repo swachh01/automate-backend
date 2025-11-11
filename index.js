@@ -1369,17 +1369,24 @@ router.get('/tripHistory/:userId', async (req, res) => {
 
     console.log(TAG, `Fetching trip history for userId: ${userId}, page: ${page}`);
 
-    // First, auto-complete old active trips
+    // Auto-complete old active trips that have passed
+    // Mark them as "Completed" (awaiting user action)
     const updateStatusQuery = `
       UPDATE travel_plans 
       SET status = 'Completed' 
-      WHERE user_id = ? AND status = 'Active' AND time < NOW()
+      WHERE user_id = ? 
+        AND status = 'Active' 
+        AND time < NOW()
+        AND added_fare = FALSE
     `;
-    await db.query(updateStatusQuery, [parseInt(userId)]);
+    const [updateResult] = await db.query(updateStatusQuery, [parseInt(userId)]);
+    if (updateResult.affectedRows > 0) {
+      console.log(TAG, `Auto-completed ${updateResult.affectedRows} past trips`);
+    }
 
     const offset = (page - 1) * limit;
     
-    // FIXED QUERY - Returns proper field names and converts fare properly
+    // Fetch trip history with proper status mapping
     const historyQuery = `
       SELECT
         tp.id, 
@@ -1388,10 +1395,7 @@ router.get('/tripHistory/:userId', async (req, res) => {
         DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
         tp.fare, 
         tp.status,
-        -- Convert MySQL boolean (1/0) to actual boolean for JSON
-        CAST(COALESCE(tp.added_fare, 0) AS UNSIGNED) as hasAddedFare,
-        -- Also send the fare value separately if it exists
-        tp.fare as addedFare
+        tp.added_fare as hasAddedFare
       FROM travel_plans tp
       WHERE tp.user_id = ?
       ORDER BY tp.time DESC
@@ -1404,17 +1408,22 @@ router.get('/tripHistory/:userId', async (req, res) => {
       parseInt(offset)
     ]);
     
-    // Process trips to ensure proper data types
-    const processedTrips = trips.map(trip => ({
-      id: trip.id,
-      from_place: trip.from_place,
-      to_place: trip.to_place,
-      travel_time: trip.travel_time,
-      fare: trip.fare ? parseFloat(trip.fare) : null,
-      status: trip.status,
-      hasAddedFare: Boolean(trip.hasAddedFare), // Ensure it's a boolean
-      addedFare: trip.addedFare ? parseFloat(trip.addedFare) : null
-    }));
+    // Process trips to ensure proper data types and field names
+    const processedTrips = trips.map(trip => {
+      // Convert MySQL boolean (1/0) to JavaScript boolean
+      const hasAddedFare = Boolean(trip.hasAddedFare);
+      
+      return {
+        id: trip.id,
+        from_place: trip.from_place,
+        to_place: trip.to_place,
+        travel_time: trip.travel_time,
+        fare: trip.fare ? parseFloat(trip.fare) : null,
+        status: trip.status, // Can be: Active, Completed, Done, Cancelled
+        hasAddedFare: hasAddedFare,
+        addedFare: trip.fare ? parseFloat(trip.fare) : null
+      };
+    });
     
     const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
     const [countResult] = await db.query(countQuery, [parseInt(userId)]);
@@ -1539,21 +1548,27 @@ router.put('/completeTrip/:tripId', async (req, res) => {
     let updateQuery, queryParams;
     
     if (didGo === true) {
-      // User WENT on the trip - mark as Completed with fare
+      // User WENT on the trip - mark as "Done" with fare
       updateQuery = 'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?';
-      queryParams = ['Completed', parseFloat(fare) || 0.00, parseInt(tripId)];
+      queryParams = ['Done', parseFloat(fare) || 0.00, parseInt(tripId)];
+      console.log(TAG, `Marking trip ${tripId} as Done with fare: ${fare}`);
     } else {
-      // User did NOT go - THE FIX: mark as Cancelled (not Completed)
+      // User did NOT go - mark as "Cancelled" with no fare
       updateQuery = 'UPDATE travel_plans SET status = ?, fare = NULL, added_fare = TRUE WHERE id = ?';
       queryParams = ['Cancelled', parseInt(tripId)];
+      console.log(TAG, `Marking trip ${tripId} as Cancelled (user didn't go)`);
     }
 
     const [result] = await db.query(updateQuery, queryParams);
     
     if (result.affectedRows > 0) {
-      const status = didGo ? 'completed with fare' : 'marked as cancelled';
-      console.log(TAG, `Trip ${tripId} ${status} successfully`);
-      res.json({ success: true, message: `Trip ${status} successfully` });
+      const newStatus = didGo ? 'Done' : 'Cancelled';
+      console.log(TAG, `✅ Trip ${tripId} status updated to: ${newStatus}`);
+      res.json({ 
+        success: true, 
+        message: didGo ? 'Fare added successfully' : 'Trip marked as cancelled',
+        newStatus: newStatus // Send back the new status
+      });
     } else {
       console.warn(TAG, `Trip ${tripId} not found in database`);
       res.status(404).json({ success: false, message: 'Trip not found' });
