@@ -1356,8 +1356,6 @@ router.delete("/user/profile/:userId", async (req, res) => {
     }
 });
 
-// REPLACE your existing /tripHistory/:userId route with this fixed version
-
 router.get('/tripHistory/:userId', async (req, res) => {
   const TAG = "GET /tripHistory/:userId";
   try {
@@ -1525,8 +1523,6 @@ router.get('/checkCompletedTrips/:userId', async (req, res) => {
   }
 });
 
-// REPLACE your existing /completeTrip/:tripId route with this fixed version
-
 router.put('/completeTrip/:tripId', async (req, res) => {
   const TAG = "PUT /completeTrip/:tripId";
   try {
@@ -1543,13 +1539,12 @@ router.put('/completeTrip/:tripId', async (req, res) => {
     let updateQuery, queryParams;
     
     if (didGo === true) {
-      // User went on the trip - mark as Completed with fare
+      // User WENT on the trip - mark as Completed with fare
       updateQuery = 'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?';
       queryParams = ['Completed', parseFloat(fare) || 0.00, parseInt(tripId)];
     } else {
-      // User did NOT go - mark as Cancelled AND set added_fare = TRUE
-      // This is the KEY FIX: added_fare = TRUE even when cancelled
-      updateQuery = 'UPDATE travel_plans SET status = ?, added_fare = TRUE WHERE id = ?';
+      // User did NOT go - THE FIX: mark as Cancelled (not Completed)
+      updateQuery = 'UPDATE travel_plans SET status = ?, fare = NULL, added_fare = TRUE WHERE id = ?';
       queryParams = ['Cancelled', parseInt(tripId)];
     }
 
