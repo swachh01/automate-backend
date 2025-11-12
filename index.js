@@ -1471,22 +1471,52 @@ router.put('/trip/cancel/:tripId', async (req, res) => {
   }
 });
 
+// --- THIS IS THE CORRECTED LOGIC ---
 router.put('/trip/complete/:tripId', async (req, res) => {
+  const TAG = "PUT /trip/complete/:tripId (FIXED)"; // Updated tag
   try {
     const { tripId } = req.params;
-    const { fare } = req.body;
-    if (!tripId || isNaN(tripId) || fare === undefined) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID or missing fare' });
+    const { fare, didGo } = req.body; // Now reads 'fare' AND 'didGo'
+
+    if (!tripId || isNaN(tripId) || didGo === undefined) {
+      console.warn(TAG, `Invalid tripId or missing didGo: ${tripId}`);
+      return res.status(400).json({ success: false, message: 'Invalid trip ID or missing didGo status' });
     }
-    const [result] = await db.query('UPDATE travel_plans SET fare = ? WHERE id = ?', [parseFloat(fare), parseInt(tripId)]);
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Trip fare updated successfully' });
+
+    console.log(TAG, `Processing trip ${tripId}: didGo=${didGo}, fare=${fare}`);
+
+    let updateQuery, queryParams;
+    
+    if (didGo === true) {
+      // User WENT on the trip - mark as "Done" with fare
+      updateQuery = 'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?';
+      queryParams = ['Done', parseFloat(fare) || 0.00, parseInt(tripId)];
+      console.log(TAG, `Marking trip ${tripId} as Done with fare: ${fare}`);
     } else {
+      // User did NOT go - mark as "Cancelled" with no fare
+      updateQuery = 'UPDATE travel_plans SET status = ?, fare = NULL, added_fare = TRUE WHERE id = ?';
+      queryParams = ['Cancelled', parseInt(tripId)];
+      console.log(TAG, `Marking trip ${tripId} as Cancelled (user didn't go)`);
+    }
+
+    const [result] = await db.query(updateQuery, queryParams);
+    
+    if (result.affectedRows > 0) {
+      const newStatus = didGo ? 'Done' : 'Cancelled';
+      console.log(TAG, `✅ Trip ${tripId} status updated to: ${newStatus}`);
+      res.json({ 
+        success: true, 
+        message: didGo ? 'Fare added successfully' : 'Trip marked as cancelled',
+        newStatus: newStatus // Send back the new status
+      });
+    } else {
+      console.warn(TAG, `Trip ${tripId} not found in database`);
       res.status(404).json({ success: false, message: 'Trip not found' });
     }
+    
   } catch (error) {
-    console.error('Error completing trip:', error);
-    res.status(500).json({ success: false, message: 'Error updating trip fare' });
+    console.error(TAG, '❌ Error completing trip:', error);
+    res.status(500).json({ success: false, message: 'Error completing trip' });
   }
 });
 
@@ -1528,54 +1558,6 @@ router.get('/checkCompletedTrips/:userId', async (req, res) => {
   } catch (error) {
     console.error('Error checking completed trips:', error);
     res.status(500).json({ success: false, message: 'Error checking completed trips' });
-  }
-});
-
-router.put('/completeTrip/:tripId', async (req, res) => {
-  const TAG = "PUT /completeTrip/:tripId";
-  try {
-    const { tripId } = req.params;
-    const { fare, didGo } = req.body;
-
-    if (!tripId || isNaN(tripId)) {
-      console.warn(TAG, `Invalid tripId: ${tripId}`);
-      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
-    }
-
-    console.log(TAG, `Processing trip ${tripId}: didGo=${didGo}, fare=${fare}`);
-
-    let updateQuery, queryParams;
-    
-    if (didGo === true) {
-      // User WENT on the trip - mark as "Done" with fare
-      updateQuery = 'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?';
-      queryParams = ['Done', parseFloat(fare) || 0.00, parseInt(tripId)];
-      console.log(TAG, `Marking trip ${tripId} as Done with fare: ${fare}`);
-    } else {
-      // User did NOT go - mark as "Cancelled" with no fare
-      updateQuery = 'UPDATE travel_plans SET status = ?, fare = NULL, added_fare = TRUE WHERE id = ?';
-      queryParams = ['Cancelled', parseInt(tripId)];
-      console.log(TAG, `Marking trip ${tripId} as Cancelled (user didn't go)`);
-    }
-
-    const [result] = await db.query(updateQuery, queryParams);
-    
-    if (result.affectedRows > 0) {
-      const newStatus = didGo ? 'Done' : 'Cancelled';
-      console.log(TAG, `✅ Trip ${tripId} status updated to: ${newStatus}`);
-      res.json({ 
-        success: true, 
-        message: didGo ? 'Fare added successfully' : 'Trip marked as cancelled',
-        newStatus: newStatus // Send back the new status
-      });
-    } else {
-      console.warn(TAG, `Trip ${tripId} not found in database`);
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
-    
-  } catch (error) {
-    console.error(TAG, '❌ Error completing trip:', error);
-    res.status(500).json({ success: false, message: 'Error completing trip' });
   }
 });
 
