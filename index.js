@@ -1369,8 +1369,7 @@ router.get('/tripHistory/:userId', async (req, res) => {
 
     console.log(TAG, `Fetching trip history for userId: ${userId}, page: ${page}`);
 
-    // Auto-complete old active trips that have passed
-    // Mark them as "Completed" (awaiting user action)
+    // *** KEY FIX: Only auto-complete trips where added_fare is FALSE ***
     const updateStatusQuery = `
       UPDATE travel_plans 
       SET status = 'Completed' 
