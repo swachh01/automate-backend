@@ -1494,7 +1494,7 @@ router.put('/trip/complete/:tripId', async (req, res) => {
       console.log(TAG, `Marking trip ${tripId} as Done with fare: ${fare}`);
     } else {
       // User did NOT go - mark as "Cancelled" with no fare
-      updateQuery = 'UPDATE travel_plans SET status = ?, fare = NULL, added_fare = TRUE WHERE id = ?';
+      updateQuery = 'UPDATE travel_plans SET status = ?, fare = 0.00, added_fare = TRUE WHERE id = ?';
       queryParams = ['Cancelled', parseInt(tripId)];
       console.log(TAG, `Marking trip ${tripId} as Cancelled (user didn't go)`);
     }
