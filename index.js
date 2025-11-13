@@ -928,6 +928,13 @@ app.post('/sendMessage', async (req, res) => {
       // Don't fail the request if socket emit fails
     }
     
+    try {
+      io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
+      console.log(TAG, `Emitted 'new_message_received' (ID: ${newMessageId}) to chat_${sender_id}`);
+    } catch (socketError) {
+      console.error(TAG, 'Error emitting socket event to sender:', socketError);
+    }
+    
     // Send success response
     res.json({ 
       success: true, 
