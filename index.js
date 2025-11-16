@@ -26,14 +26,23 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
+    credentials: true
   }
+
+  transports: ['websocket','polling'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 const router = express.Router();
 
 const saltRounds = 12;
 
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  credentials: true
+}));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -2438,7 +2447,8 @@ app.post('/group/read', async (req, res) => {
 app.use(router);
 
 const PORT = process.env.PORT || 8080;
-// --- FINAL FIX: Use server.listen() instead of app.listen() ---
-server.listen(PORT, () => {
-  console.log(`✅ Server (with Socket.IO) listening on http://0.0.0.0:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Server (with Socket.IO) listening on port ${PORT}`);
+  console.log(`🔌 Socket.IO ready on port ${PORT}`);
+  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
