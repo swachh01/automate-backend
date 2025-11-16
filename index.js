@@ -28,7 +28,7 @@ const io = new Server(server, {
     origin: "*",
     methods: ["GET", "POST"],
     credentials: true
-  }
+  },
 
   transports: ['websocket','polling'],
   allowEIO3: true,
@@ -1467,6 +1467,24 @@ router.put('/trip/cancel/:tripId', async (req, res) => {
     console.error('Error cancelling trip:', error);
     res.status(500).json({ success: false, message: 'Error cancelling trip' });
   }
+});
+
+// Add this to index.js for debugging
+app.get('/socket-status', (req, res) => {
+  const connectedSockets = [];
+  io.sockets.sockets.forEach((socket) => {
+    connectedSockets.push({
+      id: socket.id,
+      connected: socket.connected
+    });
+  });
+  
+  res.json({
+    success: true,
+    totalConnections: io.engine.clientsCount,
+    onlineUsers: Array.from(onlineUsers.keys()),
+    sockets: connectedSockets
+  });
 });
 
 // --- THIS IS THE CORRECTED LOGIC ---
