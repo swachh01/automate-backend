@@ -106,31 +106,31 @@ async function updateUserPresence(userId, isOnline) {
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  // --- 1. YOUR EXISTING PRESENCE LOGIC (MERGED) ---
-  socket.on('user_online', async (userId) => {
+  // In your io.on('connection', ...) block, update user_online:
+socket.on('user_online', async (userId) => {
     try {
-      onlineUsers.set(userId.toString(), {
-        socketId: socket.id,
-        lastSeen: new Date(),
-        isOnline: true
-      });
-      await updateUserPresence(userId, true);
-      socket.broadcast.emit('user_status_changed', {
-        userId: userId.toString(),
-        isOnline: true,
-        lastSeen: new Date()
-      });
-      console.log(` User ${userId} is now online`);
-
-      // --- CRITICAL FIX: JOIN THE PRIVATE CHAT ROOM ---
-      socket.join(`chat_${userId}`);
-      console.log(`User ${userId} joined private chat room: chat_${userId}`);
-
+        onlineUsers.set(userId.toString(), {
+            socketId: socket.id,
+            lastSeen: new Date(),
+            isOnline: true
+        });
+        await updateUserPresence(userId, true);
+        
+        // CRITICAL FIX: Join the user's private chat room
+        socket.join(`chat_${userId}`);
+        console.log(`✅ User ${userId} joined private chat room: chat_${userId}`);
+        
+        socket.broadcast.emit('user_status_changed', {
+            userId: userId.toString(),
+            isOnline: true,
+            lastSeen: new Date()
+        });
+        console.log(`✅ User ${userId} is now online`);
     } catch (error) {
-      console.error(' Error handling user_online:', error);
+        console.error('❌ Error handling user_online:', error);
     }
-  });
-
+});
+  
   socket.on('user_offline', async (userId) => {
     // (This code is fine, no changes needed)
     try {
@@ -838,14 +838,11 @@ app.post('/messages/delivered', async (req, res) => {
   }
 });
 
-// REPLACE your existing /sendMessage route with this fixed version
-
 app.post('/sendMessage', async (req, res) => {
-  const TAG = "/sendMessage"; // Add logging tag
+  const TAG = "/sendMessage";
   try {
     const { sender_id, receiver_id, message } = req.body;
     
-    // Validation
     if (!sender_id || !receiver_id || !message) {
       console.warn(TAG, 'Missing required fields');
       return res.status(400).json({ 
@@ -871,11 +868,9 @@ app.post('/sendMessage', async (req, res) => {
       });
     }
     
-    // Encrypt the message
     const encryptedMessage = encrypt(message);
     console.log(TAG, 'Message encrypted successfully');
         
-    // Insert the message with UTC_TIMESTAMP() for consistency
     const query = `
       INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
       VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
@@ -901,7 +896,6 @@ app.post('/sendMessage', async (req, res) => {
     
     if (!insertedMsg || insertedMsg.length === 0) {
       console.error(TAG, 'Could not retrieve inserted message timestamp');
-      // Still return success since message was saved
       return res.json({ 
         success: true, 
         message: 'Message sent successfully', 
@@ -919,23 +913,14 @@ app.post('/sendMessage', async (req, res) => {
       status: 0 // Sent
     };
     
-    // Emit to the RECEIVER's room
-    try {
-      io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
-      console.log(TAG, `Emitted 'new_message_received' (ID: ${newMessageId}) to chat_${receiver_id}`);
-    } catch (socketError) {
-      console.error(TAG, 'Error emitting socket event:', socketError);
-      // Don't fail the request if socket emit fails
-    }
+    // *** FIX 1: Emit to RECEIVER's room ***
+    io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
+    console.log(TAG, `✅ Emitted to receiver room: chat_${receiver_id}`);
     
-    try {
-      io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
-      console.log(TAG, `Emitted 'new_message_received' (ID: ${newMessageId}) to chat_${sender_id}`);
-    } catch (socketError) {
-      console.error(TAG, 'Error emitting socket event to sender:', socketError);
-    }
+    // *** FIX 2: Also emit to SENDER's room for instant display ***
+    io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
+    console.log(TAG, `✅ Emitted to sender room: chat_${sender_id}`);
     
-    // Send success response
     res.json({ 
       success: true, 
       message: 'Message sent successfully', 
@@ -944,9 +929,6 @@ app.post('/sendMessage', async (req, res) => {
     
   } catch (error) {
     console.error(TAG, '❌ Error in /sendMessage:', error);
-    console.error(TAG, 'Error stack:', error.stack);
-    
-    // Send proper error response
     res.status(500).json({ 
       success: false, 
       message: 'Failed to send message',
