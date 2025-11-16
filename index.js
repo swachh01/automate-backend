@@ -924,12 +924,12 @@ app.post('/sendMessage', async (req, res) => {
     };
     
     // *** FIX 1: Emit to RECEIVER's room ***
-    io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
-    console.log(TAG, `✅ Emitted to receiver room: chat_${receiver_id}`);
+   // io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
+   // console.log(TAG, `✅ Emitted to receiver room: chat_${receiver_id}`);
     
     // *** FIX 2: Also emit to SENDER's room for instant display ***
-    io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
-    console.log(TAG, `✅ Emitted to sender room: chat_${sender_id}`);
+   // io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
+   // console.log(TAG, `✅ Emitted to sender room: chat_${sender_id}`);
     
     res.json({ 
       success: true, 
