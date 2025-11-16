@@ -1633,6 +1633,66 @@ router.get('/tripStats/:userId', async (req, res) => {
 
 // In index.js (replace the existing /getUserByPhone route)
 
+// ADD THIS NEW ROUTE TO index.js
+app.post('/reset-password', async (req, res) => {
+    const TAG = "/reset-password";
+    try {
+        // This endpoint is called AFTER Firebase has verified the OTP
+        const { phone, country_code, newPassword } = req.body;
+
+        if (!phone || !country_code || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Phone, country code, and new password are required'
+            });
+        }
+        
+        // --- Add Password Validation ---
+        if (newPassword.length < 7 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) || !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(newPassword)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Password must be at least 7 characters and include letters, numbers, and symbols." 
+            });
+        }
+        
+        console.log(TAG, `Attempting to reset password for ${country_code}${phone}`);
+
+        // Find the user first to make sure they exist
+        const [userRows] = await db.query(
+            'SELECT id FROM users WHERE phone = ? AND country_code = ?',
+            [phone, country_code]
+        );
+
+        if (userRows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+        
+        const userId = userRows[0].id;
+
+        // Hash the new password
+        const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
+        
+        // Update the user's password in the database
+        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
+
+        console.log(TAG, `Successfully reset password for user ${userId}`);
+        res.json({ 
+            success: true, 
+            message: 'Password reset successfully' 
+        });
+
+    } catch (error) {
+        console.error(TAG, '❌ Error resetting password:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
+    }
+});
+
 app.get("/getUserByPhone", async (req, res) => {
     const TAG = "/getUserByPhone"; // Logging tag
     // Expecting 'phone' (e.g., "8850260443") and 'country_code' (e.g., "+91") as query parameters
