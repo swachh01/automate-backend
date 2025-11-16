@@ -68,8 +68,9 @@ const pool = mysql.createPool({
   timezone: 'Z',
   connectionLimit: 20,
   waitForConnections: true,
-  acquireTimeout: 60000,
-  timeout: 60000
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0
 });
 
 const db = pool.promise();
@@ -2464,9 +2465,13 @@ app.post('/group/read', async (req, res) => {
 
 app.use(router);
 
+// *** FIX: Use Railway's dynamic PORT ***
 const PORT = process.env.PORT || 8080;
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Server (with Socket.IO) listening on port ${PORT}`);
   console.log(`🔌 Socket.IO ready on port ${PORT}`);
   console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌍 Railway Public Domain: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'Not set'}`);
+  console.log(`🔗 Full URL: https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'}`);
 });
