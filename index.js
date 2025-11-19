@@ -962,8 +962,7 @@ app.post('/sendMessage', async (req, res) => {
                     notification: {
                         channelId: "chat_channel_id", // MUST match Android channel ID
                         priority: "high",
-                        defaultSound: true,
-                        clickAction: "OPEN_CHAT_ACTIVITY" 
+                        defaultSound: true
                     }
                 },
                 // ✅ Data required for SplashActivity to redirect correctly
