@@ -947,6 +947,7 @@ app.post('/sendMessage', async (req, res) => {
         // B. Get Sender's Name (for Notification Title)
         const [senderRows] = await db.query("SELECT name FROM users WHERE id = ?", [sender_id]);
         const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
+        const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
 
         if (userRows.length > 0 && userRows[0].fcm_token) {
             const receiverToken = userRows[0].fcm_token;
@@ -970,6 +971,7 @@ app.post('/sendMessage', async (req, res) => {
                     type: "chat",
                     senderId: sender_id.toString(),
                     senderName: senderName,
+                    senderProfilePic: senderPic || "",
                     chatPartnerId: sender_id.toString() 
                 }
             };
