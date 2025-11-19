@@ -2,6 +2,12 @@ require("dotenv").config();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs'); 
+const admin = require("firebase-admin");
+const serviceAccount = require("./firebase-service-account.json");
+
+admin.initializeApp({
+ credential: admin.credential.cert(serviceAccount)
+});
 
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -737,6 +743,17 @@ app.get('/users/destination', async (req, res) => {
     }
 });
 
+app.post("/updateFcmToken", async (req, res) => {
+    const { userId, token } = req.body;
+    try {
+        await db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [token, userId]);
+        res.json({ success: true, message: "Token updated" });
+    } catch (err) {
+        console.error("Error updating token", err);
+        res.status(500).json({ success: false });
+    }
+});
+
 app.get("/getUserTravelPlan/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
@@ -920,7 +937,35 @@ app.post('/sendMessage', async (req, res) => {
     // *** FIX 2: Also emit to SENDER's room for instant display ***
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
     console.log(TAG, `✅ Emitted to sender room: chat_${sender_id}`);
+   
+    const [userRows] = await db.query("SELECT fcm_token, name FROM users WHERE id = ?", [receiver_id]);
+
+if (userRows.length > 0 && userRows[0].fcm_token) {
+    const receiverToken = userRows[0].fcm_token;
     
+    // 2. Construct Payload
+    const messagePayload = {
+        notification: {
+            title: `New message from user ${sender_id}`, // Or fetch sender name
+            body: message // The DECRYPTED message
+        },
+        data: {
+            senderId: sender_id.toString(),
+            type: "chat"
+        },
+        token: receiverToken
+    };
+
+    // 3. Send via Firebase
+    try {
+        await admin.messaging().send(messagePayload);
+        console.log("FCM Notification sent to", receiver_id);
+    } catch (fcmError) {
+        console.error("Error sending FCM:", fcmError);
+        // Don't fail the request if notification fails, just log it
+    }
+}
+
     res.json({ 
       success: true, 
       message: 'Message sent successfully', 
