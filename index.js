@@ -859,6 +859,7 @@ app.post('/sendMessage', async (req, res) => {
   try {
     const { sender_id, receiver_id, message } = req.body;
     
+    // 1. Validation
     if (!sender_id || !receiver_id || !message) {
       console.warn(TAG, 'Missing required fields');
       return res.status(400).json({ 
@@ -869,7 +870,7 @@ app.post('/sendMessage', async (req, res) => {
     
     console.log(TAG, `User ${sender_id} sending message to ${receiver_id}`);
       
-    // Check if either user has blocked the other
+    // 2. Block Check
     const blockCheckQuery = `
       SELECT * FROM blocked_users
       WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
@@ -884,9 +885,8 @@ app.post('/sendMessage', async (req, res) => {
       });
     }
     
+    // 3. Encrypt & Save to DB
     const encryptedMessage = encrypt(message);
-    console.log(TAG, 'Message encrypted successfully');
-        
     const query = `
       INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
       VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
@@ -904,7 +904,7 @@ app.post('/sendMessage', async (req, res) => {
     const newMessageId = result.insertId;
     console.log(TAG, `Message saved with ID: ${newMessageId}`);
     
-    // Get the actual timestamp that was inserted
+    // 4. Get Timestamp for Socket
     const [insertedMsg] = await db.query(
       'SELECT timestamp FROM messages WHERE id = ?', 
       [newMessageId]
@@ -912,59 +912,59 @@ app.post('/sendMessage', async (req, res) => {
     
     if (!insertedMsg || insertedMsg.length === 0) {
       console.error(TAG, 'Could not retrieve inserted message timestamp');
-      return res.json({ 
-        success: true, 
-        message: 'Message sent successfully', 
-        messageId: newMessageId 
-      });
+      return res.json({ success: true, message: 'Message sent successfully', messageId: newMessageId });
     }
     
-    // Create the complete message object for Socket.IO
+    // 5. Emit via Socket.IO (Real-time)
     const messageToEmit = {
       id: newMessageId,
       sender_id: sender_id,
       receiver_id: receiver_id,
-      message: message, // Send DECRYPTED for real-time display
+      message: message, // Send DECRYPTED
       timestamp: insertedMsg[0].timestamp,
-      status: 0 // Sent
+      status: 0
     };
     
-    // *** FIX 1: Emit to RECEIVER's room ***
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
-    console.log(TAG, `✅ Emitted to receiver room: chat_${receiver_id}`);
-    
-    // *** FIX 2: Also emit to SENDER's room for instant display ***
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
-    console.log(TAG, `✅ Emitted to sender room: chat_${sender_id}`);
    
-    const [userRows] = await db.query("SELECT fcm_token, name FROM users WHERE id = ?", [receiver_id]);
-
-if (userRows.length > 0 && userRows[0].fcm_token) {
-    const receiverToken = userRows[0].fcm_token;
-    
-    // 2. Construct Payload
-    const messagePayload = {
-        notification: {
-            title: `New message from user ${sender_id}`, // Or fetch sender name
-            body: message // The DECRYPTED message
-        },
-        data: {
-            senderId: sender_id.toString(),
-            type: "chat"
-        },
-        token: receiverToken
-    };
-
-    // 3. Send via Firebase
+    // 6. Send FCM Notification (For background/killed state)
     try {
-        await admin.messaging().send(messagePayload);
-        console.log("FCM Notification sent to", receiver_id);
-    } catch (fcmError) {
-        console.error("Error sending FCM:", fcmError);
-        // Don't fail the request if notification fails, just log it
-    }
-}
+        const [userRows] = await db.query("SELECT fcm_token, name FROM users WHERE id = ?", [receiver_id]);
 
+        if (userRows.length > 0 && userRows[0].fcm_token) {
+            const receiverToken = userRows[0].fcm_token;
+            
+            const messagePayload = {
+                token: receiverToken,
+                notification: {
+                    title: `New message from User ${sender_id}`, // You can fetch sender name if you want
+                    body: message 
+                },
+                // *** CRITICAL FIX: Android Specific Config ***
+                android: {
+                    priority: "high",
+                    notification: {
+                        channelId: "chat_channel_id", // MUST match Android channel ID
+                        priority: "high",
+                        defaultSound: true,
+                        clickAction: "FLUTTER_NOTIFICATION_CLICK" // Standard practice, though intent filter handles it
+                    }
+                },
+                data: {
+                    senderId: sender_id.toString(),
+                    type: "chat"
+                }
+            };
+
+            await admin.messaging().send(messagePayload);
+            console.log(TAG, "✅ FCM Notification sent to", receiver_id);
+        }
+    } catch (fcmError) {
+        console.error(TAG, "⚠️ Error sending FCM (Non-fatal):", fcmError.message);
+    }
+
+    // 7. Final Response
     res.json({ 
       success: true, 
       message: 'Message sent successfully', 
