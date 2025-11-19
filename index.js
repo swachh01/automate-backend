@@ -872,14 +872,9 @@ app.post('/sendMessage', async (req, res) => {
     // 1. Validation
     if (!sender_id || !receiver_id || !message) {
       console.warn(TAG, 'Missing required fields');
-      return res.status(400).json({ 
-        success: false, 
-        message: 'sender_id, receiver_id, and message are required' 
-      });
+      return res.status(400).json({ success: false, message: 'Missing fields' });
     }
     
-    console.log(TAG, `User ${sender_id} sending message to ${receiver_id}`);
-      
     // 2. Block Check
     const blockCheckQuery = `
       SELECT * FROM blocked_users
@@ -888,66 +883,40 @@ app.post('/sendMessage', async (req, res) => {
     const [blockedRows] = await db.query(blockCheckQuery, [sender_id, receiver_id, receiver_id, sender_id]);
     
     if (blockedRows.length > 0) {
-      console.warn(TAG, `Blocked: User ${sender_id} cannot message ${receiver_id}`);
-      return res.status(403).json({ 
-        success: false, 
-        message: 'This user cannot be messaged.' 
-      });
+      return res.status(403).json({ success: false, message: 'User is blocked.' });
     }
     
-    // 3. Encrypt & Save to DB
+    // 3. Encrypt & Save
     const encryptedMessage = encrypt(message);
-    const query = `
-      INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
-      VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
-    `;  
+    const query = `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`;  
     const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
-    
-    if (!result.insertId) {
-      console.error(TAG, 'Failed to insert message - no insertId returned');
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to save message to database' 
-      });
-    }
-    
     const newMessageId = result.insertId;
-    console.log(TAG, `Message saved with ID: ${newMessageId}`);
+
+    // 4. Get Timestamp
+    const [insertedMsg] = await db.query('SELECT timestamp FROM messages WHERE id = ?', [newMessageId]);
     
-    // 4. Get Timestamp for Socket
-    const [insertedMsg] = await db.query(
-      'SELECT timestamp FROM messages WHERE id = ?', 
-      [newMessageId]
-    );
-    
-    if (!insertedMsg || insertedMsg.length === 0) {
-      console.error(TAG, 'Could not retrieve inserted message timestamp');
-      return res.json({ success: true, message: 'Message sent successfully', messageId: newMessageId });
-    }
-    
-    // 5. Emit via Socket.IO (Real-time)
+    // 5. Socket Emit
     const messageToEmit = {
       id: newMessageId,
       sender_id: sender_id,
       receiver_id: receiver_id,
-      message: message, // Send DECRYPTED
+      message: message,
       timestamp: insertedMsg[0].timestamp,
       status: 0
     };
-    
-    // Emit to both parties so UI updates instantly
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
    
-    // 6. Send FCM Notification (For background/killed state)
+    // 6. Send FCM Notification
     try {
-        // A. Get Receiver's Token
         const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
 
-        // B. Get Sender's Name (for Notification Title)
-        const [senderRows] = await db.query("SELECT name FROM users WHERE id = ?", [sender_id]);
+        // --- ✅ FIX IS HERE: Added ', profile_pic' to the SELECT statement ---
+        const [senderRows] = await db.query("SELECT name, profile_pic FROM users WHERE id = ?", [sender_id]);
+        
         const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
-        const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
+        // Check if profile_pic exists, otherwise send empty string
+        const senderPic = (senderRows.length > 0 && senderRows[0].profile_pic) ? senderRows[0].profile_pic : "";
 
         if (userRows.length > 0 && userRows[0].fcm_token) {
             const receiverToken = userRows[0].fcm_token;
@@ -955,51 +924,38 @@ app.post('/sendMessage', async (req, res) => {
             const messagePayload = {
                 token: receiverToken,
                 notification: {
-                    title: senderName, // ✅ Shows actual Name (e.g., "Sumit")
+                    title: senderName,
                     body: message 
                 },
                 android: {
                     priority: "high",
                     notification: {
-                        channelId: "chat_channel_id", // MUST match Android channel ID
+                        channelId: "chat_channel_id",
                         priority: "high",
                         defaultSound: true
                     }
                 },
-                // ✅ Data required for SplashActivity to redirect correctly
                 data: {
                     type: "chat",
                     senderId: sender_id.toString(),
                     senderName: senderName,
-                    senderProfilePic: senderPic || "",
+                    senderProfilePic: senderPic, // ✅ Now contains the actual URL
                     chatPartnerId: sender_id.toString() 
                 }
             };
 
             await admin.messaging().send(messagePayload);
-            console.log(TAG, `✅ FCM Notification sent to user ${receiver_id}`);
-        } else {
-            console.log(TAG, `⚠️ No FCM token found for user ${receiver_id}`);
+            console.log(TAG, `✅ FCM sent to ${receiver_id} with PFP: ${senderPic}`);
         }
     } catch (fcmError) {
-        // Log error but don't fail the request, as the message was saved successfully
-        console.error(TAG, "⚠️ Error sending FCM:", fcmError.message);
+        console.error(TAG, "⚠️ FCM Error:", fcmError.message);
     }
 
-    // 7. Final Response
-    res.json({ 
-      success: true, 
-      message: 'Message sent successfully', 
-      messageId: newMessageId 
-    });
+    res.json({ success: true, message: 'Message sent', messageId: newMessageId });
     
   } catch (error) {
-    console.error(TAG, '❌ Error in /sendMessage:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to send message',
-      error: error.message 
-    });
+    console.error(TAG, '❌ Error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
