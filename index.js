@@ -203,16 +203,6 @@ socket.on('user_online', async (userId) => {
     });
   });
 
-  // --- 3. NEW MESSAGE LOGIC (THE INSTANT FIX) ---
-  socket.on('new_message_sent', (data) => {
-    // data = { receiverId: 45, messageObject: {...} }
-    // This event is sent by the sender.
-    // We relay (emit) it to the receiver's private room.
-    console.log(`Relaying message to room: chat_${data.receiverId}`);
-    socket.to(`chat_${data.receiverId}`).emit('new_message_received', data.messageObject);
-  });
-
-  // In index.js, update these handlers:
 
 socket.on('i_delivered_messages', (data) => {
     // data = { partnerId: 45 }
@@ -924,12 +914,12 @@ app.post('/sendMessage', async (req, res) => {
     };
     
     // *** FIX 1: Emit to RECEIVER's room ***
-   // io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
-   // console.log(TAG, `✅ Emitted to receiver room: chat_${receiver_id}`);
+    io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
+    console.log(TAG, `✅ Emitted to receiver room: chat_${receiver_id}`);
     
     // *** FIX 2: Also emit to SENDER's room for instant display ***
-   // io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
-   // console.log(TAG, `✅ Emitted to sender room: chat_${sender_id}`);
+    io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
+    console.log(TAG, `✅ Emitted to sender room: chat_${sender_id}`);
     
     res.json({ 
       success: true, 
