@@ -3,9 +3,19 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs'); 
 const admin = require("firebase-admin");
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+let serviceAccount;
+
+// Check if we are running on Railway (Env Var exists) or Locally (File exists)
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
+  // Fallback for local development
+  serviceAccount = require("./firebase-service-account.json");
+}
+
 admin.initializeApp({
- credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount)
 });
 
 const twilio = require("twilio");
@@ -925,12 +935,18 @@ app.post('/sendMessage', async (req, res) => {
       status: 0
     };
     
+    // Emit to both parties so UI updates instantly
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
    
     // 6. Send FCM Notification (For background/killed state)
     try {
-        const [userRows] = await db.query("SELECT fcm_token, name FROM users WHERE id = ?", [receiver_id]);
+        // A. Get Receiver's Token
+        const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
+
+        // B. Get Sender's Name (for Notification Title)
+        const [senderRows] = await db.query("SELECT name FROM users WHERE id = ?", [sender_id]);
+        const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
 
         if (userRows.length > 0 && userRows[0].fcm_token) {
             const receiverToken = userRows[0].fcm_token;
@@ -938,30 +954,35 @@ app.post('/sendMessage', async (req, res) => {
             const messagePayload = {
                 token: receiverToken,
                 notification: {
-                    title: `New message from User ${sender_id}`, // You can fetch sender name if you want
+                    title: senderName, // ✅ Shows actual Name (e.g., "Sumit")
                     body: message 
                 },
-                // *** CRITICAL FIX: Android Specific Config ***
                 android: {
                     priority: "high",
                     notification: {
                         channelId: "chat_channel_id", // MUST match Android channel ID
                         priority: "high",
                         defaultSound: true,
-                        clickAction: "FLUTTER_NOTIFICATION_CLICK" // Standard practice, though intent filter handles it
+                        clickAction: "OPEN_CHAT_ACTIVITY" 
                     }
                 },
+                // ✅ Data required for SplashActivity to redirect correctly
                 data: {
+                    type: "chat",
                     senderId: sender_id.toString(),
-                    type: "chat"
+                    senderName: senderName,
+                    chatPartnerId: sender_id.toString() 
                 }
             };
 
             await admin.messaging().send(messagePayload);
-            console.log(TAG, "✅ FCM Notification sent to", receiver_id);
+            console.log(TAG, `✅ FCM Notification sent to user ${receiver_id}`);
+        } else {
+            console.log(TAG, `⚠️ No FCM token found for user ${receiver_id}`);
         }
     } catch (fcmError) {
-        console.error(TAG, "⚠️ Error sending FCM (Non-fatal):", fcmError.message);
+        // Log error but don't fail the request, as the message was saved successfully
+        console.error(TAG, "⚠️ Error sending FCM:", fcmError.message);
     }
 
     // 7. Final Response
