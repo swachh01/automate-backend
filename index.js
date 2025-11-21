@@ -578,7 +578,7 @@ app.post("/addTravelPlan", async (req, res) => {
     try {
         const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
 
-        // --- Validation (Keep your existing validation) ---
+        // --- Validation ---
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
             toPlaceLat === undefined || toPlaceLng === undefined) {
@@ -594,7 +594,7 @@ app.post("/addTravelPlan", async (req, res) => {
             if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format received from client."); }
         } catch (timeError) {
              console.warn(TAG, `Invalid time format received for userId ${userId}: ${time}`, timeError);
-             return res.status(400).json({ success: false, message: "Invalid time format provided. Please use ISO 8601 format (e.g., YYYY-MM-DDTHH:mm:ss.sssZ)." });
+             return res.status(400).json({ success: false, message: "Invalid time format provided. Please use ISO 8601 format." });
         }
         // --- End Validation ---
 
@@ -626,13 +626,13 @@ app.post("/addTravelPlan", async (req, res) => {
         }
         console.log(TAG, `Successfully added travel plan ID: ${newPlanId}`);
 
-        // --- Step 2: Add/Ensure Group Exists (Using new table name) ---
+        // --- Step 2: Add/Ensure Group Exists ---
         console.log(TAG, `Ensuring group exists for destination: ${toPlace}`);
-        const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; // Changed table name
+        const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [toPlace]);
 
-        // --- Step 3: Get the group_id (Using new table name) ---
-        const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [toPlace]); // Changed table name
+        // --- Step 3: Get the group_id ---
+        const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [toPlace]);
         if (groupRows.length === 0) {
             await connection.rollback();
             connection.release();
@@ -651,6 +651,63 @@ app.post("/addTravelPlan", async (req, res) => {
         // --------------------------
 
         console.log(TAG, `Successfully added plan and added user ${userId} to group ${groupId}`);
+
+        // --- ✅ NEW: NOTIFICATION LOGIC (Run after commit) ---
+        try {
+            // 1. Get the Name of the user who just joined (to show in notification)
+            const [userRows] = await connection.query("SELECT name FROM users WHERE id = ?", [userId]);
+            const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
+
+            // 2. Find ALL other users who have an ACTIVE plan to this SAME destination
+            //    and have a valid FCM token.
+            const [matchingUsers] = await connection.query(`
+                SELECT DISTINCT u.fcm_token 
+                FROM travel_plans tp
+                JOIN users u ON tp.user_id = u.id
+                WHERE tp.to_place = ? 
+                  AND tp.status = 'Active'
+                  AND tp.user_id != ? -- Exclude the current user
+                  AND u.fcm_token IS NOT NULL
+                  AND u.fcm_token != ''
+            `, [toPlace, userId]);
+
+            if (matchingUsers.length > 0) {
+                console.log(TAG, `Found ${matchingUsers.length} other users to notify about ${toPlace}`);
+
+                const tokens = matchingUsers.map(u => u.fcm_token);
+
+                // 3. Send Multicast Notification
+                const messagePayload = {
+                    tokens: tokens, // Array of tokens
+                    notification: {
+                        title: "New Travel Buddy!",
+                        body: `${joinerName} is also going to ${toPlace}!`
+                    },
+                    android: {
+                        priority: "high",
+                        notification: {
+                            channelId: "chat_channel_id",
+                            priority: "high",
+                            defaultSound: true
+                        }
+                    },
+                    // Data payload for redirection logic
+                    data: {
+                        type: "travel_match",
+                        destinationName: String(toPlace),
+                        groupId: String(groupId)
+                    }
+                };
+
+                // Send to all tokens at once
+                const batchResponse = await admin.messaging().sendEachForMulticast(messagePayload);
+                console.log(TAG, `✅ Travel Match Notifications sent. Success: ${batchResponse.successCount}, Fail: ${batchResponse.failureCount}`);
+            }
+        } catch (notifyError) {
+            console.error(TAG, "⚠️ Error sending travel match notification (Non-fatal):", notifyError.message);
+            // We do not fail the request here, as the plan was already saved successfully
+        }
+        // --- ✅ END NOTIFICATION LOGIC ---
 
         // Send success response
         res.status(201).json({
@@ -671,20 +728,14 @@ app.post("/addTravelPlan", async (req, res) => {
         }
         // -----------------------------------
         console.error(TAG, `❌ Error saving travel plan or updating group:`, err);
-        res.status(500).json({ success: false, message: "Server error occurred while saving the travel plan or joining the group." });
+        res.status(500).json({ success: false, message: "Server error occurred while saving the travel plan." });
     } finally {
         // --- Release Connection ---
         if (connection) {
             connection.release();
-             console.log(TAG, "Database connection released.");
         }
-        // --------------------------
     }
 });
-
-// In index.js
-
-// In index.js
 
 app.get('/users/destination', async (req, res) => {
     const TAG = "/users/destination"; // Logging tag
