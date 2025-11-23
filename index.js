@@ -6,7 +6,6 @@ const admin = require("firebase-admin");
 
 let serviceAccount;
 
-// Check if we are running on Railway (Env Var exists) or Locally (File exists)
 if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 } else {
