@@ -686,7 +686,8 @@ app.post("/addTravelPlan", async (req, res) => {
                     android: {
                         priority: "high",
                         notification: {
-                            channelId: "channel_custom_sound_v1",
+                            channelId: "channel_custom_sound_v2",
+                            sound: "custom_notification",
                             priority: "high",
                             defaultSound: false
                         }
@@ -1013,9 +1014,10 @@ app.post('/sendMessage', async (req, res) => {
           android: {
             priority: "high",
             notification: {
-              channelId: "chat_channel_id", // MUST match Android channel ID
+              channelId: "channel_custom_sound_v2", // MUST match Android 
+              sound: "custom_notification",
               priority: "high",
-              defaultSound: true
+              defaultSound: false
             }
           },
           // ✅ Data required for SplashActivity to redirect correctly
