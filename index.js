@@ -686,9 +686,9 @@ app.post("/addTravelPlan", async (req, res) => {
                     android: {
                         priority: "high",
                         notification: {
-                            channelId: "chat_channel_id",
+                            channelId: "channel_custom_sound_v1",
                             priority: "high",
-                            defaultSound: true
+                            defaultSound: false
                         }
                     },
                     // Data payload for redirection logic
