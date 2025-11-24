@@ -1197,6 +1197,70 @@ app.get('/getChatUsers', async (req, res) => {
     }
 });
 
+router.post('/update-group-icon', upload.single('group_icon'), async (req, res) => {
+  try {
+    const { group_id } = req.body;
+    
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+
+    // Upload to Cloudinary
+    const result = await cloudinary.uploader.upload(req.file.path, {
+      folder: 'group_icons',
+      transformation: [
+        { width: 500, height: 500, crop: 'fill' },
+        { quality: 'auto' }
+      ]
+    });
+
+    // Update database
+    const updateQuery = 'UPDATE group_table SET group_icon = ? WHERE group_id = ?';
+    await db.query(updateQuery, [result.secure_url, group_id]);
+
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+
+    res.json({
+      success: true,
+      message: 'Group icon updated successfully',
+      group_icon_url: result.secure_url
+    });
+  } catch (error) {
+    console.error('Error updating group icon:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Remove Group Icon
+router.post('/remove-group-icon', async (req, res) => {
+  try {
+    const { group_id } = req.body;
+
+    // Get current icon URL to delete from Cloudinary
+    const getQuery = 'SELECT group_icon FROM group_table WHERE group_id = ?';
+    const [rows] = await db.query(getQuery, [group_id]);
+
+    if (rows[0]?.group_icon) {
+      // Extract public_id from URL and delete from Cloudinary
+      const publicId = rows[0].group_icon.split('/').slice(-2).join('/').split('.')[0];
+      await cloudinary.uploader.destroy(publicId);
+    }
+
+    // Update database to NULL
+    const updateQuery = 'UPDATE group_table SET group_icon = NULL WHERE group_id = ?';
+    await db.query(updateQuery, [group_id]);
+
+    res.json({
+      success: true,
+      message: 'Group icon removed successfully'
+    });
+  } catch (error) {
+    console.error('Error removing group icon:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 
 app.post("/deleteMessageForMe", async (req, res) => {
   try {
