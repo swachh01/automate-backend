@@ -2453,15 +2453,20 @@ app.get('/group-members/:groupId', async (req, res) => {
     }
 });
 
-// Update Group Icon endpoint
+// Replace your /update-group-icon endpoint in index.js with this:
+
 app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => {
     const TAG = "/update-group-icon";
     
     try {
+        // *** FIX: Read group_id from req.body (it's sent as FormData) ***
         const groupId = req.body.group_id;
 
+        console.log(TAG, `Received request - groupId: ${groupId}, file:`, req.file ? 'YES' : 'NO');
+        console.log(TAG, `Request body:`, req.body);
+
         if (!groupId) {
-            console.warn(TAG, "Missing group_id");
+            console.warn(TAG, "Missing group_id in request body");
             return res.status(400).json({ success: false, message: 'Missing group ID' });
         }
 
@@ -2471,21 +2476,22 @@ app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => 
         }
 
         console.log(TAG, `Uploading group icon for group ${groupId}`);
+        console.log(TAG, `File details - path: ${req.file.path}, size: ${req.file.size}`);
 
-        // Upload to Cloudinary
-        const result = await cloudinary.uploader.upload(req.file.path, {
-            folder: 'group_icons',
-            transformation: [
-                { width: 500, height: 500, crop: 'fill', gravity: 'center' },
-                { quality: 'auto', fetch_format: 'auto' }
-            ]
-        });
-
-        console.log(TAG, `Cloudinary upload successful: ${result.secure_url}`);
+        // Multer with CloudinaryStorage automatically uploads to Cloudinary
+        // The file path in req.file.path is actually the Cloudinary URL
+        const cloudinaryUrl = req.file.path;
+        
+        console.log(TAG, `Cloudinary upload successful: ${cloudinaryUrl}`);
 
         // Get old icon URL to delete from Cloudinary (if exists)
         const getOldIconQuery = 'SELECT group_icon FROM group_table WHERE group_id = ?';
         const [oldIconRows] = await db.execute(getOldIconQuery, [groupId]);
+
+        if (oldIconRows.length === 0) {
+            console.warn(TAG, `Group ${groupId} not found in database`);
+            return res.status(404).json({ success: false, message: 'Group not found' });
+        }
 
         if (oldIconRows.length > 0 && oldIconRows[0].group_icon) {
             try {
@@ -2507,32 +2513,26 @@ app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => 
 
         // Update database with new icon URL
         const updateQuery = 'UPDATE group_table SET group_icon = ? WHERE group_id = ?';
-        await db.execute(updateQuery, [result.secure_url, groupId]);
+        const [updateResult] = await db.execute(updateQuery, [cloudinaryUrl, groupId]);
 
-        // Clean up uploaded file from local storage
-        const fs = require('fs');
-        fs.unlinkSync(req.file.path);
+        console.log(TAG, `Database update result - affectedRows: ${updateResult.affectedRows}`);
 
-        console.log(TAG, `Group icon updated successfully for group ${groupId}`);
+        if (updateResult.affectedRows === 0) {
+            console.warn(TAG, `No rows updated for group ${groupId}`);
+            return res.status(404).json({ success: false, message: 'Failed to update group icon in database' });
+        }
+
+        console.log(TAG, `✅ Group icon updated successfully for group ${groupId}`);
 
         res.json({
             success: true,
             message: 'Group icon updated successfully',
-            group_icon: result.secure_url
+            group_icon: cloudinaryUrl
         });
 
     } catch (error) {
-        console.error(TAG, 'Error updating group icon:', error);
-        
-        // Clean up file if it exists
-        if (req.file && req.file.path) {
-            try {
-                const fs = require('fs');
-                fs.unlinkSync(req.file.path);
-            } catch (cleanupError) {
-                console.error(TAG, "Error cleaning up file:", cleanupError);
-            }
-        }
+        console.error(TAG, '❌ Error updating group icon:', error);
+        console.error(TAG, 'Error stack:', error.stack);
         
         res.status(500).json({ 
             success: false, 
