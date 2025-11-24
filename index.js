@@ -1197,70 +1197,6 @@ app.get('/getChatUsers', async (req, res) => {
     }
 });
 
-router.post('/update-group-icon', upload.single('group_icon'), async (req, res) => {
-  try {
-    const { group_id } = req.body;
-    
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'No file uploaded' });
-    }
-
-    // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(req.file.path, {
-      folder: 'group_icons',
-      transformation: [
-        { width: 500, height: 500, crop: 'fill' },
-        { quality: 'auto' }
-      ]
-    });
-
-    // Update database
-    const updateQuery = 'UPDATE group_table SET group_icon = ? WHERE group_id = ?';
-    await db.query(updateQuery, [result.secure_url, group_id]);
-
-    // Clean up uploaded file
-    fs.unlinkSync(req.file.path);
-
-    res.json({
-      success: true,
-      message: 'Group icon updated successfully',
-      group_icon_url: result.secure_url
-    });
-  } catch (error) {
-    console.error('Error updating group icon:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// Remove Group Icon
-router.post('/remove-group-icon', async (req, res) => {
-  try {
-    const { group_id } = req.body;
-
-    // Get current icon URL to delete from Cloudinary
-    const getQuery = 'SELECT group_icon FROM group_table WHERE group_id = ?';
-    const [rows] = await db.query(getQuery, [group_id]);
-
-    if (rows[0]?.group_icon) {
-      // Extract public_id from URL and delete from Cloudinary
-      const publicId = rows[0].group_icon.split('/').slice(-2).join('/').split('.')[0];
-      await cloudinary.uploader.destroy(publicId);
-    }
-
-    // Update database to NULL
-    const updateQuery = 'UPDATE group_table SET group_icon = NULL WHERE group_id = ?';
-    await db.query(updateQuery, [group_id]);
-
-    res.json({
-      success: true,
-      message: 'Group icon removed successfully'
-    });
-  } catch (error) {
-    console.error('Error removing group icon:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
 
 app.post("/deleteMessageForMe", async (req, res) => {
   try {
@@ -2451,93 +2387,219 @@ app.get('/api/user-status/:userId', async (req, res) => {
   }
 });
 
-app.get('/group/:groupId/messages', async (req, res) => {
-    const TAG = "/group/:groupId/messages"; // Logging Tag
+app.get('/group-members/:groupId', async (req, res) => {
+    const TAG = "/group-members/:groupId"; // Logging Tag
     const { groupId } = req.params;
-    const { userId } = req.query; // Get userId from query param
 
-    if (!userId || !groupId) {
-        console.warn(TAG, "Missing groupId or userId");
-        return res.status(400).json({ success: false, message: 'Missing group or user ID' });
+    if (!groupId) {
+        console.warn(TAG, "Missing groupId");
+        return res.status(400).json({ success: false, message: 'Missing group ID' });
     }
 
     const currentGroupId = parseInt(groupId);
-    const currentUserId = parseInt(userId);
 
     try {
-        console.log(TAG, `Fetching messages for group ${currentGroupId}, requested by user ${currentUserId}`);
+        console.log(TAG, `Fetching members and group info for group ${currentGroupId}`);
 
-        const query = `
-            SELECT 
-                gm.message_id AS id, 
-                gm.sender_id,
-                gm.message_content AS message, -- Still encrypted
-                gm.timestamp,
-                u.name as sender_name,
-                
-                -- 1. (FOR "Read by X") - Counts how many other users have read it.
-                (SELECT COUNT(DISTINCT gmr.user_id) 
-                 FROM group_message_read_status gmr 
-                 WHERE gmr.message_id = gm.message_id 
-                   AND gmr.user_id != gm.sender_id) AS read_by_count,
-                   
-                -- 2. (FOR "Total Members") - Counts total members.
-                (SELECT COUNT(*) 
-                 FROM group_members gmemb 
-                 WHERE gmemb.group_id = gm.group_id) AS total_participants,
-                 
-                -- 3. (FOR "Unread Header") - Check if the CURRENT user has read it.
-                --    We use 'CASE' to return 2 (Read) or 0 (Sent/Unread).
-                (CASE 
-                    WHEN EXISTS (
-                        SELECT 1 
-                        FROM group_message_read_status gmr_user 
-                        WHERE gmr_user.message_id = gm.message_id 
-                          AND gmr_user.user_id = ? -- Check against the current user
-                    ) THEN 2
-                    ELSE 0 
-                END) AS status
-                     
-            FROM group_messages gm
-            
-            -- Get the sender's name
-            JOIN users u ON gm.sender_id = u.id
-            
-            -- Filter out messages this user has hidden
-            LEFT JOIN hidden_messages hm ON gm.message_id = hm.message_id AND hm.user_id = ?
-            
-            WHERE gm.group_id = ? AND hm.message_id IS NULL
-            ORDER BY gm.timestamp ASC;
+        // First, get the group icon from group_table
+        const groupQuery = `
+            SELECT group_icon, group_name 
+            FROM group_table 
+            WHERE group_id = ?
         `;
-        
-        // Note the parameters now:
-        // 1. currentUserId (for the 'status' subquery)
-        // 2. currentUserId (for the 'hidden_messages' join)
-        // 3. currentGroupId (for the main 'WHERE' clause)
-        const [messages] = await db.execute(query, [currentUserId, currentUserId, currentGroupId]);
-        console.log(TAG, `Fetched ${messages.length} visible messages for group ${currentGroupId}`);
+        const [groupRows] = await db.execute(groupQuery, [currentGroupId]);
 
-        // Decrypt message content AFTER fetching
-        const decryptedMessages = messages.map(msg => {
-            try {
-                return {
-                    ...msg,
-                    message: decrypt(msg.message), // Decrypt the content
-                };
-            } catch (decryptError) {
-                console.error(TAG, `Failed to decrypt message ID ${msg.id}:`, decryptError);
-                return { ...msg, message: "[Failed to decrypt message]" }; // Show error on client
-            }
+        if (groupRows.length === 0) {
+            console.warn(TAG, `Group ${currentGroupId} not found`);
+            return res.status(404).json({ success: false, message: 'Group not found' });
+        }
+
+        const groupIcon = groupRows[0].group_icon; // Will be NULL if not set
+        const groupName = groupRows[0].group_name;
+
+        console.log(TAG, `Group icon URL: ${groupIcon || 'NULL (using letter avatar)'}`);
+
+        // Now get all members of the group
+        const membersQuery = `
+            SELECT 
+                u.id AS user_id,
+                u.name,
+                u.phone,
+                u.profile_pic
+            FROM group_members gm
+            JOIN users u ON gm.user_id = u.id
+            WHERE gm.group_id = ?
+            ORDER BY u.name ASC
+        `;
+        const [members] = await db.execute(membersQuery, [currentGroupId]);
+
+        console.log(TAG, `Fetched ${members.length} members for group ${currentGroupId}`);
+
+        // Return both group info and members
+        res.json({
+            success: true,
+            group_icon: groupIcon, // NULL or Cloudinary URL
+            group_name: groupName,
+            members: members
         });
 
-        res.json({ success: true, messages: decryptedMessages });
-
     } catch (error) {
-        console.error(TAG, `Error fetching group messages for group ${currentGroupId}:`, error);
+        console.error(TAG, `Error fetching group members for group ${currentGroupId}:`, error);
         res.status(500).json({
             success: false,
-            message: 'Server error fetching messages',
-            error: error.sqlMessage || error.message 
+            message: 'Server error fetching group members',
+            error: error.sqlMessage || error.message
+        });
+    }
+});
+
+// Update Group Icon endpoint
+app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => {
+    const TAG = "/update-group-icon";
+    
+    try {
+        const groupId = req.body.group_id;
+
+        if (!groupId) {
+            console.warn(TAG, "Missing group_id");
+            return res.status(400).json({ success: false, message: 'Missing group ID' });
+        }
+
+        if (!req.file) {
+            console.warn(TAG, "No file uploaded");
+            return res.status(400).json({ success: false, message: 'No file uploaded' });
+        }
+
+        console.log(TAG, `Uploading group icon for group ${groupId}`);
+
+        // Upload to Cloudinary
+        const result = await cloudinary.uploader.upload(req.file.path, {
+            folder: 'group_icons',
+            transformation: [
+                { width: 500, height: 500, crop: 'fill', gravity: 'center' },
+                { quality: 'auto', fetch_format: 'auto' }
+            ]
+        });
+
+        console.log(TAG, `Cloudinary upload successful: ${result.secure_url}`);
+
+        // Get old icon URL to delete from Cloudinary (if exists)
+        const getOldIconQuery = 'SELECT group_icon FROM group_table WHERE group_id = ?';
+        const [oldIconRows] = await db.execute(getOldIconQuery, [groupId]);
+
+        if (oldIconRows.length > 0 && oldIconRows[0].group_icon) {
+            try {
+                // Extract public_id from old URL and delete from Cloudinary
+                const oldUrl = oldIconRows[0].group_icon;
+                const urlParts = oldUrl.split('/');
+                const fileNameWithExt = urlParts[urlParts.length - 1];
+                const fileName = fileNameWithExt.split('.')[0];
+                const folder = urlParts[urlParts.length - 2];
+                const publicId = `${folder}/${fileName}`;
+                
+                await cloudinary.uploader.destroy(publicId);
+                console.log(TAG, `Old group icon deleted from Cloudinary: ${publicId}`);
+            } catch (deleteError) {
+                console.error(TAG, "Error deleting old icon from Cloudinary:", deleteError);
+                // Continue even if deletion fails
+            }
+        }
+
+        // Update database with new icon URL
+        const updateQuery = 'UPDATE group_table SET group_icon = ? WHERE group_id = ?';
+        await db.execute(updateQuery, [result.secure_url, groupId]);
+
+        // Clean up uploaded file from local storage
+        const fs = require('fs');
+        fs.unlinkSync(req.file.path);
+
+        console.log(TAG, `Group icon updated successfully for group ${groupId}`);
+
+        res.json({
+            success: true,
+            message: 'Group icon updated successfully',
+            group_icon: result.secure_url
+        });
+
+    } catch (error) {
+        console.error(TAG, 'Error updating group icon:', error);
+        
+        // Clean up file if it exists
+        if (req.file && req.file.path) {
+            try {
+                const fs = require('fs');
+                fs.unlinkSync(req.file.path);
+            } catch (cleanupError) {
+                console.error(TAG, "Error cleaning up file:", cleanupError);
+            }
+        }
+        
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error updating group icon',
+            error: error.message 
+        });
+    }
+});
+
+// Remove Group Icon endpoint
+app.post('/remove-group-icon', async (req, res) => {
+    const TAG = "/remove-group-icon";
+    
+    try {
+        const { group_id } = req.body;
+
+        if (!group_id) {
+            console.warn(TAG, "Missing group_id");
+            return res.status(400).json({ success: false, message: 'Missing group ID' });
+        }
+
+        console.log(TAG, `Removing group icon for group ${group_id}`);
+
+        // Get current icon URL to delete from Cloudinary
+        const getQuery = 'SELECT group_icon FROM group_table WHERE group_id = ?';
+        const [rows] = await db.execute(getQuery, [group_id]);
+
+        if (rows.length === 0) {
+            console.warn(TAG, `Group ${group_id} not found`);
+            return res.status(404).json({ success: false, message: 'Group not found' });
+        }
+
+        if (rows[0].group_icon) {
+            try {
+                // Extract public_id from URL and delete from Cloudinary
+                const url = rows[0].group_icon;
+                const urlParts = url.split('/');
+                const fileNameWithExt = urlParts[urlParts.length - 1];
+                const fileName = fileNameWithExt.split('.')[0];
+                const folder = urlParts[urlParts.length - 2];
+                const publicId = `${folder}/${fileName}`;
+                
+                await cloudinary.uploader.destroy(publicId);
+                console.log(TAG, `Group icon deleted from Cloudinary: ${publicId}`);
+            } catch (deleteError) {
+                console.error(TAG, "Error deleting from Cloudinary:", deleteError);
+                // Continue even if Cloudinary deletion fails
+            }
+        }
+
+        // Update database to NULL
+        const updateQuery = 'UPDATE group_table SET group_icon = NULL WHERE group_id = ?';
+        await db.execute(updateQuery, [group_id]);
+
+        console.log(TAG, `Group icon removed successfully for group ${group_id}`);
+
+        res.json({
+            success: true,
+            message: 'Group icon removed successfully'
+        });
+
+    } catch (error) {
+        console.error(TAG, 'Error removing group icon:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error removing group icon',
+            error: error.message 
         });
     }
 });
