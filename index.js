@@ -2604,6 +2604,98 @@ app.post('/remove-group-icon', async (req, res) => {
     }
 });
 
+app.get('/group/:groupId/messages', async (req, res) => {
+    const TAG = "/group/:groupId/messages";
+    try {
+        const { groupId } = req.params;
+        const { userId } = req.query;
+
+        if (!groupId || !userId) {
+            console.warn(TAG, `Missing groupId (${groupId}) or userId (${userId})`);
+            return res.status(400).json({ 
+                success: false, 
+                message: 'groupId and userId are required' 
+            });
+        }
+
+        console.log(TAG, `Fetching messages for group ${groupId}, userId: ${userId}`);
+
+        // First, verify the user is a member of this group
+        const [memberCheck] = await db.query(
+            'SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?',
+            [groupId, userId]
+        );
+
+        if (memberCheck.length === 0) {
+            console.warn(TAG, `User ${userId} is not a member of group ${groupId}`);
+            return res.status(403).json({ 
+                success: false, 
+                message: 'You are not a member of this group' 
+            });
+        }
+
+        // Fetch all group messages with sender details
+        const messagesQuery = `
+            SELECT 
+                gm.message_id as id,
+                gm.sender_id,
+                gm.message_content as message,
+                gm.timestamp,
+                u.name as sender_name,
+                u.profile_pic as sender_profile_pic,
+                (SELECT COUNT(*) FROM group_message_read_status 
+                 WHERE message_id = gm.message_id) as readByCount,
+                (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as total_participants,
+                EXISTS(
+                    SELECT 1 FROM group_message_read_status gmrs 
+                    WHERE gmrs.message_id = gm.message_id 
+                    AND gmrs.user_id = ?
+                ) as isReadByCurrentUser
+            FROM group_messages gm
+            JOIN users u ON gm.sender_id = u.id
+            WHERE gm.group_id = ?
+            ORDER BY gm.timestamp ASC
+        `;
+
+        const [messages] = await db.execute(messagesQuery, [groupId, userId, groupId]);
+
+        console.log(TAG, `Found ${messages.length} messages for group ${groupId}`);
+
+        // Decrypt messages
+        const decryptedMessages = messages.map(msg => {
+            try {
+                return {
+                    ...msg,
+                    message: decrypt(msg.message), // Decrypt the message content
+                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser),
+                    status: msg.isReadByCurrentUser ? 2 : 0 // 2 = read, 0 = sent
+                };
+            } catch (decryptError) {
+                console.error(TAG, `Error decrypting message ${msg.id}:`, decryptError);
+                return {
+                    ...msg,
+                    message: '[Encrypted Message]',
+                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser),
+                    status: 0
+                };
+            }
+        });
+
+        res.json({ 
+            success: true, 
+            messages: decryptedMessages 
+        });
+
+    } catch (error) {
+        console.error(TAG, '❌ Error fetching group messages:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error fetching messages',
+            error: error.message 
+        });
+    }
+});
+
 app.post('/group/send', async (req, res) => {
     const { senderId, groupId, content } = req.body;
     const TAG = '/group/send';
