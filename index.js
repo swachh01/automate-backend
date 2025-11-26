@@ -311,14 +311,35 @@ socket.on('join_group', (groupId) => {
   console.log(`Socket ${socket.id} joined group room: group_${groupId}`);
 });
 
-// When someone reads group messages, notify all group members
-socket.on('group_read', (data) => {
+// When someone reads group messages, notify all group members with detailed info
+socket.on('group_read', async (data) => {
     // data = { userId: 12, groupId: 5 }
-    console.log(`User ${data.userId} read messages in group ${data.groupId}`);
-    socket.to(`group_${data.groupId}`).emit('group_messages_read', {
-        userId: data.userId,
-        groupId: data.groupId
-    });
+    try {
+        console.log(`User ${data.userId} read messages in group ${data.groupId}`);
+        
+        // Get updated read counts for recent messages
+        const [recentMessages] = await db.query(`
+            SELECT 
+                gm.message_id,
+                COUNT(gmrs.user_id) as readByCount,
+                (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalParticipants
+            FROM group_messages gm
+            LEFT JOIN group_message_read_status gmrs ON gm.message_id = gmrs.message_id
+            WHERE gm.group_id = ?
+            AND gm.timestamp > DATE_SUB(NOW(), INTERVAL 1 HOUR)
+            GROUP BY gm.message_id
+        `, [data.groupId, data.groupId]);
+        
+        // Broadcast to all group members with the updated counts
+        socket.to(`group_${data.groupId}`).emit('group_messages_read', {
+            userId: data.userId,
+            groupId: data.groupId,
+            updatedCounts: recentMessages // Send the updated read counts
+        });
+        
+    } catch (error) {
+        console.error('Error handling group_read:', error);
+    }
 });
 
 }); 
