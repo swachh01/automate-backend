@@ -2645,8 +2645,7 @@ app.get('/group/:groupId/messages', async (req, res) => {
             return res.status(403).json({ success: false, message: 'You are not a member of this group' });
         }
 
-        // 2. Fetch Messages with Strict Counts
-        // CHANGED: total_participants now uses COUNT(DISTINCT user_id) to avoid duplicates
+        // 2. Enhanced Query with Proper Status Calculation
         const messagesQuery = `
             SELECT 
                 gm.message_id as id,
@@ -2655,11 +2654,30 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.timestamp,
                 u.name as sender_name,
                 u.profile_pic as sender_profile_pic,
-                -- Count how many people (excluding sender) have read it
-                (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status 
-                 WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
-                -- Count UNIQUE members
+                -- Count unique readers (excluding sender)
+                (SELECT COUNT(DISTINCT gmrs.user_id) 
+                 FROM group_message_read_status gmrs 
+                 WHERE gmrs.message_id = gm.message_id 
+                 AND gmrs.user_id != gm.sender_id) as readByCount,
+                -- Count total group members
                 (SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) as totalParticipants,
+                -- Calculate STATUS: 0=sent, 1=delivered, 2=read by all
+                CASE 
+                    WHEN (SELECT COUNT(DISTINCT gmrs.user_id) 
+                          FROM group_message_read_status gmrs 
+                          WHERE gmrs.message_id = gm.message_id 
+                          AND gmrs.user_id != gm.sender_id) 
+                         >= (SELECT COUNT(DISTINCT user_id) - 1 
+                             FROM group_members 
+                             WHERE group_id = ?) 
+                    THEN 2  -- Read by All
+                    WHEN (SELECT COUNT(DISTINCT gmrs.user_id) 
+                          FROM group_message_read_status gmrs 
+                          WHERE gmrs.message_id = gm.message_id 
+                          AND gmrs.user_id != gm.sender_id) > 0 
+                    THEN 1  -- Delivered (some have read)
+                    ELSE 0  -- Sent
+                END as status,
                 -- Check if current user has read it
                 EXISTS(
                     SELECT 1 FROM group_message_read_status gmrs 
@@ -2672,34 +2690,19 @@ app.get('/group/:groupId/messages', async (req, res) => {
             ORDER BY gm.timestamp ASC
         `;
 
-        const [messages] = await db.execute(messagesQuery, [groupId, userId, groupId]);
+        const [messages] = await db.execute(messagesQuery, [groupId, groupId, userId, groupId]);
 
-        // 3. Robust Status Calculation
+        // 3. Process messages
         const decryptedMessages = messages.map(msg => {
             try {
-                let status = 0; // Default: Sent (one tick)
-
-                // Force convert to Integers to prevent "1" >= 2 logic errors
-                const readByCount = parseInt(msg.readByCount || 0);
-                const totalParticipants = parseInt(msg.total_participants || 0);
-
-                // We exclude the sender from the target count
-                const othersCount = totalParticipants - 1; 
-                
-                // Logic: If there ARE other people, and they ALL read it -> Status 2 (Read by All)
-                if (othersCount > 0 && readByCount >= othersCount) {
-                    status = 2; 
-                } 
-
-                // Decrypt
                 const decryptedContent = decrypt(msg.message);
-
                 return {
                     ...msg,
                     message: decryptedContent, 
                     isReadByCurrentUser: Boolean(msg.isReadByCurrentUser),
-                    readByCount: readByCount, // Send back the clean integer
-                    status: status 
+                    readByCount: parseInt(msg.readByCount || 0),
+                    status: parseInt(msg.status || 0), // Ensure status is integer
+                    totalParticipants: parseInt(msg.totalParticipants || 0)
                 };
             } catch (decryptError) {
                 console.error(TAG, `Error processing message ${msg.id}:`, decryptError);
@@ -2716,6 +2719,23 @@ app.get('/group/:groupId/messages', async (req, res) => {
     } catch (error) {
         console.error(TAG, '❌ Error fetching group messages:', error);
         res.status(500).json({ success: false, message: 'Server error fetching messages' });
+    }
+});
+
+// Add this new endpoint to index.js
+app.post('/updateGroupMessageStatus', async (req, res) => {
+    try {
+        const { messageId, groupId } = req.body;
+        
+        // This endpoint would be called when all members have read a message
+        // Since we're calculating status in real-time in the query above,
+        // this might not be needed, but it's here for completeness
+        
+        res.json({ success: true, message: 'Status update not needed with real-time calculation' });
+        
+    } catch (error) {
+        console.error('Error updating group message status:', error);
+        res.status(500).json({ success: false, message: 'Failed to update status' });
     }
 });
 
