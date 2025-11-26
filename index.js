@@ -2625,6 +2625,9 @@ app.post('/remove-group-icon', async (req, res) => {
     }
 });
 
+
+// Replace your existing /group/:groupId/messages endpoint with this corrected version:
+
 app.get('/group/:groupId/messages', async (req, res) => {
     const TAG = "/group/:groupId/messages";
     try {
@@ -2654,7 +2657,7 @@ app.get('/group/:groupId/messages', async (req, res) => {
             });
         }
 
-        // Fetch all group messages with sender details and read counts
+        // *** KEY FIX: Improved status calculation ***
         const messagesQuery = `
             SELECT 
                 gm.message_id as id,
@@ -2664,10 +2667,15 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 u.name as sender_name,
                 u.profile_pic as sender_profile_pic,
                 -- Count how many people (excluding sender) have read it
-                (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status 
-                 WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
-                -- Count total members
-                (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as total_participants,
+                (SELECT COUNT(DISTINCT user_id) 
+                 FROM group_message_read_status 
+                 WHERE message_id = gm.message_id 
+                 AND user_id != gm.sender_id) as readByCount,
+                -- Count total members excluding sender
+                (SELECT COUNT(*) 
+                 FROM group_members 
+                 WHERE group_id = ? 
+                 AND user_id != gm.sender_id) as total_other_participants,
                 -- Check if current user has read it
                 EXISTS(
                     SELECT 1 FROM group_message_read_status gmrs 
@@ -2689,36 +2697,51 @@ app.get('/group/:groupId/messages', async (req, res) => {
             try {
                 let status = 0; // Default: Sent
 
-                // Logic: If everyone else has read it, mark as Read (2).
-                // We subtract 1 from total_participants to exclude the sender themselves.
-                const othersCount = msg.total_participants - 1;
-                
-                if (othersCount > 0 && msg.readByCount >= othersCount) {
-                    status = 2; // Read by All
-                } else if (msg.readByCount > 0) {
-                    // Optional: If you want a "Some Read" status, you could use 1 here.
-                    // For now, we'll keep it 0 (Sent) until everyone reads, or 2 if you prefer partial.
-                    // Standard logic: 0 = Sent, 2 = Read by All.
-                    status = 0; 
+                // *** FIXED LOGIC ***
+                // If the message is from the current user (sender), calculate tick status
+                if (msg.sender_id === parseInt(userId)) {
+                    // For sent messages: Check if everyone else has read it
+                    const othersCount = msg.total_other_participants;
+                    
+                    if (othersCount === 0) {
+                        // Only the sender in the group (shouldn't happen, but safe)
+                        status = 0;
+                    } else if (msg.readByCount >= othersCount) {
+                        status = 2; // Read by All (Blue double ticks)
+                    } else if (msg.readByCount > 0) {
+                        status = 1; // Delivered/Partially Read (Grey double ticks)
+                    } else {
+                        status = 0; // Just Sent (Single grey tick)
+                    }
+                } else {
+                    // For received messages, status doesn't matter for ticks
+                    // but we set it based on whether current user read it
+                    status = msg.isReadByCurrentUser ? 2 : 0;
                 }
 
-                // Special Case: If I am the receiver, and I have read it, show it as read locally?
-                // Usually 'status' is used for Outgoing ticks. 
-                // If I am the sender, 'status' determines the ticks.
-                
                 return {
-                    ...msg,
-                    message: decrypt(msg.message), 
-                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser),
-                    status: status // Use our new calculated status
+                    id: msg.id,
+                    senderId: msg.sender_id,
+                    message: decrypt(msg.message),
+                    timestamp: msg.timestamp,
+                    senderName: msg.sender_name,
+                    senderProfilePic: msg.sender_profile_pic,
+                    readByCount: msg.readByCount,
+                    status: status, // Use our calculated status
+                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser)
                 };
             } catch (decryptError) {
                 console.error(TAG, `Error decrypting message ${msg.id}:`, decryptError);
                 return {
-                    ...msg,
+                    id: msg.id,
+                    senderId: msg.sender_id,
                     message: '[Encrypted Message]',
-                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser),
-                    status: 0
+                    timestamp: msg.timestamp,
+                    senderName: msg.sender_name,
+                    senderProfilePic: msg.sender_profile_pic,
+                    readByCount: 0,
+                    status: 0,
+                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser)
                 };
             }
         });
