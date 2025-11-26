@@ -2659,7 +2659,7 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status 
                  WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
                 -- Count UNIQUE members
-                (SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) as total_participants,
+                (SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) as totalParticipants,
                 -- Check if current user has read it
                 EXISTS(
                     SELECT 1 FROM group_message_read_status gmrs 
@@ -2749,7 +2749,7 @@ app.post('/group/send', async (req, res) => {
         const [insertedMsg] = await db.query(
             `SELECT gm.message_id as id, gm.sender_id, gm.message_content as message, 
                     gm.timestamp, u.name as sender_name,
-                    (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as total_participants
+                    (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalParticipants
              FROM group_messages gm
              JOIN users u ON gm.sender_id = u.id
              WHERE gm.message_id = ?`,
