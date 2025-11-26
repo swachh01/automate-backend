@@ -2625,9 +2625,6 @@ app.post('/remove-group-icon', async (req, res) => {
     }
 });
 
-
-// Replace your existing /group/:groupId/messages endpoint with this corrected version:
-
 app.get('/group/:groupId/messages', async (req, res) => {
     const TAG = "/group/:groupId/messages";
     try {
@@ -2635,29 +2632,21 @@ app.get('/group/:groupId/messages', async (req, res) => {
         const { userId } = req.query;
 
         if (!groupId || !userId) {
-            console.warn(TAG, `Missing groupId (${groupId}) or userId (${userId})`);
-            return res.status(400).json({ 
-                success: false, 
-                message: 'groupId and userId are required' 
-            });
+            return res.status(400).json({ success: false, message: 'groupId and userId are required' });
         }
 
-        console.log(TAG, `Fetching messages for group ${groupId}, userId: ${userId}`);
-
-        // First, verify the user is a member of this group
+        // 1. Verify Member
         const [memberCheck] = await db.query(
             'SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?',
             [groupId, userId]
         );
 
         if (memberCheck.length === 0) {
-            return res.status(403).json({ 
-                success: false, 
-                message: 'You are not a member of this group' 
-            });
+            return res.status(403).json({ success: false, message: 'You are not a member of this group' });
         }
 
-        // *** KEY FIX: Improved status calculation ***
+        // 2. Fetch Messages with Strict Counts
+        // CHANGED: total_participants now uses COUNT(DISTINCT user_id) to avoid duplicates
         const messagesQuery = `
             SELECT 
                 gm.message_id as id,
@@ -2667,15 +2656,10 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 u.name as sender_name,
                 u.profile_pic as sender_profile_pic,
                 -- Count how many people (excluding sender) have read it
-                (SELECT COUNT(DISTINCT user_id) 
-                 FROM group_message_read_status 
-                 WHERE message_id = gm.message_id 
-                 AND user_id != gm.sender_id) as readByCount,
-                -- Count total members excluding sender
-                (SELECT COUNT(*) 
-                 FROM group_members 
-                 WHERE group_id = ? 
-                 AND user_id != gm.sender_id) as total_other_participants,
+                (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status 
+                 WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
+                -- Count UNIQUE members
+                (SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) as total_participants,
                 -- Check if current user has read it
                 EXISTS(
                     SELECT 1 FROM group_message_read_status gmrs 
@@ -2690,74 +2674,48 @@ app.get('/group/:groupId/messages', async (req, res) => {
 
         const [messages] = await db.execute(messagesQuery, [groupId, userId, groupId]);
 
-        console.log(TAG, `Found ${messages.length} messages for group ${groupId}`);
-
-        // Decrypt messages and CALCULATE STATUS
+        // 3. Robust Status Calculation
         const decryptedMessages = messages.map(msg => {
             try {
-                let status = 0; // Default: Sent
+                let status = 0; // Default: Sent (one tick)
 
-                // *** FIXED LOGIC ***
-                // If the message is from the current user (sender), calculate tick status
-                if (msg.sender_id === parseInt(userId)) {
-                    // For sent messages: Check if everyone else has read it
-                    const othersCount = msg.total_other_participants;
-                    
-                    if (othersCount === 0) {
-                        // Only the sender in the group (shouldn't happen, but safe)
-                        status = 0;
-                    } else if (msg.readByCount >= othersCount) {
-                        status = 2; // Read by All (Blue double ticks)
-                    } else if (msg.readByCount > 0) {
-                        status = 1; // Delivered/Partially Read (Grey double ticks)
-                    } else {
-                        status = 0; // Just Sent (Single grey tick)
-                    }
-                } else {
-                    // For received messages, status doesn't matter for ticks
-                    // but we set it based on whether current user read it
-                    status = msg.isReadByCurrentUser ? 2 : 0;
-                }
+                // Force convert to Integers to prevent "1" >= 2 logic errors
+                const readByCount = parseInt(msg.readByCount || 0);
+                const totalParticipants = parseInt(msg.total_participants || 0);
+
+                // We exclude the sender from the target count
+                const othersCount = totalParticipants - 1; 
+                
+                // Logic: If there ARE other people, and they ALL read it -> Status 2 (Read by All)
+                if (othersCount > 0 && readByCount >= othersCount) {
+                    status = 2; 
+                } 
+
+                // Decrypt
+                const decryptedContent = decrypt(msg.message);
 
                 return {
-                    id: msg.id,
-                    senderId: msg.sender_id,
-                    message: decrypt(msg.message),
-                    timestamp: msg.timestamp,
-                    senderName: msg.sender_name,
-                    senderProfilePic: msg.sender_profile_pic,
-                    readByCount: msg.readByCount,
-                    status: status, // Use our calculated status
-                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser)
+                    ...msg,
+                    message: decryptedContent, 
+                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser),
+                    readByCount: readByCount, // Send back the clean integer
+                    status: status 
                 };
             } catch (decryptError) {
-                console.error(TAG, `Error decrypting message ${msg.id}:`, decryptError);
+                console.error(TAG, `Error processing message ${msg.id}:`, decryptError);
                 return {
-                    id: msg.id,
-                    senderId: msg.sender_id,
+                    ...msg,
                     message: '[Encrypted Message]',
-                    timestamp: msg.timestamp,
-                    senderName: msg.sender_name,
-                    senderProfilePic: msg.sender_profile_pic,
-                    readByCount: 0,
-                    status: 0,
-                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser)
+                    status: 0
                 };
             }
         });
 
-        res.json({ 
-            success: true, 
-            messages: decryptedMessages 
-        });
+        res.json({ success: true, messages: decryptedMessages });
 
     } catch (error) {
         console.error(TAG, '❌ Error fetching group messages:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error fetching messages',
-            error: error.message 
-        });
+        res.status(500).json({ success: false, message: 'Server error fetching messages' });
     }
 });
 
