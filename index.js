@@ -689,6 +689,7 @@ app.post("/addTravelPlan", async (req, res) => {
                   AND tp.user_id != ? -- Exclude the current user
                   AND u.fcm_token IS NOT NULL
                   AND u.fcm_token != ''
+                  AND u.trip_alerts_enabled = 1
             `, [toPlace, userId]);
 
             if (matchingUsers.length > 0) {
@@ -1290,6 +1291,31 @@ app.get('/checkBlockStatus', async (req, res) => {
     console.error(" Error checking block status:", err);
     res.status(500).json({ success: false, message: 'Database error' });
   }
+});
+
+// Add this new route to save notification preferences
+app.post('/updateNotificationSettings', async (req, res) => {
+    const { userId, type, enabled } = req.body;
+    
+    if (!userId || !type) {
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+    }
+
+    try {
+        let column = "";
+        if (type === "trip_alerts") column = "trip_alerts_enabled";
+        // Add more types here later if needed (e.g., "promotions_enabled")
+
+        if (column) {
+            await db.query(`UPDATE users SET ${column} = ? WHERE id = ?`, [enabled, userId]);
+            res.json({ success: true, message: 'Settings updated' });
+        } else {
+            res.json({ success: true, message: 'No valid setting type found' });
+        }
+    } catch (error) {
+        console.error('Error updating settings:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
 app.get("/getUsersGoing", async (req, res) => {
