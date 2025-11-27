@@ -1099,7 +1099,7 @@ app.get('/getChatUsers', async (req, res) => {
                     m.message AS last_message_content,
                     m.timestamp AS last_timestamp,
                     m.sender_id AS last_sender_id,
-                    m.status AS last_message_status, -- *** ADD STATUS ***
+                    m.status AS last_message_status,
                     ROW_NUMBER() OVER (
                         PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
                         ORDER BY m.timestamp DESC
@@ -1109,6 +1109,16 @@ app.get('/getChatUsers', async (req, res) => {
                 WHERE
                     (m.sender_id = ? OR m.receiver_id = ?)
                     AND hm.message_id IS NULL
+                    
+                    -- *** NEW FILTER: HIDE PENDING REQUESTS ***
+                    -- If I am the receiver, check if there is a PENDING request from this sender.
+                    -- If yes, exclude it (it belongs in the "Requests" screen, not here).
+                    AND NOT EXISTS (
+                        SELECT 1 FROM chat_requests cr 
+                        WHERE cr.sender_id = m.sender_id 
+                          AND cr.receiver_id = ? 
+                          AND cr.status = 'pending'
+                    )
 
                 UNION ALL
 
@@ -1119,7 +1129,7 @@ app.get('/getChatUsers', async (req, res) => {
                     gm.message_content AS last_message_content,
                     gm.timestamp AS last_timestamp,
                     gm.sender_id AS last_sender_id,
-                    -1 AS last_message_status, -- *** No status for groups ***
+                    -1 AS last_message_status, -- No status for groups
                     ROW_NUMBER() OVER (
                         PARTITION BY gm.group_id
                         ORDER BY gm.timestamp DESC
@@ -1135,7 +1145,7 @@ app.get('/getChatUsers', async (req, res) => {
                 lc.last_message_content,
                 lc.last_timestamp,
                 lc.last_sender_id,
-                lc.last_message_status, -- *** INCLUDE STATUS ***
+                lc.last_message_status,
                 u_sender.name AS last_sender_name,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.name ELSE NULL END AS username,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_pic ELSE NULL END AS profile_pic,
@@ -1167,10 +1177,16 @@ app.get('/getChatUsers', async (req, res) => {
             ORDER BY lc.last_timestamp DESC;
         `;
 
+        // Updated params array with the extra currentUserId for the new NOT EXISTS clause
         const params = [
-            currentUserId, currentUserId, currentUserId, currentUserId, currentUserId,
-            currentUserId, currentUserId,
-            currentUserId, currentUserId, currentUserId
+            currentUserId, currentUserId, currentUserId, 
+            currentUserId, currentUserId, 
+            currentUserId, // <--- New param for the check: cr.receiver_id = ?
+            
+            currentUserId, currentUserId, // Group subquery params
+            
+            currentUserId, // Outer select unread individual
+            currentUserId, currentUserId // Outer select unread group
         ];
 
         console.log(TAG, `Executing combined chat query for userId: ${currentUserId}`);
@@ -1202,7 +1218,7 @@ app.get('/getChatUsers', async (req, res) => {
                 profilePicUrl: profilePicUrl,
                 lastSenderId: row.last_sender_id,
                 lastSenderName: row.last_sender_name,
-                lastMessageStatus: row.last_message_status // *** ADD STATUS ***
+                lastMessageStatus: row.last_message_status 
             };
         });
 
@@ -1218,7 +1234,6 @@ app.get('/getChatUsers', async (req, res) => {
         });
     }
 });
-
 
 app.post("/deleteMessageForMe", async (req, res) => {
   try {
@@ -2916,6 +2931,141 @@ app.post('/group/read', async (req, res) => {
     } catch (error) {
         console.error('Error marking messages read:', error);
         res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// 1. Search Users by Name (Partial Match)
+app.get('/searchUsers', async (req, res) => {
+    const { query, currentUserId } = req.query;
+    try {
+        // Find users matching name, excluding current user
+        const sql = `
+            SELECT id, name, college, profile_pic 
+            FROM users 
+            WHERE name LIKE ? AND id != ?
+            LIMIT 20
+        `;
+        const [users] = await db.execute(sql, [`%${query}%`, currentUserId]);
+        res.json({ success: true, users });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Search failed' });
+    }
+});
+
+// 2. Send Chat Request (Invite)
+app.post('/sendChatRequest', async (req, res) => {
+    const { senderId, receiverId, message } = req.body;
+    
+    // Check if they are already connected or blocked
+    // (Logic omitted for brevity, but you should check chat_requests table)
+
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // A. Create the Request entry
+        await connection.execute(`
+            INSERT INTO chat_requests (sender_id, receiver_id, status) 
+            VALUES (?, ?, 'pending')
+            ON DUPLICATE KEY UPDATE status = status -- Do nothing if exists
+        `, [senderId, receiverId]);
+
+        // B. Send the actual Message (Encrypted)
+        const encryptedMsg = encrypt(message); // Assuming you have encrypt fn available
+        const [msgResult] = await connection.execute(`
+            INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
+            VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
+        `, [senderId, receiverId, encryptedMsg]);
+
+        await connection.commit();
+        
+        // Notify Receiver via Socket
+        io.to(`chat_${receiverId}`).emit('new_chat_request', {
+            requestId: msgResult.insertId,
+            senderId: senderId,
+            senderName: "Someone", // Fetch actual name if needed
+            message: message
+        });
+
+        res.json({ success: true, message: 'Request sent' });
+    } catch (err) {
+        await connection.rollback();
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Failed to send request' });
+    } finally {
+        connection.release();
+    }
+});
+
+// 3. Get Pending Requests (For the "Requests" screen)
+app.get('/chatRequests', async (req, res) => {
+    const { userId } = req.query;
+    try {
+        const sql = `
+            SELECT 
+                cr.id as requestId,
+                u.id as userId,
+                u.name,
+                u.profile_pic,
+                u.college,
+                -- Get the latest message content
+                (SELECT message FROM messages m 
+                 WHERE m.sender_id = u.id AND m.receiver_id = ? 
+                 ORDER BY m.timestamp DESC LIMIT 1) as lastMessage
+            FROM chat_requests cr
+            JOIN users u ON cr.sender_id = u.id
+            WHERE cr.receiver_id = ? AND cr.status = 'pending'
+        `;
+        const [requests] = await db.execute(sql, [userId, userId]);
+        
+        // Decrypt messages before sending
+        const decryptedRequests = requests.map(r => ({
+            ...r,
+            lastMessage: r.lastMessage ? decrypt(r.lastMessage) : "Sent a message"
+        }));
+
+        res.json({ success: true, requests: decryptedRequests });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Error fetching requests' });
+    }
+});
+
+// 4. Handle Request (Approve/Reject)
+app.post('/handleChatRequest', async (req, res) => {
+    const { userId, otherUserId, action } = req.body; // action = 'accept' or 'reject'
+    
+    try {
+        if (action === 'accept') {
+            await db.execute(`
+                UPDATE chat_requests 
+                SET status = 'accepted' 
+                WHERE sender_id = ? AND receiver_id = ?
+            `, [otherUserId, userId]);
+            res.json({ success: true, message: 'Request accepted' });
+        } else {
+            // REJECT: Delete the request AND the messages
+            const connection = await db.getConnection();
+            await connection.beginTransaction();
+            
+            await connection.execute(`
+                DELETE FROM chat_requests 
+                WHERE sender_id = ? AND receiver_id = ?
+            `, [otherUserId, userId]);
+
+            await connection.execute(`
+                DELETE FROM messages 
+                WHERE (sender_id = ? AND receiver_id = ?) 
+                   OR (sender_id = ? AND receiver_id = ?)
+            `, [otherUserId, userId, userId, otherUserId]);
+
+            await connection.commit();
+            connection.release();
+            res.json({ success: true, message: 'Request rejected and chat deleted' });
+        }
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Operation failed' });
     }
 });
 
