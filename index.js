@@ -2934,25 +2934,43 @@ app.post('/group/read', async (req, res) => {
     }
 });
 
-// 1. Search Users by Name (Partial Match)
+// 1. Search Users by Name (Partial Match) + Check for Existing Chat
 app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
     try {
-        // Find users matching name, excluding current user
+        // We add a subquery (EXISTS) to check if any message exists between these two users
         const sql = `
-            SELECT id, name, college, profile_pic 
-            FROM users 
-            WHERE name LIKE ? AND id != ?
+            SELECT 
+                u.id, 
+                u.name, 
+                u.college, 
+                u.profile_pic,
+                EXISTS (
+                    SELECT 1 FROM messages m 
+                    WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
+                       OR (m.sender_id = u.id AND m.receiver_id = ?)
+                ) as hasChat
+            FROM users u 
+            WHERE u.name LIKE ? AND u.id != ?
             LIMIT 20
         `;
-        const [users] = await db.execute(sql, [`%${query}%`, currentUserId]);
-        res.json({ success: true, users });
+        
+        // Params: [currentUserId, currentUserId, %query%, currentUserId]
+        const [users] = await db.execute(sql, [currentUserId, currentUserId, `%${query}%`, currentUserId]);
+        
+        // Convert MySQL 1/0 to boolean true/false for the app
+        const usersWithBoolean = users.map(u => ({
+            ...u,
+            hasChat: Boolean(u.hasChat)
+        }));
+
+        res.json({ success: true, users: usersWithBoolean });
     } catch (err) {
+        console.error(err);
         res.status(500).json({ success: false, message: 'Search failed' });
     }
 });
 
-// 2. Send Chat Request (Invite)
 app.post('/sendChatRequest', async (req, res) => {
     const { senderId, receiverId, message } = req.body;
     
