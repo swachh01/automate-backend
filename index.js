@@ -1,4 +1,5 @@
 require("dotenv").config();
+const activeChatSessions = new Map();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs'); 
@@ -195,6 +196,26 @@ socket.on('user_online', async (userId) => {
       console.error('❌ Error handling disconnect:', error);
     }
   });
+
+ socket.on('chat_opened', (data) => {
+    // data = { userId: 12, chatPartnerId: 45 } for 1-on-1
+    // or data = { userId: 12, groupId: 5 } for group chats
+    const { userId, chatPartnerId, groupId } = data;
+    
+    if (chatPartnerId) {
+        activeChatSessions.set(userId.toString(), `user_${chatPartnerId}`);
+        console.log(`✅ User ${userId} opened chat with user ${chatPartnerId}`);
+    } else if (groupId) {
+        activeChatSessions.set(userId.toString(), `group_${groupId}`);
+        console.log(`✅ User ${userId} opened group chat ${groupId}`);
+    }
+});
+
+socket.on('chat_closed', (data) => {
+    const { userId } = data;
+    activeChatSessions.delete(userId.toString());
+    console.log(`✅ User ${userId} closed their active chat`);
+});
 
 
   // --- 2. YOUR TYPING LOGIC (USING YOUR EVENT NAMES) ---
@@ -1013,51 +1034,60 @@ app.post('/sendMessage', async (req, res) => {
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
-    // 6. Send FCM Notification (For background/killed state)
+    // ===============================
+    // 6. *** UPDATED FCM NOTIFICATION LOGIC ***
+    // Only send notification if receiver does NOT have this chat open
+    // ===============================
     try {
-      // A. Get Receiver's Token
-      const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
-
-      // B. Get Sender's Name (for Notification Title)
-      const [senderRows] = await db.query("SELECT name, profile_pic FROM users WHERE id = ?", [sender_id]);
-      const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
-      const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
-
-      if (userRows.length > 0 && userRows[0].fcm_token) {
-        const receiverToken = userRows[0].fcm_token;
-
-        const messagePayload = {
-          token: receiverToken,
-          notification: {
-            title: senderName, // ✅ Shows actual Name (e.g., "Sumit")
-            body: message
-          },
-          android: {
-            priority: "high",
-            notification: {
-              channelId: "channel_custom_sound_v2", // MUST match Android 
-              sound: "custom_notification",
-              priority: "high",
-              defaultSound: false
-            }
-          },
-          // ✅ Data required for SplashActivity to redirect correctly
-          data: {
-            type: "chat",
-            senderId: sender_id.toString(),
-            senderName: senderName,
-            senderProfilePic: senderPic || "",
-            chatPartnerId: sender_id.toString()
-          }
-        };
-
-        await admin.messaging().send(messagePayload);
-        console.log(TAG, `✅ FCM Notification sent to user ${receiver_id}`);
+      // Check if receiver has this specific chat open
+      const receiverActiveChat = activeChatSessions.get(receiver_id.toString());
+      const isChatOpen = receiverActiveChat === `user_${sender_id}`;
+      
+      if (isChatOpen) {
+        console.log(TAG, `⏭️ Skipping FCM: User ${receiver_id} has chat with ${sender_id} open`);
       } else {
-        console.log(TAG, `⚠️ No FCM token found for user ${receiver_id}`);
+        // A. Get Receiver's Token
+        const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
+
+        // B. Get Sender's Name (for Notification Title)
+        const [senderRows] = await db.query("SELECT name, profile_pic FROM users WHERE id = ?", [sender_id]);
+        const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
+        const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
+
+        if (userRows.length > 0 && userRows[0].fcm_token) {
+          const receiverToken = userRows[0].fcm_token;
+
+          const messagePayload = {
+            token: receiverToken,
+            notification: {
+              title: senderName,
+              body: message
+            },
+            android: {
+              priority: "high",
+              notification: {
+                channelId: "channel_custom_sound_v2",
+                sound: "custom_notification",
+                priority: "high",
+                defaultSound: false
+              }
+            },
+            data: {
+              type: "chat",
+              senderId: sender_id.toString(),
+              senderName: senderName,
+              senderProfilePic: senderPic || "",
+              chatPartnerId: sender_id.toString()
+            }
+          };
+
+          await admin.messaging().send(messagePayload);
+          console.log(TAG, `✅ FCM Notification sent to user ${receiver_id}`);
+        } else {
+          console.log(TAG, `⚠️ No FCM token found for user ${receiver_id}`);
+        }
       }
     } catch (fcmError) {
-      // Log error but don't fail the request, as the message was saved successfully
       console.error(TAG, "⚠️ Error sending FCM:", fcmError.message);
     }
 
@@ -2820,7 +2850,7 @@ app.post('/group/send', async (req, res) => {
         if (insertedMsg && insertedMsg.length > 0) {
             const messageToEmit = {
                 ...insertedMsg[0],
-                message: content, // Send decrypted
+                message: content,
                 readByCount: 0,
                 status: 0
             };
@@ -2828,6 +2858,59 @@ app.post('/group/send', async (req, res) => {
             // Emit to all group members
             io.to(`group_${groupId}`).emit('new_group_message', messageToEmit);
             console.log(TAG, `Emitted new_group_message to group_${groupId}`);
+        }
+
+        // *** NEW: Send FCM to group members who don't have the chat open ***
+        try {
+            const [groupMembers] = await db.query(`
+                SELECT u.id, u.fcm_token 
+                FROM group_members gm
+                JOIN users u ON gm.user_id = u.id
+                WHERE gm.group_id = ? AND u.id != ? AND u.fcm_token IS NOT NULL
+            `, [groupId, senderId]);
+
+            const [senderInfo] = await db.query("SELECT name FROM users WHERE id = ?", [senderId]);
+            const senderName = senderInfo[0]?.name || "Someone";
+
+            for (const member of groupMembers) {
+                // Check if this member has the group chat open
+                const memberActiveChat = activeChatSessions.get(member.id.toString());
+                const isGroupChatOpen = memberActiveChat === `group_${groupId}`;
+                
+                if (isGroupChatOpen) {
+                    console.log(TAG, `⏭️ Skipping FCM: User ${member.id} has group ${groupId} open`);
+                    continue;
+                }
+
+                // Send notification only if chat is NOT open
+                const notificationPayload = {
+                    token: member.fcm_token,
+                    notification: {
+                        title: `${senderName} in group`,
+                        body: content
+                    },
+                    android: {
+                        priority: "high",
+                        notification: {
+                            channelId: "channel_custom_sound_v2",
+                            sound: "custom_notification",
+                            priority: "high",
+                            defaultSound: false
+                        }
+                    },
+                    data: {
+                        type: "group_chat",
+                        groupId: groupId.toString(),
+                        senderId: senderId.toString(),
+                        senderName: senderName
+                    }
+                };
+
+                await admin.messaging().send(notificationPayload);
+                console.log(TAG, `✅ FCM sent to group member ${member.id}`);
+            }
+        } catch (fcmError) {
+            console.error(TAG, "⚠️ Error sending group FCM:", fcmError.message);
         }
 
         res.json({ success: true, message: 'Message sent', messageId: newMessageId });
