@@ -3069,6 +3069,23 @@ app.post('/handleChatRequest', async (req, res) => {
     }
 });
 
+// 5. Get Chat Request Count (For Badge)
+app.get('/chatRequests/count', async (req, res) => {
+    const { userId } = req.query;
+    try {
+        const sql = `
+            SELECT COUNT(*) as count 
+            FROM chat_requests 
+            WHERE receiver_id = ? AND status = 'pending'
+        `;
+        const [rows] = await db.execute(sql, [userId]);
+        res.json({ success: true, count: rows[0].count });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Error fetching request count' });
+    }
+});
+
 app.use(router);
 
 // *** FIX: Use Railway's dynamic PORT ***
