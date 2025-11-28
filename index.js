@@ -1,4 +1,4 @@
-require("dotenv").config();
+krequire("dotenv").config();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs'); 
@@ -125,21 +125,22 @@ async function updateUserPresence(userId, isOnline) {
 }
 
 
-// ... existing imports and setup ...
+// --- REPLACE YOUR ENTIRE io.on('connection', ...) BLOCK WITH THIS ---
 
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  socket.on('user_online', async (userId) => {
+  // In your io.on('connection', ...) block, update user_online:
+socket.on('user_online', async (userId) => {
     try {
         onlineUsers.set(userId.toString(), {
             socketId: socket.id,
             lastSeen: new Date(),
-            isOnline: true,
-            activeChatPartnerId: null // <--- NEW: Track active chat
+            isOnline: true
         });
         await updateUserPresence(userId, true);
         
+        // CRITICAL FIX: Join the user's private chat room
         socket.join(`chat_${userId}`);
         console.log(`✅ User ${userId} joined private chat room: chat_${userId}`);
         
@@ -148,43 +149,14 @@ io.on('connection', (socket) => {
             isOnline: true,
             lastSeen: new Date()
         });
+        console.log(`✅ User ${userId} is now online`);
     } catch (error) {
         console.error('❌ Error handling user_online:', error);
     }
-  });
-
-  // --- NEW: Track when user enters a specific chat ---
-  socket.on('enter_chat', (data) => {
-      // data = { userId: 12, partnerId: 45 }
-      try {
-          const uid = data.userId.toString();
-          const userState = onlineUsers.get(uid);
-          if (userState) {
-              userState.activeChatPartnerId = data.partnerId.toString();
-              // No need to .set() again as objects are references, but purely for clarity:
-              // onlineUsers.set(uid, userState);
-              console.log(`User ${uid} entered chat with ${data.partnerId}`);
-          }
-      } catch (e) {
-          console.error("Error in enter_chat", e);
-      }
-  });
-
-  // --- NEW: Track when user leaves a chat ---
-  socket.on('leave_chat', (userId) => {
-      try {
-          const uid = userId.toString();
-          const userState = onlineUsers.get(uid);
-          if (userState) {
-              userState.activeChatPartnerId = null;
-              console.log(`User ${uid} left chat`);
-          }
-      } catch (e) {
-          console.error("Error in leave_chat", e);
-      }
-  });
-
+});
+  
   socket.on('user_offline', async (userId) => {
+    // (This code is fine, no changes needed)
     try {
       onlineUsers.delete(userId.toString());
       await updateUserPresence(userId, false);
@@ -200,6 +172,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', async () => {
+    // (This code is fine, no changes needed)
     try {
       let disconnectedUserId = null;
       for (let [userId, userData] of onlineUsers.entries()) {
@@ -223,9 +196,12 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ... (Your existing typing/group handlers remain exactly the same) ...
-  
+
+  // --- 2. YOUR TYPING LOGIC (USING YOUR EVENT NAMES) ---
   socket.on('typing_start', (data) => {
+    // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
+    // We send this *only* to the receiver's private room
+    console.log(`User ${data.userId} is typing to ${data.chatWithUserId}`);
     socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
       userId: data.userId,
       isTyping: true
@@ -233,64 +209,115 @@ io.on('connection', (socket) => {
   });
 
   socket.on('typing_stop', (data) => {
+    // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
+    console.log(`User ${data.userId} stopped typing to ${data.chatWithUserId}`);
     socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
       userId: data.userId,
       isTyping: false
     });
   });
 
-  socket.on('i_delivered_messages', (data) => {
+
+socket.on('i_delivered_messages', (data) => {
+    // data = { partnerId: 45 }
+    console.log(`Relaying 'delivered' status to room: chat_${data.partnerId}`);
     socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages', {
-        userId: data.partnerId 
+        userId: data.partnerId // Include the user ID for context
     });
   });
 
-  socket.on('i_read_messages', (data) => {
+socket.on('i_read_messages', (data) => {
+    // data = { partnerId: 45 }
+    console.log(`Relaying 'read' status to room: chat_${data.partnerId}`);
     socket.to(`chat_${data.partnerId}`).emit('partner_read_messages', {
-        userId: data.partnerId 
+        userId: data.partnerId // Include the user ID for context
     });
-  });  
+});  
 
   socket.on('join_group', (groupId) => {
     socket.join(`group_${groupId}`);
+    console.log(`Socket ${socket.id} joined group room: group_${groupId}`);
   });
 
   socket.on('new_group_message_sent', (data) => {
+    // data = { groupId: 5, messageObject: {...} }
+    console.log(`Relaying group message to room: group_${data.groupId}`);
     socket.to(`group_${data.groupId}`).emit('new_group_message', data.messageObject);
-  });
+});
 
-  socket.on('group_typing_start', async (data) => {
-    try {
-      const { userId, groupId } = data;
-      const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
-      if (userRows.length > 0) {
-        socket.to(`group_${groupId}`).emit('group_user_typing', {
-          userId: userId,
-          userName: userRows[0].name,
-          groupId: groupId,
-          isTyping: true
-        });
-      }
-    } catch (error) { console.error(error); }
-  });
+// Add these handlers inside your io.on('connection', (socket) => { ... }) block
+// Place them after the existing socket handlers
 
-  socket.on('group_typing_stop', async (data) => {
-    try {
-      const { userId, groupId } = data;
-      const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
-      if (userRows.length > 0) {
-        socket.to(`group_${groupId}`).emit('group_user_typing', {
-          userId: userId,
-          userName: userRows[0].name,
-          groupId: groupId,
-          isTyping: false
-        });
-      }
-    } catch (error) { console.error(error); }
-  });
+// --- GROUP TYPING INDICATORS ---
 
-  socket.on('group_read', async (data) => {
+socket.on('group_typing_start', async (data) => {
+  // data = { userId: 12, groupId: 5, isTyping: true }
+  try {
+    const { userId, groupId } = data;
+    
+    // Get the user's name from the database
+    const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
+    
+    if (userRows.length > 0) {
+      const userName = userRows[0].name;
+      
+      // Broadcast to all other members in the group room
+      socket.to(`group_${groupId}`).emit('group_user_typing', {
+        userId: userId,
+        userName: userName,
+        groupId: groupId,
+        isTyping: true
+      });
+      
+      console.log(`User ${userName} (${userId}) started typing in group ${groupId}`);
+    }
+  } catch (error) {
+    console.error('Error handling group_typing_start:', error);
+  }
+});
+
+socket.on('group_typing_stop', async (data) => {
+  // data = { userId: 12, groupId: 5, isTyping: false }
+  try {
+    const { userId, groupId } = data;
+    
+    // Get the user's name from the database
+    const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
+    
+    if (userRows.length > 0) {
+      const userName = userRows[0].name;
+      
+      // Broadcast to all other members in the group room
+      socket.to(`group_${groupId}`).emit('group_user_typing', {
+        userId: userId,
+        userName: userName,
+        groupId: groupId,
+        isTyping: false
+      });
+      
+      console.log(`User ${userName} (${userId}) stopped typing in group ${groupId}`);
+    }
+  } catch (error) {
+    console.error('Error handling group_typing_stop:', error);
+  }
+});
+
+// --- END GROUP TYPING INDICATORS ---
+
+
+// Also make sure you have the join_group handler:
+socket.on('join_group', (groupId) => {
+  socket.join(`group_${groupId}`);
+  console.log(`Socket ${socket.id} joined group room: group_${groupId}`);
+});
+
+// When someone reads group messages, notify all group members with detailed info
+socket.on('group_read', async (data) => {
+    // data = { userId: 12, groupId: 5 }
     try {
+        console.log(`User ${data.userId} read messages in group ${data.groupId}`);
+        
+        // Get updated read counts for recent messages
         const [recentMessages] = await db.query(`
             SELECT 
                 gm.message_id,
@@ -303,14 +330,19 @@ io.on('connection', (socket) => {
             GROUP BY gm.message_id
         `, [data.groupId, data.groupId]);
         
+        // Broadcast to all group members with the updated counts
         socket.to(`group_${data.groupId}`).emit('group_messages_read', {
             userId: data.userId,
             groupId: data.groupId,
-            updatedCounts: recentMessages 
+            updatedCounts: recentMessages // Send the updated read counts
         });
-    } catch (error) { console.error(error); }
-  });
+        
+    } catch (error) {
+        console.error('Error handling group_read:', error);
+    }
 });
+
+}); 
 
 async function getUserByPhone(phone) {
   try {
@@ -913,97 +945,136 @@ app.post('/sendMessage', async (req, res) => {
 
     // 1. Validation
     if (!sender_id || !receiver_id || !message) {
-      return res.status(400).json({ success: false, message: 'Required fields missing' });
+      console.warn(TAG, 'Missing required fields');
+      return res.status(400).json({
+        success: false,
+        message: 'sender_id, receiver_id, and message are required'
+      });
     }
 
-    // 2. Block Check (Existing logic)
-    const blockCheckQuery = `SELECT * FROM blocked_users WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)`;
+    console.log(TAG, `User ${sender_id} sending message to ${receiver_id}`);
+
+    // 2. Block Check
+    const blockCheckQuery = `
+      SELECT * FROM blocked_users
+      WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
+    `;
     const [blockedRows] = await db.query(blockCheckQuery, [sender_id, receiver_id, receiver_id, sender_id]);
+
     if (blockedRows.length > 0) {
-      return res.status(403).json({ success: false, message: 'User cannot be messaged.' });
+      console.warn(TAG, `Blocked: User ${sender_id} cannot message ${receiver_id}`);
+      return res.status(403).json({
+        success: false,
+        message: 'This user cannot be messaged.'
+      });
     }
 
-    // 3. Encrypt & Save (Existing logic)
+    // 3. Encrypt & Save to DB
     const encryptedMessage = encrypt(message);
-    const query = `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`;
+    const query = `
+      INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
+      VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
+    `;
     const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
-    
-    if (!result.insertId) return res.status(500).json({ success: false, message: 'Failed to save' });
+
+    if (!result.insertId) {
+      console.error(TAG, 'Failed to insert message - no insertId returned');
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to save message to database'
+      });
+    }
 
     const newMessageId = result.insertId;
-    
-    // 4. Get Timestamp (Existing logic)
-    const [insertedMsg] = await db.query('SELECT timestamp FROM messages WHERE id = ?', [newMessageId]);
-    const msgTimestamp = insertedMsg.length > 0 ? insertedMsg[0].timestamp : new Date();
+    console.log(TAG, `Message saved with ID: ${newMessageId}`);
 
-    // 5. Emit Socket (Existing logic)
+    // 4. Get Timestamp for Socket
+    const [insertedMsg] = await db.query(
+      'SELECT timestamp FROM messages WHERE id = ?',
+      [newMessageId]
+    );
+
+    if (!insertedMsg || insertedMsg.length === 0) {
+      console.error(TAG, 'Could not retrieve inserted message timestamp');
+      return res.json({ success: true, message: 'Message sent successfully', messageId: newMessageId });
+    }
+
+    // 5. Emit via Socket.IO (Real-time)
     const messageToEmit = {
       id: newMessageId,
       sender_id: sender_id,
       receiver_id: receiver_id,
-      message: message, 
-      timestamp: msgTimestamp,
+      message: message, // Send DECRYPTED
+      timestamp: insertedMsg[0].timestamp,
       status: 0
     };
 
+    // Emit to both parties so UI updates instantly
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
-    // 6. Send FCM Notification (UPDATED LOGIC)
+    // 6. Send FCM Notification (For background/killed state)
     try {
-      // Check if receiver is ONLINE and CURRENTLY CHATTING with sender
-      const receiverState = onlineUsers.get(receiver_id.toString());
-      
-      // Is the receiver actively looking at the chat with the sender?
-      const isChattingWithSender = receiverState && receiverState.activeChatPartnerId == sender_id.toString();
+      // A. Get Receiver's Token
+      const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
 
-      if (isChattingWithSender) {
-          console.log(TAG, `User ${receiver_id} is active in chat with ${sender_id}. Skipping Notification.`);
-      } else {
-          // Proceed to send notification
-          const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
-          const [senderRows] = await db.query("SELECT name, profile_pic FROM users WHERE id = ?", [sender_id]);
-          const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
-          const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
+      // B. Get Sender's Name (for Notification Title)
+      const [senderRows] = await db.query("SELECT name, profile_pic FROM users WHERE id = ?", [sender_id]);
+      const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
+      const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
 
-          if (userRows.length > 0 && userRows[0].fcm_token) {
-            const messagePayload = {
-              token: userRows[0].fcm_token,
-              notification: {
-                title: senderName,
-                body: message
-              },
-              android: {
-                priority: "high",
-                notification: {
-                  channelId: "channel_custom_sound_v2", 
-                  sound: "custom_notification",
-                  priority: "high",
-                  defaultSound: false
-                }
-              },
-              data: {
-                type: "chat",
-                senderId: sender_id.toString(),
-                senderName: senderName,
-                senderProfilePic: senderPic || "",
-                chatPartnerId: sender_id.toString()
-              }
-            };
+      if (userRows.length > 0 && userRows[0].fcm_token) {
+        const receiverToken = userRows[0].fcm_token;
 
-            await admin.messaging().send(messagePayload);
-            console.log(TAG, `✅ FCM Notification sent to user ${receiver_id}`);
+        const messagePayload = {
+          token: receiverToken,
+          notification: {
+            title: senderName, // ✅ Shows actual Name (e.g., "Sumit")
+            body: message
+          },
+          android: {
+            priority: "high",
+            notification: {
+              channelId: "channel_custom_sound_v2", // MUST match Android 
+              sound: "custom_notification",
+              priority: "high",
+              defaultSound: false
+            }
+          },
+          // ✅ Data required for SplashActivity to redirect correctly
+          data: {
+            type: "chat",
+            senderId: sender_id.toString(),
+            senderName: senderName,
+            senderProfilePic: senderPic || "",
+            chatPartnerId: sender_id.toString()
           }
+        };
+
+        await admin.messaging().send(messagePayload);
+        console.log(TAG, `✅ FCM Notification sent to user ${receiver_id}`);
+      } else {
+        console.log(TAG, `⚠️ No FCM token found for user ${receiver_id}`);
       }
     } catch (fcmError) {
+      // Log error but don't fail the request, as the message was saved successfully
       console.error(TAG, "⚠️ Error sending FCM:", fcmError.message);
     }
 
-    res.json({ success: true, message: 'Message sent successfully', messageId: newMessageId });
+    // 7. Final Response
+    res.json({
+      success: true,
+      message: 'Message sent successfully',
+      messageId: newMessageId
+    });
 
   } catch (error) {
     console.error(TAG, '❌ Error in /sendMessage:', error);
-    res.status(500).json({ success: false, message: 'Failed to send message' });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send message',
+      error: error.message
+    });
   }
 });
 
@@ -3045,3 +3116,4 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🌍 Railway Public Domain: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'Not set'}`);
   console.log(`🔗 Full URL: https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'}`);
 });
+
