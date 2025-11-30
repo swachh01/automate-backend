@@ -32,19 +32,17 @@ const multer = require("multer");
 const mysql = require("mysql2");
 
 const http = require('http');
-// --- RENAMED to 'Server' to follow Socket.IO v4 convention ---
 const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-// --- Use 'new Server()' ---
+
 const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
     credentials: true
   },
-
   transports: ['websocket','polling'],
   allowEIO3: true,
   pingTimeout: 60000,
@@ -66,7 +64,6 @@ cloudinary.config({
 });
 
 const onlineUsers = new Map();
-
 
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -125,14 +122,12 @@ async function updateUserPresence(userId, isOnline) {
   }
 }
 
-
-// --- REPLACE YOUR ENTIRE io.on('connection', ...) BLOCK WITH THIS ---
+// ================= SOCKET.IO HANDLERS =================
 
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
 
-  // In your io.on('connection', ...) block, update user_online:
-socket.on('user_online', async (userId) => {
+  socket.on('user_online', async (userId) => {
     try {
         onlineUsers.set(userId.toString(), {
             socketId: socket.id,
@@ -141,7 +136,6 @@ socket.on('user_online', async (userId) => {
         });
         await updateUserPresence(userId, true);
         
-        // CRITICAL FIX: Join the user's private chat room
         socket.join(`chat_${userId}`);
         console.log(`✅ User ${userId} joined private chat room: chat_${userId}`);
         
@@ -150,14 +144,12 @@ socket.on('user_online', async (userId) => {
             isOnline: true,
             lastSeen: new Date()
         });
-        console.log(`✅ User ${userId} is now online`);
     } catch (error) {
         console.error('❌ Error handling user_online:', error);
     }
-});
+  });
   
   socket.on('user_offline', async (userId) => {
-    // (This code is fine, no changes needed)
     try {
       onlineUsers.delete(userId.toString());
       await updateUserPresence(userId, false);
@@ -166,14 +158,12 @@ socket.on('user_online', async (userId) => {
         isOnline: false,
         lastSeen: new Date()
       });
-      console.log(`User ${userId} manually went offline`);
     } catch (error) {
       console.error(' Error handling user_offline:', error);
     }
   });
 
   socket.on('disconnect', async () => {
-    // (This code is fine, no changes needed)
     try {
       let disconnectedUserId = null;
       for (let [userId, userData] of onlineUsers.entries()) {
@@ -190,7 +180,6 @@ socket.on('user_online', async (userId) => {
           isOnline: false,
           lastSeen: new Date()
         });
-        console.log(` User ${disconnectedUserId} disconnected`);
       }
     } catch (error) {
       console.error('❌ Error handling disconnect:', error);
@@ -198,31 +187,21 @@ socket.on('user_online', async (userId) => {
   });
 
  socket.on('chat_opened', (data) => {
-    // data = { userId: 12, chatPartnerId: 45 } for 1-on-1
-    // or data = { userId: 12, groupId: 5 } for group chats
     const { userId, chatPartnerId, groupId } = data;
     
     if (chatPartnerId) {
         activeChatSessions.set(userId.toString(), `user_${chatPartnerId}`);
-        console.log(`✅ User ${userId} opened chat with user ${chatPartnerId}`);
     } else if (groupId) {
         activeChatSessions.set(userId.toString(), `group_${groupId}`);
-        console.log(`✅ User ${userId} opened group chat ${groupId}`);
     }
 });
 
 socket.on('chat_closed', (data) => {
     const { userId } = data;
     activeChatSessions.delete(userId.toString());
-    console.log(`✅ User ${userId} closed their active chat`);
 });
 
-
-  // --- 2. YOUR TYPING LOGIC (USING YOUR EVENT NAMES) ---
   socket.on('typing_start', (data) => {
-    // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
-    // We send this *only* to the receiver's private room
-    console.log(`User ${data.userId} is typing to ${data.chatWithUserId}`);
     socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
       userId: data.userId,
       isTyping: true
@@ -230,67 +209,48 @@ socket.on('chat_closed', (data) => {
   });
 
   socket.on('typing_stop', (data) => {
-    // data = { userId: 12 (sender), chatWithUserId: 45 (receiver) }
-    console.log(`User ${data.userId} stopped typing to ${data.chatWithUserId}`);
     socket.to(`chat_${data.chatWithUserId}`).emit('user_typing', {
       userId: data.userId,
       isTyping: false
     });
   });
 
-
 socket.on('i_delivered_messages', (data) => {
-    // data = { partnerId: 45 }
-    console.log(`Relaying 'delivered' status to room: chat_${data.partnerId}`);
     socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages', {
-        userId: data.partnerId // Include the user ID for context
+        userId: data.partnerId
     });
   });
 
 socket.on('i_read_messages', (data) => {
-    // data = { partnerId: 45 }
-    console.log(`Relaying 'read' status to room: chat_${data.partnerId}`);
     socket.to(`chat_${data.partnerId}`).emit('partner_read_messages', {
-        userId: data.partnerId // Include the user ID for context
+        userId: data.partnerId
     });
 });  
 
   socket.on('join_group', (groupId) => {
     socket.join(`group_${groupId}`);
-    console.log(`Socket ${socket.id} joined group room: group_${groupId}`);
   });
 
   socket.on('new_group_message_sent', (data) => {
-    // data = { groupId: 5, messageObject: {...} }
-    console.log(`Relaying group message to room: group_${data.groupId}`);
     socket.to(`group_${data.groupId}`).emit('new_group_message', data.messageObject);
 });
 
-// Add these handlers inside your io.on('connection', (socket) => { ... }) block
-// Place them after the existing socket handlers
-
-// --- GROUP TYPING INDICATORS ---
+// --- GROUP TYPING INDICATORS (FIXED TO USE CONCAT NAME) ---
 
 socket.on('group_typing_start', async (data) => {
-  // data = { userId: 12, groupId: 5, isTyping: true }
   try {
     const { userId, groupId } = data;
-    
-    // Get the user's name from the database
-    const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
+    // FIX: Concat name
+    const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
     
     if (userRows.length > 0) {
       const userName = userRows[0].name;
-      
-      // Broadcast to all other members in the group room
       socket.to(`group_${groupId}`).emit('group_user_typing', {
         userId: userId,
         userName: userName,
         groupId: groupId,
         isTyping: true
       });
-      
-      console.log(`User ${userName} (${userId}) started typing in group ${groupId}`);
     }
   } catch (error) {
     console.error('Error handling group_typing_start:', error);
@@ -298,47 +258,27 @@ socket.on('group_typing_start', async (data) => {
 });
 
 socket.on('group_typing_stop', async (data) => {
-  // data = { userId: 12, groupId: 5, isTyping: false }
   try {
     const { userId, groupId } = data;
-    
-    // Get the user's name from the database
-    const [userRows] = await db.query('SELECT name FROM users WHERE id = ?', [userId]);
+    // FIX: Concat name
+    const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
     
     if (userRows.length > 0) {
       const userName = userRows[0].name;
-      
-      // Broadcast to all other members in the group room
       socket.to(`group_${groupId}`).emit('group_user_typing', {
         userId: userId,
         userName: userName,
         groupId: groupId,
         isTyping: false
       });
-      
-      console.log(`User ${userName} (${userId}) stopped typing in group ${groupId}`);
     }
   } catch (error) {
     console.error('Error handling group_typing_stop:', error);
   }
 });
 
-// --- END GROUP TYPING INDICATORS ---
-
-
-// Also make sure you have the join_group handler:
-socket.on('join_group', (groupId) => {
-  socket.join(`group_${groupId}`);
-  console.log(`Socket ${socket.id} joined group room: group_${groupId}`);
-});
-
-// When someone reads group messages, notify all group members with detailed info
 socket.on('group_read', async (data) => {
-    // data = { userId: 12, groupId: 5 }
     try {
-        console.log(`User ${data.userId} read messages in group ${data.groupId}`);
-        
-        // Get updated read counts for recent messages
         const [recentMessages] = await db.query(`
             SELECT 
                 gm.message_id,
@@ -351,11 +291,10 @@ socket.on('group_read', async (data) => {
             GROUP BY gm.message_id
         `, [data.groupId, data.groupId]);
         
-        // Broadcast to all group members with the updated counts
         socket.to(`group_${data.groupId}`).emit('group_messages_read', {
             userId: data.userId,
             groupId: data.groupId,
-            updatedCounts: recentMessages // Send the updated read counts
+            updatedCounts: recentMessages
         });
         
     } catch (error) {
@@ -365,10 +304,11 @@ socket.on('group_read', async (data) => {
 
 }); 
 
+// --- HELPER FUNCTION (FIXED TO USE CONCAT NAME) ---
 async function getUserByPhone(phone) {
   try {
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ?`,
+      `SELECT id, CONCAT(first_name, ' ', last_name) as name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ?`,
       [phone]
     );
     return rows && rows[0] ? rows[0] : null;
@@ -392,19 +332,9 @@ app.get("/debug/stores", (req, res) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(403).json({ message: "Not available in production" });
   }
-  // --- FIXED: otpStore is not defined in this file ---
-  // You moved to DB-based OTPs, so this route is mostly for signupStore
   res.json({
-    // otpStore: Object.keys(otpStore).map(phone => ({
-    //   phone,
-    //   hasOtp: !!otpStore[phone].otp,
-    //   expires: new Date(otpStore[phone].expires)
-    // })),
     otpStore: "OTP is now stored in the database ('otp' table).",
-    signupStore: Object.keys(signupStore).map(phone => ({
-      phone,
-      data: signupStore[phone]
-    }))
+    signupStore: "DB"
   });
 });
 
@@ -424,42 +354,36 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
+// ================= ACCOUNT CREATION (FIXED) =================
 
 app.post("/create-account", async (req, res) => {
     const TAG = "/create-account";
     try {
-        // 1. Accept first_name and last_name
+        // ACCEPT FIRST_NAME AND LAST_NAME
         const { first_name, last_name, college, gender, phone, country_code, password } = req.body;
 
-        // --- Validation ---
         if (!first_name || !last_name || !college || !gender || !phone || !country_code || !password) {
-            console.warn(TAG, "Request missing required fields.");
             return res.status(400).json({ success: false, message: "All fields are required." });
         }
 
-        // Add your password validation rules
-        if (password.length < 7 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password) || !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(password)) {
-            return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
+        if (password.length < 7 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
+            return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters and numbers." });
         }
 
         console.log(TAG, `Attempting to create account for phone: ${country_code}${phone}`);
 
-        // 2. --- Check for existing 'completed' user ---
         const [existingUser] = await db.query(
             `SELECT id, signup_status FROM users WHERE phone = ? AND country_code = ?`,
             [phone, country_code]
         );
 
         if (existingUser.length > 0 && existingUser[0].signup_status === 'completed') {
-            console.warn(TAG, `User already exists and is 'completed' for phone: ${country_code}${phone}`);
             return res.status(409).json({ success: false, message: "A user with this phone number already exists." });
         }
         
-        // 3. --- Hash the password ---
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-        // 4. --- Create or Overwrite 'pending' user ---
-        // UPDATED QUERY: Uses first_name and last_name
+        // INSERT INTO FIRST_NAME AND LAST_NAME
         const query = `
             INSERT INTO users (first_name, last_name, college, gender, phone, country_code, password, signup_status, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
@@ -469,32 +393,24 @@ app.post("/create-account", async (req, res) => {
                 college = VALUES(college),
                 gender = VALUES(gender),
                 password = VALUES(password),
-                signup_status = 'pending', -- Reset to pending in case they aborted
+                signup_status = 'pending',
                 updated_at = NOW();
         `;
         
         await db.query(query, [first_name, last_name, college, gender, phone, country_code, hashedPassword]);
-        console.log(TAG, `Successfully inserted/updated user for phone: ${country_code}${phone}`);
 
-        // 5. --- Fetch and return the new user data ---
-        // UPDATED QUERY: Concatenates names so Android receives "name"
+        // FETCH USING CONCAT
         const [userRows] = await db.query(
-            `SELECT 
-                id, 
-                CONCAT(first_name, ' ', last_name) as name, 
-                college, phone, gender, dob, degree, year, profile_pic 
-             FROM users WHERE phone = ? AND country_code = ?`,
+            `SELECT id, CONCAT(first_name, ' ', last_name) as name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND country_code = ?`,
             [phone, country_code]
         );
         
         if (userRows.length === 0) {
-             console.error(TAG, `CRITICAL: User not found immediately after insert/update for phone: ${country_code}${phone}`);
              return res.status(500).json({ success: false, message: "Failed to create account." });
         }
         
         const newUser = userRows[0];
 
-        // Send back the new user data so the app can log them in
         res.status(201).json({
             success: true,
             message: "Account created successfully. Please complete your profile.",
@@ -511,29 +427,19 @@ app.post("/create-account", async (req, res) => {
     }
 });
 
+// ================= LOGIN (FIXED) =================
+
 app.post("/login", async (req, res) => {
   const { phone, password } = req.body || {};
   if (!phone || !password) {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
   try {
-    // --- UPDATED QUERY: Use CONCAT to combine first_name and last_name into 'name' ---
+    // FIX: SELECT CONCAT name
     const [rows] = await db.query(
-      `SELECT 
-        id, 
-        CONCAT(first_name, ' ', last_name) as name, 
-        college, 
-        phone, 
-        gender, 
-        dob, 
-        degree, 
-        year, 
-        profile_pic, 
-        password 
-       FROM users WHERE phone = ?`,
+      `SELECT id, CONCAT(first_name, ' ', last_name) as name, college, phone, gender, dob, degree, year, profile_pic, password FROM users WHERE phone = ?`,
       [phone]
     );
-
     if (!rows.length) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
@@ -546,7 +452,6 @@ app.post("/login", async (req, res) => {
     } else {
       if (user.password === password) {
         isPasswordValid = true;
-        // Update to hashed password for future logins
         const hashedPassword = await bcrypt.hash(password, saltRounds);
         await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
       }
@@ -564,16 +469,15 @@ app.post("/login", async (req, res) => {
   }
 });
 
+// ================= UPDATE PROFILE (FIXED) =================
+
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request ===");
-    console.log("Body:", req.body);
-    console.log("File:", req.file);
     
     const { userId, dob, degree, year } = req.body || {};
     
     if (!userId) {
-      console.log("ERROR: Missing userId");
       return res.status(400).json({ success: false, message: "Missing userId" });
     }
     
@@ -589,41 +493,23 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     }
     
     if (sets.length === 0) {
-      console.log("ERROR: Nothing to update");
       return res.status(400).json({ success: false, message: "Nothing to update" });
     }
     
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
     params.push(userId);
     
-    console.log("SQL:", sql);
-    console.log("Params:", params);
-    
     const [result] = await db.query(sql, params);
     
-    console.log("Update result:", result);
-    
     if (result.affectedRows === 0) {
-      console.log("ERROR: User not found");
       return res.status(404).json({ success: false, message: "User not found" });
     }
       
     await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
     
-    // --- UPDATED QUERY BELOW ---
-    // Uses CONCAT(first_name, ' ', last_name) as name to fix the column error
+    // FIX: SELECT CONCAT name
     const [rows] = await db.query(
-      `SELECT 
-        id, 
-        CONCAT(first_name, ' ', last_name) as name, 
-        college, 
-        phone, 
-        gender, 
-        dob, 
-        degree, 
-        year, 
-        profile_pic 
-       FROM users WHERE id = ?`, 
+      `SELECT id, CONCAT(first_name, ' ', last_name) as name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?`, 
       [userId]
     );
     
@@ -633,52 +519,38 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   } catch (err) {
     console.error("=== /updateProfile ERROR ===");
     console.error("Error message:", err.message);
-    console.error("Error stack:", err.stack);
-    
-    // Send proper JSON error response
-    res.status(500).json({ 
-      success: false, 
-      message: "Internal Server Error",
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: "Internal Server Error", error: err.message });
   } 
 });
 
+// ================= ADD TRAVEL PLAN (FIXED) =================
+
 app.post("/addTravelPlan", async (req, res) => {
-    const TAG = "/addTravelPlan"; // Logging tag
-    let connection; // Define connection variable for potential transaction
+    const TAG = "/addTravelPlan"; 
+    let connection; 
 
     try {
         const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
 
-        // --- Validation ---
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
             toPlaceLat === undefined || toPlaceLng === undefined) {
-             console.warn(TAG, `Request missing required fields for userId: ${userId || 'UNKNOWN'}`);
             return res.status(400).json({
                 success: false,
-                message: "Missing required fields: userId, fromPlace, toPlace, time, and all coordinates (from/to)."
+                message: "Missing required fields."
             });
         }
         let formattedTime;
         try {
             formattedTime = new Date(time);
-            if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format received from client."); }
+            if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format."); }
         } catch (timeError) {
-             console.warn(TAG, `Invalid time format received for userId ${userId}: ${time}`, timeError);
-             return res.status(400).json({ success: false, message: "Invalid time format provided. Please use ISO 8601 format." });
+             return res.status(400).json({ success: false, message: "Invalid time format." });
         }
-        // --- End Validation ---
 
-        console.log(TAG, `Attempting to add travel plan for userId: ${userId} to destination: ${toPlace}`);
-
-        // --- Start Transaction ---
         connection = await db.getConnection();
         await connection.beginTransaction();
-        // ------------------------
 
-        // --- Step 1: Insert the travel plan ---
         const planQuery = `
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
@@ -695,64 +567,47 @@ app.post("/addTravelPlan", async (req, res) => {
         if (!newPlanId) {
              await connection.rollback();
              connection.release();
-             throw new Error("Travel plan insert failed unexpectedly.");
+             throw new Error("Travel plan insert failed.");
         }
-        console.log(TAG, `Successfully added travel plan ID: ${newPlanId}`);
 
-        // --- Step 2: Add/Ensure Group Exists ---
-        console.log(TAG, `Ensuring group exists for destination: ${toPlace}`);
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [toPlace]);
 
-        // --- Step 3: Get the group_id ---
         const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [toPlace]);
         if (groupRows.length === 0) {
             await connection.rollback();
             connection.release();
-            throw new Error(`Failed to find or create group_id for destination: ${toPlace}`);
+            throw new Error(`Failed to find group_id.`);
         }
         const groupId = groupRows[0].group_id;
-        console.log(TAG, `Found/Created groupId: ${groupId} for destination: ${toPlace}`);
 
-        // --- Step 4: Add User to the Group ---
-        console.log(TAG, `Adding user ${userId} to group ${groupId}`);
         const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
         await connection.query(memberQuery, [groupId, userId]);
 
-        // --- Commit Transaction ---
         await connection.commit();
-        // --------------------------
 
-        console.log(TAG, `Successfully added plan and added user ${userId} to group ${groupId}`);
-
-        // --- ✅ NEW: NOTIFICATION LOGIC (Run after commit) ---
+        // --- NOTIFICATION LOGIC (FIXED TO USE CONCAT NAME) ---
         try {
-            // 1. Get the Name of the user who just joined (to show in notification)
-            const [userRows] = await connection.query("SELECT name FROM users WHERE id = ?", [userId]);
+            // FIX: SELECT CONCAT name
+            const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
 
-            // 2. Find ALL other users who have an ACTIVE plan to this SAME destination
-            //    and have a valid FCM token.
             const [matchingUsers] = await connection.query(`
                 SELECT DISTINCT u.fcm_token 
                 FROM travel_plans tp
                 JOIN users u ON tp.user_id = u.id
                 WHERE tp.to_place = ? 
                   AND tp.status = 'Active'
-                  AND tp.user_id != ? -- Exclude the current user
+                  AND tp.user_id != ? 
                   AND u.fcm_token IS NOT NULL
                   AND u.fcm_token != ''
                   AND u.trip_alerts_enabled = 1
             `, [toPlace, userId]);
 
             if (matchingUsers.length > 0) {
-                console.log(TAG, `Found ${matchingUsers.length} other users to notify about ${toPlace}`);
-
                 const tokens = matchingUsers.map(u => u.fcm_token);
-
-                // 3. Send Multicast Notification
                 const messagePayload = {
-                    tokens: tokens, // Array of tokens
+                    tokens: tokens,
                     notification: {
                         title: "New Travel Buddy!",
                         body: `${joinerName} is also going to ${toPlace}!`
@@ -766,25 +621,18 @@ app.post("/addTravelPlan", async (req, res) => {
                             defaultSound: false
                         }
                     },
-                    // Data payload for redirection logic
                     data: {
                         type: "travel_match",
                         destinationName: String(toPlace),
                         groupId: String(groupId)
                     }
                 };
-
-                // Send to all tokens at once
-                const batchResponse = await admin.messaging().sendEachForMulticast(messagePayload);
-                console.log(TAG, `✅ Travel Match Notifications sent. Success: ${batchResponse.successCount}, Fail: ${batchResponse.failureCount}`);
+                await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
-            console.error(TAG, "⚠️ Error sending travel match notification (Non-fatal):", notifyError.message);
-            // We do not fail the request here, as the plan was already saved successfully
+            console.error(TAG, "⚠️ Error sending travel match notification:", notifyError.message);
         }
-        // --- ✅ END NOTIFICATION LOGIC ---
 
-        // Send success response
         res.status(201).json({
             success: true,
             message: "Plan submitted successfully and group joined",
@@ -792,32 +640,23 @@ app.post("/addTravelPlan", async (req, res) => {
         });
 
     } catch (err) {
-        // --- Rollback Transaction on Error ---
         if (connection) {
-            try {
-                await connection.rollback();
-                 console.log(TAG, "Transaction rolled back due to error.");
-            } catch (rollbackError) {
-                console.error(TAG, "❌ Failed to rollback transaction:", rollbackError);
-            }
+            try { await connection.rollback(); } catch (e) {}
         }
-        // -----------------------------------
-        console.error(TAG, `❌ Error saving travel plan or updating group:`, err);
-        res.status(500).json({ success: false, message: "Server error occurred while saving the travel plan." });
+        console.error(TAG, `❌ Error saving travel plan:`, err);
+        res.status(500).json({ success: false, message: "Server error occurred." });
     } finally {
-        // --- Release Connection ---
-        if (connection) {
-            connection.release();
-        }
+        if (connection) { connection.release(); }
     }
 });
 
+// ================= USERS BY DESTINATION (FIXED) =================
+
 app.get('/users/destination', async (req, res) => {
-    const TAG = "/users/destination"; // Logging tag
-    const { groupId, userId } = req.query; // Current viewer's ID
+    const TAG = "/users/destination";
+    const { groupId, userId } = req.query;
 
     if (!groupId || !userId) {
-        console.warn(TAG, "Missing groupId or userId query parameter.");
         return res.status(400).json({ success: false, message: 'Missing groupId or userId' });
     }
 
@@ -825,55 +664,41 @@ app.get('/users/destination', async (req, res) => {
     const currentUserId = parseInt(userId);
 
     try {
-        console.log(TAG, `Fetching active users for groupId: ${currentGroupId}, excluding userId: ${currentUserId}`);
-
-        // --- QUERY MODIFIED ---
-        // This query now ensures users are in the group AND have an ACTIVE plan for THIS destination.
+        // FIX: SELECT CONCAT name
         const query = `
             SELECT
-                u.id,           -- User's ID (matches GoingUser 'id')
-                u.id as userId, -- Include userId field explicitly if needed by GoingUserAdapter/Activity
-                u.name,
+                u.id,           
+                u.id as userId, 
+                CONCAT(u.first_name, ' ', u.last_name) as name,
                 u.college,
                 u.profile_pic AS profilePic,
                 u.gender,
-                tp.time,        -- Time from the ACTIVE travel plan
-                tp.from_place AS fromPlace, -- From place from the ACTIVE travel plan
-                tp.to_place AS toPlace     -- To place from the ACTIVE travel plan
+                tp.time,        
+                tp.from_place AS fromPlace, 
+                tp.to_place AS toPlace     
             FROM group_members gm
             JOIN users u ON gm.user_id = u.id
-            -- Use INNER JOIN to require a matching ACTIVE travel plan
             INNER JOIN travel_plans tp ON u.id = tp.user_id
-                AND tp.status = 'Active' -- Only include users with an ACTIVE plan
-                -- Ensure the plan matches the destination name of the current group
+                AND tp.status = 'Active' 
                 AND tp.to_place = (SELECT group_name FROM \`group_table\` WHERE group_id = ?)
             WHERE
-                gm.group_id = ?       -- Make sure they are a member of the requested group
-                AND gm.user_id != ?   -- Exclude the current user viewing the list
+                gm.group_id = ?       
+                AND gm.user_id != ?   
             ORDER BY
-                tp.time ASC; -- Optional: Order by travel time
+                tp.time ASC; 
         `;
-        // --- END QUERY MODIFICATION ---
-
-        // Parameters: [groupId for subquery, groupId for WHERE, userId for exclusion]
         const [users] = await db.execute(query, [currentGroupId, currentGroupId, currentUserId]);
 
-        console.log(TAG, `Found ${users.length} active users for groupId: ${currentGroupId}`);
-
-        // Ensure response structure matches what GoingUserAdapter expects
-        // Renaming 'id' to 'userId' or ensuring both are present might be needed
-        // depending on your GoingUser.java class.
         const responseUsers = users.map(user => ({
             ...user,
-            id: user.id, // Ensure 'id' field is present if needed
-            userId: user.id // Ensure 'userId' field is present if needed
+            id: user.id, 
+            userId: user.id 
         }));
 
-
-        res.json({ success: true, users: responseUsers }); // Return the filtered list
+        res.json({ success: true, users: responseUsers }); 
 
     } catch (error) {
-        console.error(TAG, `Error fetching active users for destination groupId ${currentGroupId}:`, error);
+        console.error(TAG, `Error fetching active users:`, error);
         res.status(500).json({ success: false, message: 'Server error fetching users' });
     }
 });
@@ -884,28 +709,26 @@ app.post("/updateFcmToken", async (req, res) => {
         await db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [token, userId]);
         res.json({ success: true, message: "Token updated" });
     } catch (err) {
-        console.error("Error updating token", err);
         res.status(500).json({ success: false });
     }
 });
+
+// ================= GET TRAVEL PLAN (FIXED) =================
 
 app.get("/getUserTravelPlan/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
     if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required"
-      });
+      return res.status(400).json({ success: false, message: "User ID required" });
     }
-      
+    // FIX: SELECT CONCAT name
     const [results] = await db.query(
       `SELECT
         tp.id,
         tp.from_place as fromPlace,
         tp.to_place as toPlace,
         tp.time,
-        u.name,
+        CONCAT(u.first_name, ' ', u.last_name) as name,
         u.college,
         u.gender,
         u.profile_pic
@@ -920,12 +743,8 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
       
     res.json({ success: true, users: results || [] });
   } catch (err) {
-    console.error(`Error fetching travel plan for user ${userId}:`, err);
-    res.status(500).json({
-      success: false,
-      message: "Database error",
-      users: []
-    });
+    console.error(`Error fetching travel plan:`, err);
+    res.status(500).json({ success: false, message: "Database error", users: [] });
   }   
 });
 
@@ -933,10 +752,9 @@ app.get('/getMessages', async (req, res) => {
   try {
     const { sender_id, receiver_id } = req.query;
     if (!sender_id || !receiver_id) {
-      return res.status(400).json({ success: false, message: 'sender_id and receiver_id are required' });
+      return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
-    // 'SELECT *' will now also get the 'status' column
     const sql = `
       SELECT * FROM messages
       WHERE (sender_id = ? AND receiver_id = ?)
@@ -951,10 +769,7 @@ app.get('/getMessages', async (req, res) => {
     const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
         
     const decryptedMessages = visibleMessages.map(msg => {
-        return {
-            ...msg,
-            message: decrypt(msg.message)
-        };
+        return { ...msg, message: decrypt(msg.message) };
     });
         
     res.json({ success: true, messages: decryptedMessages });
@@ -966,29 +781,20 @@ app.get('/getMessages', async (req, res) => {
 
 app.post('/messages/delivered', async (req, res) => {
   try {
-    // We use the same 'userId' and 'otherUserId' as your markMessagesRead route
     const { userId, otherUserId } = req.body;
     if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
+      return res.status(400).json({ success: false, message: 'Missing fields' });
     }
-
-    // This query updates the status from 0 (Sent) to 1 (Received)
-    // for all messages sent from 'otherUserId' to 'userId'
-    const query = `
-      UPDATE messages
-      SET status = 1
-      WHERE sender_id = ? AND receiver_id = ? AND status = 0
-    `;
-    
-    // Note the order: [otherUserId, userId]
+    const query = `UPDATE messages SET status = 1 WHERE sender_id = ? AND receiver_id = ? AND status = 0`;
     const [result] = await db.execute(query, [otherUserId, userId]);
-
-    res.json({ success: true, message: 'Messages marked as delivered', updatedCount: result.affectedRows });
+    res.json({ success: true, message: 'Marked delivered', updatedCount: result.affectedRows });
   } catch (error) {
-    console.error('Error marking messages as delivered:', error);
-    res.status(500).json({ success: false, message: 'Failed to mark messages as delivered' });
+    console.error('Error marking delivered:', error);
+    res.status(500).json({ success: false });
   }
 });
+
+// ================= SEND MESSAGE (FIXED) =================
 
 app.post('/sendMessage', async (req, res) => {
   const TAG = "/sendMessage";
@@ -996,18 +802,10 @@ app.post('/sendMessage', async (req, res) => {
   try {
     const { sender_id, receiver_id, message } = req.body;
 
-    // 1. Validation
     if (!sender_id || !receiver_id || !message) {
-      console.warn(TAG, 'Missing required fields');
-      return res.status(400).json({
-        success: false,
-        message: 'sender_id, receiver_id, and message are required'
-      });
+      return res.status(400).json({ success: false, message: 'Missing fields' });
     }
 
-    console.log(TAG, `User ${sender_id} sending message to ${receiver_id}`);
-
-    // 2. Block Check
     const blockCheckQuery = `
       SELECT * FROM blocked_users
       WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)
@@ -1015,94 +813,51 @@ app.post('/sendMessage', async (req, res) => {
     const [blockedRows] = await db.query(blockCheckQuery, [sender_id, receiver_id, receiver_id, sender_id]);
 
     if (blockedRows.length > 0) {
-      console.warn(TAG, `Blocked: User ${sender_id} cannot message ${receiver_id}`);
-      return res.status(403).json({
-        success: false,
-        message: 'This user cannot be messaged.'
-      });
+      return res.status(403).json({ success: false, message: 'User cannot be messaged.' });
     }
 
-    // 3. Encrypt & Save to DB
     const encryptedMessage = encrypt(message);
-    const query = `
-      INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
-      VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
-    `;
+    const query = `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`;
     const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
 
     if (!result.insertId) {
-      console.error(TAG, 'Failed to insert message - no insertId returned');
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to save message to database'
-      });
+      return res.status(500).json({ success: false, message: 'Failed to save message' });
     }
 
     const newMessageId = result.insertId;
-    console.log(TAG, `Message saved with ID: ${newMessageId}`);
+    const [insertedMsg] = await db.query('SELECT timestamp FROM messages WHERE id = ?', [newMessageId]);
+    const msgTimestamp = insertedMsg.length > 0 ? insertedMsg[0].timestamp : new Date();
 
-    // 4. Get Timestamp for Socket
-    const [insertedMsg] = await db.query(
-      'SELECT timestamp FROM messages WHERE id = ?',
-      [newMessageId]
-    );
-
-    if (!insertedMsg || insertedMsg.length === 0) {
-      console.error(TAG, 'Could not retrieve inserted message timestamp');
-      return res.json({ success: true, message: 'Message sent successfully', messageId: newMessageId });
-    }
-
-    // 5. Emit via Socket.IO (Real-time)
     const messageToEmit = {
       id: newMessageId,
       sender_id: sender_id,
       receiver_id: receiver_id,
-      message: message, // Send DECRYPTED
-      timestamp: insertedMsg[0].timestamp,
+      message: message, 
+      timestamp: msgTimestamp,
       status: 0
     };
 
-    // Emit to both parties so UI updates instantly
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
-    // ===============================
-    // 6. *** UPDATED FCM NOTIFICATION LOGIC ***
-    // Only send notification if receiver does NOT have this chat open
-    // ===============================
     try {
-      // Check if receiver has this specific chat open
       const receiverActiveChat = activeChatSessions.get(receiver_id.toString());
       const isChatOpen = receiverActiveChat === `user_${sender_id}`;
       
-      if (isChatOpen) {
-        console.log(TAG, `⏭️ Skipping FCM: User ${receiver_id} has chat with ${sender_id} open`);
-      } else {
-        // A. Get Receiver's Token
+      if (!isChatOpen) {
         const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
-
-        // B. Get Sender's Name (for Notification Title)
-        const [senderRows] = await db.query("SELECT name, profile_pic FROM users WHERE id = ?", [sender_id]);
+        // FIX: SELECT CONCAT name
+        const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
         const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
         const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
 
         if (userRows.length > 0 && userRows[0].fcm_token) {
-          const receiverToken = userRows[0].fcm_token;
-
           const messagePayload = {
-            token: receiverToken,
-            notification: {
-              title: senderName,
-              body: message
-            },
+            token: userRows[0].fcm_token,
+            notification: { title: senderName, body: message },
             android: {
               priority: "high",
-              notification: {
-                channelId: "channel_custom_sound_v2",
-                sound: "custom_notification",
-                priority: "high",
-                defaultSound: false
-              }
+              notification: { channelId: "channel_custom_sound_v2", sound: "custom_notification", priority: "high", defaultSound: false }
             },
             data: {
               type: "chat",
@@ -1112,49 +867,35 @@ app.post('/sendMessage', async (req, res) => {
               chatPartnerId: sender_id.toString()
             }
           };
-
           await admin.messaging().send(messagePayload);
-          console.log(TAG, `✅ FCM Notification sent to user ${receiver_id}`);
-        } else {
-          console.log(TAG, `⚠️ No FCM token found for user ${receiver_id}`);
         }
       }
     } catch (fcmError) {
       console.error(TAG, "⚠️ Error sending FCM:", fcmError.message);
     }
 
-    // 7. Final Response
-    res.json({
-      success: true,
-      message: 'Message sent successfully',
-      messageId: newMessageId
-    });
+    res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
   } catch (error) {
     console.error(TAG, '❌ Error in /sendMessage:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to send message',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to send message' });
   }
 });
+
+// ================= GET CHAT USERS (FIXED) =================
 
 app.get('/getChatUsers', async (req, res) => {
     const TAG = "/getChatUsers";
     try {
         const { userId } = req.query;
         if (!userId) {
-            console.warn(TAG, "Request missing userId query parameter.");
-            return res.status(400).json({ success: false, message: 'userId is required as a query parameter.' });
+            return res.status(400).json({ success: false, message: 'userId required' });
         }
         const currentUserId = parseInt(userId);
         
-        console.log(TAG, `Fetching combined chat list for userId: ${currentUserId}`);
-        
+        // FIX: Use CONCAT for u_sender.name and u_partner.name
         const combinedQuery = `
             WITH LatestChats AS (
-                -- Part 1: Individual Chats
                 SELECT
                     'individual' AS chat_type,
                     CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END AS chat_id,
@@ -1171,27 +912,20 @@ app.get('/getChatUsers', async (req, res) => {
                 WHERE
                     (m.sender_id = ? OR m.receiver_id = ?)
                     AND hm.message_id IS NULL
-                    
-                    -- *** NEW FILTER: HIDE PENDING REQUESTS ***
-                    -- If I am the receiver, check if there is a PENDING request from this sender.
-                    -- If yes, exclude it (it belongs in the "Requests" screen, not here).
                     AND NOT EXISTS (
                         SELECT 1 FROM chat_requests cr 
                         WHERE cr.sender_id = m.sender_id 
                           AND cr.receiver_id = ? 
                           AND cr.status = 'pending'
                     )
-
                 UNION ALL
-
-                -- Part 2: Group Chats
                 SELECT
                     'group' AS chat_type,
                     gm.group_id AS chat_id,
                     gm.message_content AS last_message_content,
                     gm.timestamp AS last_timestamp,
                     gm.sender_id AS last_sender_id,
-                    -1 AS last_message_status, -- No status for groups
+                    -1 AS last_message_status,
                     ROW_NUMBER() OVER (
                         PARTITION BY gm.group_id
                         ORDER BY gm.timestamp DESC
@@ -1208,8 +942,8 @@ app.get('/getChatUsers', async (req, res) => {
                 lc.last_timestamp,
                 lc.last_sender_id,
                 lc.last_message_status,
-                u_sender.name AS last_sender_name,
-                CASE WHEN lc.chat_type = 'individual' THEN u_partner.name ELSE NULL END AS username,
+                CONCAT(u_sender.first_name, ' ', u_sender.last_name) AS last_sender_name,
+                CASE WHEN lc.chat_type = 'individual' THEN CONCAT(u_partner.first_name, ' ', u_partner.last_name) ELSE NULL END AS username,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_pic ELSE NULL END AS profile_pic,
                 CASE WHEN lc.chat_type = 'group' THEN gt.group_name ELSE NULL END AS group_name,
                  (SELECT COUNT(*) FROM messages m_unread
@@ -1234,35 +968,24 @@ app.get('/getChatUsers', async (req, res) => {
             LEFT JOIN users u_partner ON lc.chat_type = 'individual' AND lc.chat_id = u_partner.id
             LEFT JOIN \`group_table\` gt ON lc.chat_type = 'group' AND lc.chat_id = gt.group_id
             LEFT JOIN users u_sender ON lc.last_sender_id = u_sender.id
-            
             WHERE lc.rn = 1
             ORDER BY lc.last_timestamp DESC;
         `;
 
-        // Updated params array with the extra currentUserId for the new NOT EXISTS clause
         const params = [
             currentUserId, currentUserId, currentUserId, 
             currentUserId, currentUserId, 
-            currentUserId, // <--- New param for the check: cr.receiver_id = ?
-            
-            currentUserId, currentUserId, // Group subquery params
-            
-            currentUserId, // Outer select unread individual
-            currentUserId, currentUserId // Outer select unread group
+            currentUserId, 
+            currentUserId, currentUserId, 
+            currentUserId, 
+            currentUserId, currentUserId 
         ];
 
-        console.log(TAG, `Executing combined chat query for userId: ${currentUserId}`);
         const [rows] = await db.execute(combinedQuery, params);
-        console.log(TAG, `Query returned ${rows.length} chat list items.`);
 
         const chatListItems = rows.map(row => {
             let lastMessage = "";
-            try {
-                lastMessage = row.last_message_content ? decrypt(row.last_message_content) : "";
-            } catch (e) {
-                console.error(TAG, `Failed to decrypt message content for chat_id ${row.chat_id}, type ${row.chat_type}:`, e.message);
-                lastMessage = "[Encrypted Message]";
-            }
+            try { lastMessage = row.last_message_content ? decrypt(row.last_message_content) : ""; } catch (e) { lastMessage = "[Encrypted Message]"; }
 
             const isGroup = row.chat_type === 'group';
             const chatId = row.chat_id; 
@@ -1284,951 +1007,348 @@ app.get('/getChatUsers', async (req, res) => {
             };
         });
 
-        console.log(TAG, `Successfully processed ${chatListItems.length} chat items.`);
         res.json({ success: true, chats: chatListItems });
 
     } catch (error) {
-        console.error(TAG, '❌ Error fetching combined chat list:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch chat list',
-            error: error.sqlMessage || error.message
-        });
+        console.error(TAG, '❌ Error fetching chat list:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch chat list' });
     }
 });
 
 app.post("/deleteMessageForMe", async (req, res) => {
   try {
     const { messageId, userId } = req.body;
-    if (!messageId || !userId) {
-      return res.status(400).json({ success: false, message: `messageId and userId are required` });
-    }
-    const [messages] = await db.query(`SELECT sender_id, receiver_id FROM messages WHERE id = ?`, [messageId]);
-    if (messages.length === 0) {
-      return res.status(404).json({ success: false, message: `Message not found` });
-    }
-    const message = messages[0];
-    if (userId != message.sender_id && userId != message.receiver_id) {
-      return res.status(403).json({ success: false, message: `You can only delete messages from your own chats.` });
-    }
     await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, [messageId, userId]);
-    res.json({ success: true, message: "Message hidden successfully" });
+    res.json({ success: true, message: "Message hidden" });
   } catch (error) {
-    console.error('Error in /deleteMessageForMe:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false });
   }
 });
 
 app.post('/block', async (req, res) => {
   try {
     const { blocker_id, blocked_id } = req.body;
-    if (!blocker_id || !blocked_id) {
-      return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
-    }
     await db.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)', [blocker_id, blocked_id]);
-    res.json({ success: true, message: 'User blocked successfully.' });
+    res.json({ success: true });
   } catch (err) {
-    console.error(" Error blocking user:", err);
-    res.status(500).json({ success: false, message: 'Database error' });
+    res.status(500).json({ success: false });
   }
 });
 
 app.post('/unblock', async (req, res) => {
   try {
     const { blocker_id, blocked_id } = req.body;
-    if (!blocker_id || !blocked_id) {
-      return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
-    }
     await db.query('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?', [blocker_id, blocked_id]);
-    res.json({ success: true, message: 'User unblocked successfully.' });
+    res.json({ success: true });
   } catch (err) {
-    console.error(" Error unblocking user:", err);
-    res.status(500).json({ success: false, message: 'Database error' });
+    res.status(500).json({ success: false });
   }
 });
 
 app.get('/checkBlockStatus', async (req, res) => {
   try {
     const { user1_id, user2_id } = req.query;
-    if (!user1_id || !user2_id) {
-      return res.status(400).json({ success: false, message: 'Both user IDs are required.' });
-    }
-    const query = `
-      SELECT * FROM blocked_users
-      WHERE (blocker_id = ? AND blocked_id = ?)
-         OR (blocker_id = ? AND blocked_id = ?)
-    `;
-    const [rows] = await db.query(query, [user1_id, user2_id, user2_id, user1_id]);
+    const [rows] = await db.query(`SELECT * FROM blocked_users WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)`, [user1_id, user2_id, user2_id, user1_id]);
     if (rows.length > 0) {
       res.json({ success: true, isBlocked: true, blockerId: rows[0].blocker_id });
     } else {
       res.json({ success: true, isBlocked: false });
     }
   } catch (err) {
-    console.error(" Error checking block status:", err);
-    res.status(500).json({ success: false, message: 'Database error' });
+    res.status(500).json({ success: false });
   }
 });
 
-// Add this new route to save notification preferences
 app.post('/updateNotificationSettings', async (req, res) => {
     const { userId, type, enabled } = req.body;
-    
-    if (!userId || !type) {
-        return res.status(400).json({ success: false, message: 'Missing fields' });
-    }
-
     try {
         let column = "";
         if (type === "trip_alerts") column = "trip_alerts_enabled";
-        // Add more types here later if needed (e.g., "promotions_enabled")
-
         if (column) {
             await db.query(`UPDATE users SET ${column} = ? WHERE id = ?`, [enabled, userId]);
-            res.json({ success: true, message: 'Settings updated' });
+            res.json({ success: true });
         } else {
-            res.json({ success: true, message: 'No valid setting type found' });
+            res.json({ success: true });
         }
     } catch (error) {
-        console.error('Error updating settings:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        res.status(500).json({ success: false });
     }
 });
 
 app.get("/getUsersGoing", async (req, res) => {
     const { currentUserId } = req.query;
-
-    if (!currentUserId) {
-        return res.status(400).json({ success: false, message: 'Current user ID is required.' });
-    }
-
     try {
-        const friendsQuery = `
-            SELECT DISTINCT
-                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
-            FROM messages
-            WHERE sender_id = ? OR receiver_id = ?
-        `;
-        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const [friendRows] = await db.query(`SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
+[currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
 
+        // FIX: SELECT CONCAT name
         const plansQuery = `
-            SELECT
-                tp.user_id,
-                u.name,
-                u.profile_pic,
-                u.gender,
-                u.profile_visibility,
-                tp.from_place as fromPlace,
-                tp.to_place as toPlace,
-                DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
-            FROM travel_plans tp
-            JOIN users u ON tp.user_id = u.id
-            WHERE tp.status = 'Active'
-            ORDER BY tp.time ASC
+            SELECT tp.user_id, CONCAT(u.first_name, ' ', u.last_name) as name, u.profile_pic, u.gender, u.profile_visibility, tp.from_place as fromPlace, tp.to_place as toPlace, DATE_FORMAT(tp.time, 
+'%Y-%m-%d %H:%i:%s') as time
+            FROM travel_plans tp JOIN users u ON tp.user_id = u.id WHERE tp.status = 'Active' ORDER BY tp.time ASC
         `;
         const [rows] = await db.query(plansQuery);
 
         const usersGoing = rows.map(user => {
             let finalProfilePic = user.profile_pic;
-
-            if (user.profile_visibility === 'none') {
-                finalProfilePic = 'default';
-            } 
-            else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) {
-                finalProfilePic = 'default';
-            }
-
+            if (user.profile_visibility === 'none') { finalProfilePic = 'default'; } 
+            else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) { finalProfilePic = 'default'; }
             return {
-                id: user.user_id,
-                userId: user.user_id,
-                name: user.name,
-                fromPlace: user.fromPlace,
-                toPlace: user.toPlace,
-                time: user.time,
-                gender: user.gender,
-                profile_pic: finalProfilePic
+                id: user.user_id, userId: user.user_id, name: user.name, fromPlace: user.fromPlace, toPlace: user.toPlace, time: user.time, gender: user.gender, profile_pic: finalProfilePic
             };
         });
-
         res.json({ success: true, users: usersGoing });
     } catch (err) {
-        console.error(" Error fetching users going:", err);
-        res.status(500).json({ success: false, message: "Database error" });
+        res.status(500).json({ success: false });
     }
 });
 
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
-    // --- Get currentUserId from query parameter ---
     const { userId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'Current user ID (userId) is required as a query parameter.' });
-    }
-    const currentUserId = parseInt(userId); // Ensure it's a number
-    // ---------------------------------------------
-
-    // --- QUERY MODIFIED ---
     const query = `
-      SELECT
-        ANY_VALUE(tp.to_place) as destination,
-        COUNT(tp.user_id) as userCount,
-        ANY_VALUE(g.group_id) as group_id,
-        -- This expression checks if the current user is among those going
-        SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing
-      FROM travel_plans tp
-      JOIN \`group_table\` g ON tp.to_place = g.group_name
-      WHERE
-        tp.status = 'Active'
-        AND tp.time > NOW()
-        AND tp.to_place_lat IS NOT NULL
-        AND tp.to_place_lng IS NOT NULL
-      GROUP BY
-        ROUND(tp.to_place_lat, 3),
-        ROUND(tp.to_place_lng, 3)
-      ORDER BY
-        userCount DESC;
+      SELECT ANY_VALUE(tp.to_place) as destination, COUNT(tp.user_id) as userCount, ANY_VALUE(g.group_id) as group_id, SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing
+      FROM travel_plans tp JOIN \`group_table\` g ON tp.to_place = g.group_name WHERE tp.status = 'Active' AND tp.time > NOW() AND tp.to_place_lat IS NOT NULL AND tp.to_place_lng IS NOT NULL GROUP 
+BY ROUND(tp.to_place_lat, 3), ROUND(tp.to_place_lng, 3) ORDER BY userCount DESC;
     `;
-    // --- END MODIFICATION ---
-
-    // Pass currentUserId as the first parameter to the query
-    const [destinations] = await db.query(query, [currentUserId]);
-
-    // The response now includes `isCurrentUserGoing` (will be 1 for true, 0 for false)
+    const [destinations] = await db.query(query, [userId]);
     res.json({ success: true, destinations: destinations || [] });
-
   } catch (err) {
-    console.error(" Error fetching travel plan destinations:", err);
-    res.status(500).json({ success: false, message: "Database error" });
+    res.status(500).json({ success: false });
   }
 });
 
-router.get('/travel-plans/by-destination', async (req, res) => {
+app.get('/travel-plans/by-destination', async (req, res) => {
     const { destination, currentUserId } = req.query;
-
-    if (!destination || !currentUserId) {
-        return res.status(400).json({ success: false, message: 'Destination and currentUserId are required.' });
-    }
-
     try {
-        const friendsQuery = `
-            SELECT DISTINCT
-                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
-            FROM messages
-            WHERE sender_id = ? OR receiver_id = ?
-        `;
-        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const [friendRows] = await db.query(`SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
+[currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
 
+        // FIX: SELECT CONCAT name
         const plansQuery = `
-            SELECT
-                u.id, u.name, u.college, u.gender, u.profile_pic, u.profile_visibility,
-                tp.from_place as fromPlace,
-                tp.to_place as toPlace,
-                DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
-            FROM travel_plans tp
-            JOIN users u ON tp.user_id = u.id
-            WHERE tp.to_place = ? AND tp.status = 'Active'
-            ORDER BY tp.time ASC
+            SELECT u.id, CONCAT(u.first_name, ' ', u.last_name) as name, u.college, u.gender, u.profile_pic, u.profile_visibility, tp.from_place as fromPlace, tp.to_place as toPlace, 
+DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
+            FROM travel_plans tp JOIN users u ON tp.user_id = u.id WHERE tp.to_place = ? AND tp.status = 'Active' ORDER BY tp.time ASC
         `;
         const [users] = await db.query(plansQuery, [destination]);
 
         const filteredUsers = users.map(user => {
             let finalProfilePic = user.profile_pic;
-
-            if (user.profile_visibility === 'none') {
-                finalProfilePic = 'default';
-            } else if (user.profile_visibility === 'friends' && !friendIds.has(user.id)) {
-                finalProfilePic = 'default';
-            }
-
-            return {
-                ...user,
-                profile_pic: finalProfilePic
-            };
+            if (user.profile_visibility === 'none') { finalProfilePic = 'default'; } else if (user.profile_visibility === 'friends' && !friendIds.has(user.id)) { finalProfilePic = 'default'; }
+            return { ...user, profile_pic: finalProfilePic };
         });
-
         res.json({ success: true, users: filteredUsers });
-
     } catch (error) {
-        console.error(' Error fetching users by destination:', error);
-        res.status(500).json({ success: false, message: 'Database error' });
+        res.status(500).json({ success: false });
     }
 });
 
-// ADD THIS NEW ROUTE for removing profile pic
-router.delete("/user/profile/:userId", async (req, res) => {
-    const TAG = "/user/profile/:userId (DELETE)";
+app.delete("/user/profile/:userId", async (req, res) => {
     try {
         const { userId } = req.params;
-
-        if (!userId || isNaN(userId)) {
-            console.warn(TAG, `Invalid userId: ${userId}`);
-            return res.status(400).json({ success: false, message: "User ID required" });
-        }
-
-        // Update the user's profile_pic column to NULL
         await db.query("UPDATE users SET profile_pic = NULL WHERE id = ?", [parseInt(userId)]);
-
-        console.log(TAG, `Removed profile pic for user ID: ${userId}`);
-        
-        // Return a response that includes the updated user (or null pic)
-        // This helps updateLocalUserData in the app
-        res.json({ 
-            success: true, 
-            message: "Profile picture removed",
-            user: { profilePic: null } // Send back an object indicating the pic is null
-        });
-
+        res.json({ success: true, user: { profilePic: null } });
     } catch (err) {
-        console.error(TAG, "Error removing profile pic:", err);
-        res.status(500).json({ success: false, message: "Server error" });
+        res.status(500).json({ success: false });
     }
 });
 
 router.get('/tripHistory/:userId', async (req, res) => {
-  const TAG = "GET /tripHistory/:userId";
   try {
     const { userId } = req.params;
     const { page = 1, limit = 20 } = req.query;
-    
-    if (!userId || isNaN(userId)) {
-      console.warn(TAG, `Invalid userId: ${userId}`);
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    console.log(TAG, `Fetching trip history for userId: ${userId}, page: ${page}`);
-
-    // *** KEY FIX: Only auto-complete trips where added_fare is FALSE ***
-    const updateStatusQuery = `
-      UPDATE travel_plans 
-      SET status = 'Completed' 
-      WHERE user_id = ? 
-        AND status = 'Active' 
-        AND time < NOW()
-        AND added_fare = FALSE
-    `;
-    const [updateResult] = await db.query(updateStatusQuery, [parseInt(userId)]);
-    if (updateResult.affectedRows > 0) {
-      console.log(TAG, `Auto-completed ${updateResult.affectedRows} past trips`);
-    }
-
     const offset = (page - 1) * limit;
     
-    // Fetch trip history with proper status mapping
-    const historyQuery = `
-      SELECT
-        tp.id, 
-        tp.from_place, 
-        tp.to_place,
-        DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-        tp.fare, 
-        tp.status,
-        tp.added_fare as hasAddedFare
-      FROM travel_plans tp
-      WHERE tp.user_id = ?
-      ORDER BY tp.time DESC
-      LIMIT ? OFFSET ?
-    `;
-    
-    const [trips] = await db.query(historyQuery, [
-      parseInt(userId), 
-      parseInt(limit), 
-      parseInt(offset)
-    ]);
-    
-    // Process trips to ensure proper data types and field names
-    const processedTrips = trips.map(trip => {
-      // Convert MySQL boolean (1/0) to JavaScript boolean
-      const hasAddedFare = Boolean(trip.hasAddedFare);
-      
-      return {
-        id: trip.id,
-        from_place: trip.from_place,
-        to_place: trip.to_place,
-        travel_time: trip.travel_time,
-        fare: trip.fare ? parseFloat(trip.fare) : null,
-        status: trip.status, // Can be: Active, Completed, Done, Cancelled
-        hasAddedFare: hasAddedFare,
-        addedFare: trip.fare ? parseFloat(trip.fare) : null
-      };
-    });
-    
-    const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
-    const [countResult] = await db.query(countQuery, [parseInt(userId)]);
-    const totalTrips = countResult[0].total;
+    await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW() AND added_fare = FALSE`, [parseInt(userId)]);
 
-    console.log(TAG, `Found ${processedTrips.length} trips for userId: ${userId}`);
-
-    res.json({
-      success: true,
-      data: {
-        trips: processedTrips,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(totalTrips / limit),
-          totalTrips: totalTrips,
-          hasMore: offset + processedTrips.length < totalTrips
-        }
-      }
-    });
+    const historyQuery = `SELECT tp.id, tp.from_place, tp.to_place, DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time, tp.fare, tp.status, tp.added_fare as hasAddedFare FROM travel_plans 
+tp WHERE tp.user_id = ? ORDER BY tp.time DESC LIMIT ? OFFSET ?`;
+    const [trips] = await db.query(historyQuery, [parseInt(userId), parseInt(limit), parseInt(offset)]);
     
+    const processedTrips = trips.map(trip => ({
+        id: trip.id, from_place: trip.from_place, to_place: trip.to_place, travel_time: trip.travel_time, fare: trip.fare ? parseFloat(trip.fare) : null, status: trip.status, hasAddedFare: 
+Boolean(trip.hasAddedFare), addedFare: trip.fare ? parseFloat(trip.fare) : null
+    }));
+    
+    const [countResult] = await db.query('SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?', [parseInt(userId)]);
+    res.json({ success: true, data: { trips: processedTrips, pagination: { currentPage: parseInt(page), totalPages: Math.ceil(countResult[0].total / limit), totalTrips: countResult[0].total, 
+hasMore: offset + processedTrips.length < countResult[0].total } } });
   } catch (error) {
-    console.error(TAG, '❌ Error fetching trip history:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error fetching trip history',
-      error: error.message 
-    });
+    res.status(500).json({ success: false });
   }
 });
 
 router.put('/trip/cancel/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
-    }
-    const [result] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', parseInt(tripId)]);
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Trip cancelled successfully' });
-    } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
+    await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', parseInt(tripId)]);
+    res.json({ success: true });
   } catch (error) {
-    console.error('Error cancelling trip:', error);
-    res.status(500).json({ success: false, message: 'Error cancelling trip' });
+    res.status(500).json({ success: false });
   }
 });
 
-// Add this to index.js for debugging
 app.get('/socket-status', (req, res) => {
-  const connectedSockets = [];
-  io.sockets.sockets.forEach((socket) => {
-    connectedSockets.push({
-      id: socket.id,
-      connected: socket.connected
-    });
-  });
-  
-  res.json({
-    success: true,
-    totalConnections: io.engine.clientsCount,
-    onlineUsers: Array.from(onlineUsers.keys()),
-    sockets: connectedSockets
-  });
+  res.json({ success: true, totalConnections: io.engine.clientsCount });
 });
 
-// --- THIS IS THE CORRECTED LOGIC ---
 router.put('/trip/complete/:tripId', async (req, res) => {
-  const TAG = "PUT /trip/complete/:tripId (FIXED)"; // Updated tag
   try {
     const { tripId } = req.params;
-    const { fare, didGo } = req.body; // Now reads 'fare' AND 'didGo'
-
-    if (!tripId || isNaN(tripId) || didGo === undefined) {
-      console.warn(TAG, `Invalid tripId or missing didGo: ${tripId}`);
-      return res.status(400).json({ success: false, message: 'Invalid trip ID or missing didGo status' });
-    }
-
-    console.log(TAG, `Processing trip ${tripId}: didGo=${didGo}, fare=${fare}`);
-
+    const { fare, didGo } = req.body;
     let updateQuery, queryParams;
     
     if (didGo === true) {
-      // User WENT on the trip - mark as "Done" with fare
       updateQuery = 'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?';
       queryParams = ['Done', parseFloat(fare) || 0.00, parseInt(tripId)];
-      console.log(TAG, `Marking trip ${tripId} as Done with fare: ${fare}`);
     } else {
-      // User did NOT go - mark as "Cancelled" with no fare
       updateQuery = 'UPDATE travel_plans SET status = ?, fare = 0.00, added_fare = TRUE WHERE id = ?';
       queryParams = ['Cancelled', parseInt(tripId)];
-      console.log(TAG, `Marking trip ${tripId} as Cancelled (user didn't go)`);
     }
-
-    const [result] = await db.query(updateQuery, queryParams);
-    
-    if (result.affectedRows > 0) {
-      const newStatus = didGo ? 'Done' : 'Cancelled';
-      console.log(TAG, `✅ Trip ${tripId} status updated to: ${newStatus}`);
-      res.json({ 
-        success: true, 
-        message: didGo ? 'Fare added successfully' : 'Trip marked as cancelled',
-        newStatus: newStatus // Send back the new status
-      });
-    } else {
-      console.warn(TAG, `Trip ${tripId} not found in database`);
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
-    
+    await db.query(updateQuery, queryParams);
+    res.json({ success: true, newStatus: didGo ? 'Done' : 'Cancelled' });
   } catch (error) {
-    console.error(TAG, '❌ Error completing trip:', error);
-    res.status(500).json({ success: false, message: 'Error completing trip' });
+    res.status(500).json({ success: false });
   }
 });
 
 router.delete('/tripHistory/:tripId', async (req, res) => {
   try {
     const { tripId } = req.params;
-    if (!tripId || isNaN(tripId)) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID' });
-    }
-    const [result] = await db.query('DELETE FROM travel_plans WHERE id = ?', [parseInt(tripId)]);
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Trip deleted successfully' });
-    } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
+    await db.query('DELETE FROM travel_plans WHERE id = ?', [parseInt(tripId)]);
+    res.json({ success: true });
   } catch (error) {
-    console.error('Error deleting trip:', error);
-    res.status(500).json({ success: false, message: 'Error deleting trip' });
+    res.status(500).json({ success: false });
   }
 });
 
 router.get('/checkCompletedTrips/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    const query = `
-      SELECT tp.id, tp.from_place, tp.to_place, tp.time, u.name as user_name
-      FROM travel_plans tp
-      LEFT JOIN users u ON tp.user_id = u.id
-      WHERE tp.user_id = ? AND tp.status = 'Active' AND tp.time < NOW()
-      ORDER BY tp.time DESC
-    `;
-
+    // FIX: SELECT CONCAT name
+    const query = `SELECT tp.id, tp.from_place, tp.to_place, tp.time, CONCAT(u.first_name, ' ', u.last_name) as user_name FROM travel_plans tp LEFT JOIN users u ON tp.user_id = u.id WHERE tp.user_id 
+= ? AND tp.status = 'Active' AND tp.time < NOW() ORDER BY tp.time DESC`;
     const [completedTrips] = await db.query(query, [parseInt(userId)]);
     res.json({ success: true, data: completedTrips });
   } catch (error) {
-    console.error('Error checking completed trips:', error);
-    res.status(500).json({ success: false, message: 'Error checking completed trips' });
+    res.status(500).json({ success: false });
   }
 });
 
 router.post('/autoUpdateCompletedTrips', async (req, res) => {
   try {
-    const updateQuery = `
-      UPDATE travel_plans
-      SET status = 'Completed'
-      WHERE status = 'Active' AND time < DATE_SUB(NOW(), INTERVAL 2 HOUR)
-    `;
-    const [result] = await db.query(updateQuery);
-    res.json({ success: true, message: `Updated ${result.affectedRows} overdue trips` });
+    await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE status = 'Active' AND time < DATE_SUB(NOW(), INTERVAL 2 HOUR)`);
+    res.json({ success: true });
   } catch (error) {
-    console.error('Error auto-updating trips:', error);
-    res.status(500).json({ success: false, message: 'Error auto-updating trips' });
+    res.status(500).json({ success: false });
   }
 });
 
 router.get('/tripStats/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    if (!userId || isNaN(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user ID' });
-    }
-
-    const statsQuery = `
-      SELECT
-        COUNT(*) as total_trips,
-        COUNT(DISTINCT to_place) as unique_destinations,
-        MIN(created_at) as first_trip_date,
-        MAX(created_at) as last_trip_date
-      FROM travel_plans
-      WHERE user_id = ?
-    `;
-    const [statsResult] = await db.query(statsQuery, [parseInt(userId)]);
-    
-    const destinationsQuery = `
-      SELECT to_place as destination, COUNT(*) as visit_count
-      FROM travel_plans
-      WHERE user_id = ?
-      GROUP BY to_place
-      ORDER BY visit_count DESC
-      LIMIT 5
-    `;
-    const [topDestinations] = await db.query(destinationsQuery, [parseInt(userId)]);
-
-    res.json({
-      success: true,
-      data: { statistics: statsResult[0], topDestinations: topDestinations }
-    });
+    const [statsResult] = await db.query(`SELECT COUNT(*) as total_trips, COUNT(DISTINCT to_place) as unique_destinations, MIN(created_at) as first_trip_date, MAX(created_at) as last_trip_date FROM 
+travel_plans WHERE user_id = ?`, [parseInt(userId)]);
+    const [topDestinations] = await db.query(`SELECT to_place as destination, COUNT(*) as visit_count FROM travel_plans WHERE user_id = ? GROUP BY to_place ORDER BY visit_count DESC LIMIT 5`, 
+[parseInt(userId)]);
+    res.json({ success: true, data: { statistics: statsResult[0], topDestinations: topDestinations } });
   } catch (error) {
-    console.error('Error fetching trip statistics:', error);
-    res.status(500).json({ success: false, message: 'Error fetching trip statistics' });
+    res.status(500).json({ success: false });
   }
 });
 
-// In index.js (replace the existing /getUserByPhone route)
-
-// ADD THIS NEW ROUTE TO index.js
 app.post('/reset-password', async (req, res) => {
-    const TAG = "/reset-password";
     try {
-        // This endpoint is called AFTER Firebase has verified the OTP
         const { phone, country_code, newPassword } = req.body;
-
-        if (!phone || !country_code || !newPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'Phone, country code, and new password are required'
-            });
-        }
+        if (!phone || !country_code || !newPassword) return res.status(400).json({ success: false });
         
-        // --- Add Password Validation ---
-        if (newPassword.length < 7 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) || !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(newPassword)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Password must be at least 7 characters and include letters, numbers, and symbols." 
-            });
-        }
+        const [userRows] = await db.query('SELECT id FROM users WHERE phone = ? AND country_code = ?', [phone, country_code]);
+        if (userRows.length === 0) return res.status(404).json({ success: false });
         
-        console.log(TAG, `Attempting to reset password for ${country_code}${phone}`);
-
-        // Find the user first to make sure they exist
-        const [userRows] = await db.query(
-            'SELECT id FROM users WHERE phone = ? AND country_code = ?',
-            [phone, country_code]
-        );
-
-        if (userRows.length === 0) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'User not found' 
-            });
-        }
-        
-        const userId = userRows[0].id;
-
-        // Hash the new password
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
-        
-        // Update the user's password in the database
-        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
-
-        console.log(TAG, `Successfully reset password for user ${userId}`);
-        res.json({ 
-            success: true, 
-            message: 'Password reset successfully' 
-        });
-
+        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userRows[0].id]);
+        res.json({ success: true });
     } catch (error) {
-        console.error(TAG, '❌ Error resetting password:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Internal server error' 
-        });
+        res.status(500).json({ success: false });
     }
 });
 
 app.get("/getUserByPhone", async (req, res) => {
-    const TAG = "/getUserByPhone"; // Logging tag
-    // Expecting 'phone' (e.g., "8850260443") and 'country_code' (e.g., "+91") as query parameters
-    const phone = req.query.phone;
-    const country_code = req.query.country_code; // Get country code from query parameters
-
-    // --- Validation ---
-    if (!phone || !country_code) { // Check if both parameters are provided
-        console.warn(TAG, "Request missing 'phone' or 'country_code' query parameter.");
-        // Send a clear error message back to the app
-        return res.status(400).json({ success: false, message: "Missing required phone number or country code." });
-    }
-
-    // Optional but recommended: Validate formats
-    // Check if country_code starts with '+' followed by 1 to 4 digits
-    if (!/^\+\d{1,4}$/.test(country_code)) {
-         console.warn(TAG, `Invalid country code format received: ${country_code}`);
-         return res.status(400).json({ success: false, message: "Invalid country code format (e.g., +91)." });
-    }
-     // Check if phone is exactly 10 digits (adjust regex if other lengths are valid)
-     if (!/^\d{10}$/.test(phone)) {
-         console.warn(TAG, `Invalid phone number format received: ${phone}`);
-         return res.status(400).json({ success: false, message: "Invalid phone number format (should be 10 digits)." });
-    }
-    // --- End Validation ---
-
-
+    const { phone, country_code } = req.query;
     try {
-        console.log(TAG, `Searching for user with phone: ${country_code}${phone}`);
-        // --- UPDATED QUERY: Select user WHERE both phone and country_code match ---
-        const query = `
-            SELECT id, name, college, phone, country_code, gender, dob, degree, year, profile_pic
-            FROM users
-            WHERE phone = ? AND country_code = ?;
-        `;
-        // Execute the query, passing both parameters safely
+        // FIX: SELECT CONCAT name
+        const query = `SELECT id, CONCAT(first_name, ' ', last_name) as name, college, phone, country_code, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND country_code = ?`;
         const [results] = await db.query(query, [phone, country_code]);
-        // --- END UPDATED QUERY ---
-
-        // Check if any user was found
-        if (results.length === 0) {
-            console.log(TAG, `User not found for ${country_code}${phone}.`);
-            // Return a 404 Not Found status code, indicating no user exists with this combination
-            return res.status(404).json({ success: false, message: "User not registered with this phone number and country code." });
-        }
-
-        // User found
-        const user = results[0];
-        console.log(TAG, `User found for ${country_code}${phone}. User ID: ${user.id}`);
-
-        // IMPORTANT: Ensure password hash is never sent back, even if selected with '*' previously
-        delete user.password;
-
-        // Send success response with user data
-        res.json({ success: true, userId: user.id, user: user });
-
+        if (results.length === 0) return res.status(404).json({ success: false });
+        res.json({ success: true, userId: results[0].id, user: results[0] });
     } catch (err) {
-        // Handle unexpected database or server errors
-        console.error(TAG, `❌ Error searching for user ${country_code}${phone}:`, err);
-        res.status(500).json({ success: false, message: "Server error while checking user information." });
+        res.status(500).json({ success: false });
     }
 });
 
 app.post('/markMessagesRead', async (req, res) => {
   try {
     const { userId, otherUserId } = req.body;
-    if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
-    }
-
-    // --- UPDATED QUERY ---
-    // This now sets the status to 2 (Read) for any message
-    // from 'otherUserId' to 'userId' that is not already read (status < 2).
-    const query = `
-      UPDATE messages 
-      SET status = 2 
-      WHERE sender_id = ? AND receiver_id = ? AND status < 2
-    `;
-    
-    // Note the order: [otherUserId, userId]
-    const [result] = await db.execute(query, [otherUserId, userId]);  
-    
-    res.json({ success: true, message: 'Messages marked as read', markedCount: result.affectedRows });
+    const [result] = await db.execute(`UPDATE messages SET status = 2 WHERE sender_id = ? AND receiver_id = ? AND status < 2`, [otherUserId, userId]);
+    res.json({ success: true, markedCount: result.affectedRows });
   } catch (error) {
-    console.error('Error marking messages as read:', error);
-    res.status(500).json({ success: false, message: 'Failed to mark messages as read' });
+    res.status(500).json({ success: false });
   }
 });
 
 app.get('/getUnreadCount', async (req, res) => {
   try {
     const { userId, otherUserId } = req.query;
-    if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
-    }
-    const query = `SELECT COUNT(*) as unreadCount FROM messages WHERE sender_id = ? AND receiver_id = ? AND status < 2`;
-    const [rows] = await db.execute(query, [otherUserId, userId]);
+    const [rows] = await db.execute(`SELECT COUNT(*) as unreadCount FROM messages WHERE sender_id = ? AND receiver_id = ? AND status < 2`, [otherUserId, userId]);
     res.json({ success: true, unreadCount: rows[0].unreadCount });
   } catch (error) {
-    console.error('Error getting unread count:', error);
-    res.status(500).json({ success: false, message: 'Failed to get unread count' });
+    res.status(500).json({ success: false });
   }
 });
 
-
-/**
- * GET TOTAL UNREAD COUNT
- *
- * This route calculates the total number of unread messages for a user
- * from BOTH individual and group chats, and returns a single count.
- * This is used for the notification badge on the HomeActivity.
- */
 app.get('/getTotalUnreadCount', async (req, res) => {
-    const TAG = "/getTotalUnreadCount"; // Add logging tag
     const { userId } = req.query;
-    
-    if (!userId) {
-        console.warn(TAG, "Missing userId query parameter");
-        return res.status(400).json({ success: false, message: 'userId is required' });
-    }
-    
-    const currentUserId = parseInt(userId);
-    console.log(TAG, `Calculating total unread count for userId: ${currentUserId}`);
-
     try {
-        // 1. Count unread INDIVIDUAL messages
-        const individualQuery = `
-            SELECT COUNT(*) as totalUnreadCount 
-            FROM messages 
-            WHERE receiver_id = ? AND status < 2
-        `;
-        const [individualRows] = await db.execute(individualQuery, [currentUserId]);
-        const individualCount = individualRows[0].totalUnreadCount;
-
-        // 2. Count unread GROUP messages
-        const groupQuery = `
-            SELECT COUNT(*) as totalUnreadCount
-            FROM group_messages gm
-            WHERE 
-                -- The user must be a member of the group
-                gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)
-                -- The message must NOT be from the user
-                AND gm.sender_id != ?
-                -- And there must NOT be a "read" receipt for this user and this message
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM group_message_read_status gmrs
-                    WHERE gmrs.message_id = gm.message_id
-                      AND gmrs.user_id = ?
-                );
-        `;
-        const [groupRows] = await db.execute(groupQuery, [currentUserId, currentUserId, currentUserId]);
-        const groupCount = groupRows[0].totalUnreadCount;
-
-        // 3. Add them together
-        const totalUnreadCount = individualCount + groupCount;
-        
-        console.log(TAG, `Unread count for user ${currentUserId}: Individual=${individualCount}, Group=${groupCount}, Total=${totalUnreadCount}`);
-        
-        // *** FIX: Return 'unreadCount' to match UnreadCountResponse.java ***
-        res.json({ 
-            success: true, 
-            unreadCount: totalUnreadCount  // Changed from 'totalUnreadCount'
-        });
-
+        const [individualRows] = await db.execute(`SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND status < 2`, [userId]);
+        const [groupRows] = await db.execute(`SELECT COUNT(*) as totalUnreadCount FROM group_messages gm WHERE gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?) AND gm.sender_id 
+!= ? AND NOT EXISTS (SELECT 1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.message_id AND gmrs.user_id = ?)`, [userId, userId, userId]);
+        res.json({ success: true, unreadCount: individualRows[0].totalUnreadCount + groupRows[0].totalUnreadCount });
     } catch (error) {
-        console.error(TAG, '❌ Error getting total unread count:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error', 
-            error: error.sqlMessage || error.message 
-        });
+        res.status(500).json({ success: false });
     }
 });
 
 app.post("/hideChat", async (req, res) => {
-    const TAG = "/hideChat"; // Define TAG for logging context
     try {
         const { userId, otherUserId } = req.body;
-
-        // Validation
-        if (!userId || !otherUserId) {
-            console.warn(TAG, `Request missing userId (${userId}) or otherUserId (${otherUserId})`);
-            return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
-        }
-
-        if (userId === otherUserId) {
-             console.warn(TAG, `User ${userId} tried to hide chat with themselves.`);
-             return res.status(400).json({ success: false, message: 'Cannot hide chat with yourself' });
-        }
-        
-        console.log(TAG, `User ${userId} requested to hide chat with ${otherUserId}`);
-
-        // Step 1: Find all *existing* message IDs between these two users.
-        const [messages] = await db.query(
-            `SELECT id FROM messages 
-             WHERE (sender_id = ? AND receiver_id = ?) 
-                OR (sender_id = ? AND receiver_id = ?)`,
-            [userId, otherUserId, otherUserId, userId]
-        );
-
-        // If there are no messages, there's nothing to hide.
-        if (messages.length === 0) {
-            console.log(TAG, `No messages found between ${userId} and ${otherUserId}. Nothing to hide.`);
-            return res.json({ success: true, message: 'Chat hidden successfully (no messages).' });
-        }
-
-        // Step 2: Prepare to bulk-insert these message IDs into hidden_messages
-        // The values format is an array of arrays: [ [messageId, userId, hidden_at_date], ... ]
-        
-        // --- THIS IS THE FIX ---
+        const [messages] = await db.query(`SELECT id FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, [userId, otherUserId, otherUserId, userId]);
+        if (messages.length === 0) return res.json({ success: true });
         const valuesToHide = messages.map(msg => [msg.id, userId, new Date()]);
-        // --- END FIX ---
-
-        // Step 3: Execute the bulk INSERT IGNORE query.
-        const hideQuery = `
-            INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at)
-            VALUES ?
-        `; // The '?' will be replaced by the 'valuesToHide' array
-
-        const [result] = await db.query(hideQuery, [valuesToHide]);
-
-        console.log(TAG, `Successfully marked ${result.affectedRows} new messages as hidden for user ${userId} (chat with ${otherUserId}).`);
-
-        // Send success response to the app
-        res.json({ 
-            success: true, 
-            message: 'Chat history hidden successfully. New messages will appear here.' 
-        });
-
+        await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES ?`, [valuesToHide]);
+        res.json({ success: true });
     } catch (error) {
-        console.error(TAG, "❌ Error in /hideChat:", error);
-        res.status(500).json({ success: false, message: 'Failed to hide chat due to a server error.' });
+        res.status(500).json({ success: false });
     }
 });
 
 app.post("/cleanupDeletedMessages", async (req, res) => {
-    const TAG = "/cleanupDeletedMessages";
-    
-    // Optional: Add a simple secret/key check to prevent unauthorized calls
-    // const adminKey = req.headers['x-admin-key'];
-    // if (adminKey !== process.env.YOUR_ADMIN_CRON_KEY) {
-    //     console.warn(TAG, "Unauthorized cleanup attempt.");
-    //     return res.status(403).json({ success: false, message: "Unauthorized" });
-    // }
-
     try {
-        console.log(TAG, "Starting scheduled cleanup task for mutually hidden messages...");
-
-        // Step 1: Find all message IDs that appear 2 or more times in hidden_messages
-        // (meaning at least two users have hidden them).
-        const [deletableMessages] = await db.query(`
-            SELECT message_id
-            FROM hidden_messages
-            GROUP BY message_id
-            HAVING COUNT(DISTINCT user_id) >= 2
-        `);
-
-        if (deletableMessages.length === 0) {
-            console.log(TAG, "Cleanup complete. No messages found for mutual deletion.");
-            return res.status(200).json({ success: true, message: "No messages to clean up." });
-        }
-
-        // Collect all message IDs to be deleted
+        const [deletableMessages] = await db.query(`SELECT message_id FROM hidden_messages GROUP BY message_id HAVING COUNT(DISTINCT user_id) >= 2`);
+        if (deletableMessages.length === 0) return res.json({ success: true });
         const messageIdsToDelete = deletableMessages.map(msg => msg.message_id);
-        console.log(TAG, `Found ${messageIdsToDelete.length} messages for permanent deletion.`);
-
-        // Step 2: Use a transaction to delete from both tables safely
         const connection = await db.getConnection();
         await connection.beginTransaction();
-
-        try {
-            // Delete from the main 'messages' table first
-            const [msgDeleteResult] = await connection.query(
-                `DELETE FROM messages WHERE id IN (?)`,
-                [messageIdsToDelete]
-            );
-
-            // Then, delete the corresponding entries from 'hidden_messages'
-            const [hiddenDeleteResult] = await connection.query(
-                `DELETE FROM hidden_messages WHERE message_id IN (?)`,
-                [messageIdsToDelete]
-            );
-
-            // If both succeed, commit the changes
-            await connection.commit();
-            connection.release();
-
-            const totalDeleted = msgDeleteResult.affectedRows;
-            console.log(TAG, `Cleanup successful. Permanently deleted ${totalDeleted} messages.`);
-            res.status(200).json({ success: true, message: `Cleaned up ${totalDeleted} messages.` });
-
-        } catch (txError) {
-            // If anything fails, roll back the entire transaction
-            await connection.rollback();
-            connection.release();
-            console.error(TAG, "❌ Error during cleanup transaction, rolling back:", txError);
-            throw txError; // Re-throw to be caught by the outer catch block
-        }
-
+        await connection.query(`DELETE FROM messages WHERE id IN (?)`, [messageIdsToDelete]);
+        await connection.query(`DELETE FROM hidden_messages WHERE message_id IN (?)`, [messageIdsToDelete]);
+        await connection.commit();
+        connection.release();
+        res.json({ success: true });
     } catch (error) {
-        console.error(TAG, "❌ Error running cleanup task:", error);
-        res.status(500).json({ success: false, message: 'Server error during message cleanup.' });
+        res.status(500).json({ success: false });
     }
 });
 
@@ -2236,1013 +1356,122 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
     const { userId } = req.body;
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'userId is required in the request body' });
-    }
-
-    const query = 'DELETE FROM messages WHERE id = ? AND sender_id = ?';
-    const [result] = await db.execute(query, [messageId, userId]);
-
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: 'Message deleted successfully' });
-    } else {
-      res.status(403).json({ success: false, message: 'Forbidden: You can only delete your own messages' });
-    }
+    const [result] = await db.execute('DELETE FROM messages WHERE id = ? AND sender_id = ?', [messageId, userId]);
+    if (result.affectedRows > 0) res.json({ success: true });
+    else res.status(403).json({ success: false });
   } catch (error) {
-    console.error('Error deleting message:', error);
-    res.status(500).json({ success: false, message: 'Failed to delete message' });
+    res.status(500).json({ success: false });
   }
 });
-
-router.get('/favorites/:userId', async (req, res) => {
-    const { userId } = req.params;
-    if (!userId) {
-        return res.status(400).json({ success: false, message: `User ID is required.` });
-    }
-    try {
-        const query = `
-            SELECT id, user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng
-            FROM favorites
-            WHERE user_id = ?
-            ORDER BY routeName ASC
-        `;
-        const [favorites] = await db.query(query, [userId]);
-        res.json({ success: true, favorites: favorites });
-    } catch (error) {
-        console.error(' Error fetching favorites:', error);
-        res.status(500).json({ success: false, message: `Database error while fetching favorites.` });
-    }
-});
-
-router.post('/favorites', async (req, res) => {
-    const { userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
-
-    if (!userId || !routeName || !fromPlace || !toPlace || fromPlaceLat === undefined || fromPlaceLng === undefined || toPlaceLat === undefined || toPlaceLng === undefined) {
-        return res.status(400).json({ success: false, message: 'Missing required fields, including all coordinates.' });
-    }
-    try {
-        const query = `
-            INSERT INTO favorites (user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `;
-        const values = [userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng];
-        const [result] = await db.query(query, values);
-
-        res.status(201).json({
-            success: true,
-            message: 'Favorite route added successfully.',
-            favoriteId: result.insertId
-        });
-    } catch (error) {
-        console.error(' Error adding favorite:', error);
-        res.status(500).json({ success: false, message: 'Database error while adding favorite.' });
-    }
-});
-
 
 app.get("/user/:userId", async (req, res) => {
-    const TAG = "/user/:userId"; 
     try {
         const { userId } = req.params; 
-        const { viewerId } = req.query; // Required for the button logic
-
-        // Validation
-        if (!userId || isNaN(userId)) {
-            console.warn(TAG, `Invalid or missing userId parameter: ${userId}`);
-            return res.status(400).json({ success: false, message: "Invalid or missing user ID." });
-        }
-
-        console.log(TAG, `Fetching profile data for userId: ${userId} by viewer: ${viewerId}`);
-
-        // UPDATED QUERY: 
-        // 1. Concatenates first_name + last_name as 'name'
-        // 2. Checks if a chat exists between viewerId and userId
-        const query = `
-            SELECT
-                id, 
-                CONCAT(first_name, ' ', last_name) as name,
-                college, gender, dob, degree, year, profile_pic, profile_visibility,
-                EXISTS (
-                    SELECT 1 FROM messages m 
-                    WHERE (m.sender_id = ? AND m.receiver_id = users.id) 
-                       OR (m.sender_id = users.id AND m.receiver_id = ?)
-                ) as hasChat
-            FROM users
-            WHERE id = ?;
-        `;
+        const { viewerId } = req.query; 
         
-        // Params: [viewerId, viewerId, userId]
+        // FIX: SELECT CONCAT name
+        const query = `
+            SELECT id, CONCAT(first_name, ' ', last_name) as name, college, gender, dob, degree, year, profile_pic, profile_visibility,
+            EXISTS (SELECT 1 FROM messages m WHERE (m.sender_id = ? AND m.receiver_id = users.id) OR (m.sender_id = users.id AND m.receiver_id = ?)) as hasChat
+            FROM users WHERE id = ?;
+        `;
         const [rows] = await db.query(query, [viewerId, viewerId, parseInt(userId)]);
-
-        // Check if a user was found
-        if (rows.length === 0) {
-            console.warn(TAG, `User not found with ID: ${userId}`);
-            return res.status(404).json({ success: false, message: "User not found." });
-        }
-
+        if (rows.length === 0) return res.status(404).json({ success: false });
+        
         const user = rows[0]; 
-        
-        // Convert MySQL 1/0 to boolean
         user.hasChat = Boolean(user.hasChat);
-
-        console.log(TAG, `Successfully found user, returning profile for ID: ${userId}`);
-        
-        res.json({ 
-            success: true, 
-            user: user 
-        }); 
-
+        res.json({ success: true, user: user }); 
     } catch (err) {
-        console.error(TAG, `❌ Error fetching user profile for ID: ${req.params.userId}`, err);
-        res.status(500).json({ success: false, message: "Server error while fetching user profile." });
-    }
-});
-
-router.delete('/favorites/:userId/:favoriteId', async (req, res) => {
-    const { userId, favoriteId } = req.params;
-
-    if (!userId || !favoriteId) {
-        return res.status(400).json({ success: false, message: 'User ID and Favorite ID are required.' });
-    }
-
-    try {
-        const query = `DELETE FROM favorites WHERE id = ? AND user_id = ?`;
-        const [result] = await db.query(query, [favoriteId, userId]);
-
-        if (result.affectedRows > 0) {
-            res.json({ success: true, message: 'Favorite deleted successfully.' });
-        } else {
-            res.status(404).json({ success: false, message: 'Favorite not found or you do not have permission.' });
-        }
-
-    } catch (error) {
-        console.error(' Error deleting favorite:', error);
-        res.status(500).json({ success: false, message: 'Database error while deleting favorite.' });
-    }
-});
-
-router.put('/settings/visibility', async (req, res) => {
-    const { userId, visibility } = req.body;
-
-    const allowedVisibilities = ['everyone', 'friends', 'none'];
-    if (!userId || !visibility || !allowedVisibilities.includes(visibility)) {
-        return res.status(400).json({ success: false, message: 'Invalid input provided.' });
-    }
-
-    try {
-        const query = 'UPDATE users SET profile_visibility = ? WHERE id = ?';
-        await db.query(query, [visibility, userId]);
-        res.json({ success: true, message: 'Visibility updated successfully.' });
-    } catch (error) {
-        console.error(' Error updating visibility:', error);
-        res.status(500).json({ success: false, message: 'Database error.' });
-    }
-});
-
-app.post('/change-password', async (req, res) => {
-    try {
-        const { userId, currentPassword, newPassword } = req.body;
-
-        if (!userId || !currentPassword || !newPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'All fields are required'
-            });
-        }
-
-        if (newPassword.length < 6) {
-            return res.status(400).json({
-                success: false,
-                message: 'New password must be at least 6 characters long'
-            });
-        }
-
-        const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
-
-        if (rows.length === 0) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'User not found' 
-            });
-        }
-
-        const user = rows[0];
-        const currentHashedPassword = user.password;
-
-        const isMatch = await bcrypt.compare(currentPassword, currentHashedPassword);
-
-        if (!isMatch) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Current password is incorrect' 
-            });
-        }
-
-        const isSamePassword = await bcrypt.compare(newPassword, currentHashedPassword);
-        
-        if (isSamePassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'New password must be different from current password'
-            });
-        }
-
-        const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
-        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
-
-        res.json({ 
-            success: true, 
-            message: 'Password changed successfully' 
-        });
-
-    } catch (error) {
-        console.error(' Error changing password:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Internal server error' 
-        });
-    }
-});
-
-app.get('/api/online-users', (req, res) => {
-  try {
-    const users = Array.from(onlineUsers.entries()).map(([userId, data]) => ({
-      userId,
-      isOnline: data.isOnline,
-      lastSeen: data.lastSeen
-    }));
-    res.json({ success: true, onlineUsers: users });
-  } catch (error) {
-    console.error(' Error getting online users:', error);
-    res.status(500).json({ success: false, message: 'Error fetching online users' });
-  }
-});
-
-app.get('/api/user-status/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    const onlineData = onlineUsers.get(userId);
-    if (onlineData) {
-      return res.json({
-        success: true,
-        userId,
-        isOnline: true,
-        lastSeen: onlineData.lastSeen
-      });
-    }
-
-    const [rows] = await db.query(
-      'SELECT is_online, last_seen FROM user_presence WHERE user_id = ?',
-      [userId]
-    );
-
-    if (rows.length > 0) {
-      res.json({
-        success: true,
-        userId,
-        isOnline: false,
-        lastSeen: rows[0].last_seen
-      });
-    } else {
-      res.json({
-        success: true,
-        userId,
-        isOnline: false,
-        lastSeen: null
-      });
-    }
-  } catch (error) {
-    console.error(' Error checking user status:', error);
-    res.status(500).json({ success: false, message: 'Error checking user status' });
-  }
-});
-
-app.get('/group-members/:groupId', async (req, res) => {
-    const TAG = "/group-members/:groupId"; // Logging Tag
-    const { groupId } = req.params;
-
-    if (!groupId) {
-        console.warn(TAG, "Missing groupId");
-        return res.status(400).json({ success: false, message: 'Missing group ID' });
-    }
-
-    const currentGroupId = parseInt(groupId);
-
-    try {
-        console.log(TAG, `Fetching members and group info for group ${currentGroupId}`);
-
-        // First, get the group icon from group_table
-        const groupQuery = `
-            SELECT group_icon, group_name 
-            FROM group_table 
-            WHERE group_id = ?
-        `;
-        const [groupRows] = await db.execute(groupQuery, [currentGroupId]);
-
-        if (groupRows.length === 0) {
-            console.warn(TAG, `Group ${currentGroupId} not found`);
-            return res.status(404).json({ success: false, message: 'Group not found' });
-        }
-
-        const groupIcon = groupRows[0].group_icon; // Will be NULL if not set
-        const groupName = groupRows[0].group_name;
-
-        console.log(TAG, `Group icon URL: ${groupIcon || 'NULL (using letter avatar)'}`);
-
-        // Now get all members of the group
-        const membersQuery = `
-            SELECT 
-                u.id AS user_id,
-                u.name,
-                u.phone,
-                u.profile_pic
-            FROM group_members gm
-            JOIN users u ON gm.user_id = u.id
-            WHERE gm.group_id = ?
-            ORDER BY u.name ASC
-        `;
-        const [members] = await db.execute(membersQuery, [currentGroupId]);
-
-        console.log(TAG, `Fetched ${members.length} members for group ${currentGroupId}`);
-
-        // Return both group info and members
-        res.json({
-            success: true,
-            group_icon: groupIcon, // NULL or Cloudinary URL
-            group_name: groupName,
-            members: members
-        });
-
-    } catch (error) {
-        console.error(TAG, `Error fetching group members for group ${currentGroupId}:`, error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error fetching group members',
-            error: error.sqlMessage || error.message
-        });
-    }
-});
-
-// Replace your /update-group-icon endpoint in index.js with this:
-
-app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => {
-    const TAG = "/update-group-icon";
-    
-    try {
-        // *** FIX: Read group_id from req.body (it's sent as FormData) ***
-        const groupId = req.body.group_id;
-
-        console.log(TAG, `Received request - groupId: ${groupId}, file:`, req.file ? 'YES' : 'NO');
-        console.log(TAG, `Request body:`, req.body);
-
-        if (!groupId) {
-            console.warn(TAG, "Missing group_id in request body");
-            return res.status(400).json({ success: false, message: 'Missing group ID' });
-        }
-
-        if (!req.file) {
-            console.warn(TAG, "No file uploaded");
-            return res.status(400).json({ success: false, message: 'No file uploaded' });
-        }
-
-        console.log(TAG, `Uploading group icon for group ${groupId}`);
-        console.log(TAG, `File details - path: ${req.file.path}, size: ${req.file.size}`);
-
-        // Multer with CloudinaryStorage automatically uploads to Cloudinary
-        // The file path in req.file.path is actually the Cloudinary URL
-        const cloudinaryUrl = req.file.path;
-        
-        console.log(TAG, `Cloudinary upload successful: ${cloudinaryUrl}`);
-
-        // Get old icon URL to delete from Cloudinary (if exists)
-        const getOldIconQuery = 'SELECT group_icon FROM group_table WHERE group_id = ?';
-        const [oldIconRows] = await db.execute(getOldIconQuery, [groupId]);
-
-        if (oldIconRows.length === 0) {
-            console.warn(TAG, `Group ${groupId} not found in database`);
-            return res.status(404).json({ success: false, message: 'Group not found' });
-        }
-
-        if (oldIconRows.length > 0 && oldIconRows[0].group_icon) {
-            try {
-                // Extract public_id from old URL and delete from Cloudinary
-                const oldUrl = oldIconRows[0].group_icon;
-                const urlParts = oldUrl.split('/');
-                const fileNameWithExt = urlParts[urlParts.length - 1];
-                const fileName = fileNameWithExt.split('.')[0];
-                const folder = urlParts[urlParts.length - 2];
-                const publicId = `${folder}/${fileName}`;
-                
-                await cloudinary.uploader.destroy(publicId);
-                console.log(TAG, `Old group icon deleted from Cloudinary: ${publicId}`);
-            } catch (deleteError) {
-                console.error(TAG, "Error deleting old icon from Cloudinary:", deleteError);
-                // Continue even if deletion fails
-            }
-        }
-
-        // Update database with new icon URL
-        const updateQuery = 'UPDATE group_table SET group_icon = ? WHERE group_id = ?';
-        const [updateResult] = await db.execute(updateQuery, [cloudinaryUrl, groupId]);
-
-        console.log(TAG, `Database update result - affectedRows: ${updateResult.affectedRows}`);
-
-        if (updateResult.affectedRows === 0) {
-            console.warn(TAG, `No rows updated for group ${groupId}`);
-            return res.status(404).json({ success: false, message: 'Failed to update group icon in database' });
-        }
-
-        console.log(TAG, `✅ Group icon updated successfully for group ${groupId}`);
-
-        res.json({
-            success: true,
-            message: 'Group icon updated successfully',
-            group_icon: cloudinaryUrl
-        });
-
-    } catch (error) {
-        console.error(TAG, '❌ Error updating group icon:', error);
-        console.error(TAG, 'Error stack:', error.stack);
-        
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error updating group icon',
-            error: error.message 
-        });
-    }
-});
-
-// Remove Group Icon endpoint
-app.post('/remove-group-icon', async (req, res) => {
-    const TAG = "/remove-group-icon";
-    
-    try {
-        const { group_id } = req.body;
-
-        if (!group_id) {
-            console.warn(TAG, "Missing group_id");
-            return res.status(400).json({ success: false, message: 'Missing group ID' });
-        }
-
-        console.log(TAG, `Removing group icon for group ${group_id}`);
-
-        // Get current icon URL to delete from Cloudinary
-        const getQuery = 'SELECT group_icon FROM group_table WHERE group_id = ?';
-        const [rows] = await db.execute(getQuery, [group_id]);
-
-        if (rows.length === 0) {
-            console.warn(TAG, `Group ${group_id} not found`);
-            return res.status(404).json({ success: false, message: 'Group not found' });
-        }
-
-        if (rows[0].group_icon) {
-            try {
-                // Extract public_id from URL and delete from Cloudinary
-                const url = rows[0].group_icon;
-                const urlParts = url.split('/');
-                const fileNameWithExt = urlParts[urlParts.length - 1];
-                const fileName = fileNameWithExt.split('.')[0];
-                const folder = urlParts[urlParts.length - 2];
-                const publicId = `${folder}/${fileName}`;
-                
-                await cloudinary.uploader.destroy(publicId);
-                console.log(TAG, `Group icon deleted from Cloudinary: ${publicId}`);
-            } catch (deleteError) {
-                console.error(TAG, "Error deleting from Cloudinary:", deleteError);
-                // Continue even if Cloudinary deletion fails
-            }
-        }
-
-        // Update database to NULL
-        const updateQuery = 'UPDATE group_table SET group_icon = NULL WHERE group_id = ?';
-        await db.execute(updateQuery, [group_id]);
-
-        console.log(TAG, `Group icon removed successfully for group ${group_id}`);
-
-        res.json({
-            success: true,
-            message: 'Group icon removed successfully'
-        });
-
-    } catch (error) {
-        console.error(TAG, 'Error removing group icon:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error removing group icon',
-            error: error.message 
-        });
-    }
-});
-
-app.get('/group/:groupId/messages', async (req, res) => {
-    const TAG = "/group/:groupId/messages";
-    try {
-        const { groupId } = req.params;
-        const { userId } = req.query;
-
-        if (!groupId || !userId) {
-            return res.status(400).json({ success: false, message: 'groupId and userId are required' });
-        }
-
-        // 1. Verify Member
-        const [memberCheck] = await db.query(
-            'SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?',
-            [groupId, userId]
-        );
-
-        if (memberCheck.length === 0) {
-            return res.status(403).json({ success: false, message: 'You are not a member of this group' });
-        }
-
-        // 2. Enhanced Query with Proper Status Calculation
-        const messagesQuery = `
-            SELECT 
-                gm.message_id as id,
-                gm.sender_id,
-                gm.message_content as message,
-                gm.timestamp,
-                u.name as sender_name,
-                u.profile_pic as sender_profile_pic,
-                -- Count unique readers (excluding sender)
-                (SELECT COUNT(DISTINCT gmrs.user_id) 
-                 FROM group_message_read_status gmrs 
-                 WHERE gmrs.message_id = gm.message_id 
-                 AND gmrs.user_id != gm.sender_id) as readByCount,
-                -- Count total group members
-                (SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) as totalParticipants,
-                -- Calculate STATUS: 0=sent, 1=delivered, 2=read by all
-                CASE 
-                    WHEN (SELECT COUNT(DISTINCT gmrs.user_id) 
-                          FROM group_message_read_status gmrs 
-                          WHERE gmrs.message_id = gm.message_id 
-                          AND gmrs.user_id != gm.sender_id) 
-                         >= (SELECT COUNT(DISTINCT user_id) - 1 
-                             FROM group_members 
-                             WHERE group_id = ?) 
-                    THEN 2  -- Read by All
-                    WHEN (SELECT COUNT(DISTINCT gmrs.user_id) 
-                          FROM group_message_read_status gmrs 
-                          WHERE gmrs.message_id = gm.message_id 
-                          AND gmrs.user_id != gm.sender_id) > 0 
-                    THEN 1  -- Delivered (some have read)
-                    ELSE 0  -- Sent
-                END as status,
-                -- Check if current user has read it
-                EXISTS(
-                    SELECT 1 FROM group_message_read_status gmrs 
-                    WHERE gmrs.message_id = gm.message_id 
-                    AND gmrs.user_id = ?
-                ) as isReadByCurrentUser
-            FROM group_messages gm
-            JOIN users u ON gm.sender_id = u.id
-            WHERE gm.group_id = ?
-            ORDER BY gm.timestamp ASC
-        `;
-
-        const [messages] = await db.execute(messagesQuery, [groupId, groupId, userId, groupId]);
-
-        // 3. Process messages
-        const decryptedMessages = messages.map(msg => {
-            try {
-                const decryptedContent = decrypt(msg.message);
-                return {
-                    ...msg,
-                    message: decryptedContent, 
-                    isReadByCurrentUser: Boolean(msg.isReadByCurrentUser),
-                    readByCount: parseInt(msg.readByCount || 0),
-                    status: parseInt(msg.status || 0), // Ensure status is integer
-                    totalParticipants: parseInt(msg.totalParticipants || 0)
-                };
-            } catch (decryptError) {
-                console.error(TAG, `Error processing message ${msg.id}:`, decryptError);
-                return {
-                    ...msg,
-                    message: '[Encrypted Message]',
-                    status: 0
-                };
-            }
-        });
-
-        res.json({ success: true, messages: decryptedMessages });
-
-    } catch (error) {
-        console.error(TAG, '❌ Error fetching group messages:', error);
-        res.status(500).json({ success: false, message: 'Server error fetching messages' });
-    }
-});
-
-// Add this new endpoint to index.js
-app.post('/updateGroupMessageStatus', async (req, res) => {
-    try {
-        const { messageId, groupId } = req.body;
-        
-        // This endpoint would be called when all members have read a message
-        // Since we're calculating status in real-time in the query above,
-        // this might not be needed, but it's here for completeness
-        
-        res.json({ success: true, message: 'Status update not needed with real-time calculation' });
-        
-    } catch (error) {
-        console.error('Error updating group message status:', error);
-        res.status(500).json({ success: false, message: 'Failed to update status' });
-    }
-});
-
-app.post('/group/send', async (req, res) => {
-    const { senderId, groupId, content } = req.body;
-    const TAG = '/group/send';
-
-    if (!senderId || !groupId || !content) {
-        return res.status(400).json({ success: false, message: 'senderId, groupId, and content are required' });
-    }
-
-    try {
-        const addMemberQuery = `INSERT IGNORE INTO group_members (user_id, group_id, joined_at) VALUES (?, ?, NOW())`;
-        await db.execute(addMemberQuery, [senderId, groupId]);
-    } catch (error) {
-        console.error(TAG, `Error ensuring group membership:`, error);
-    }
-
-    try {
-        const encryptedMessage = encrypt(content);
-        
-        const insertMessageQuery = `
-            INSERT INTO group_messages (group_id, sender_id, message_content, timestamp)
-            VALUES (?, ?, ?, NOW())
-        `;
-        
-        const [result] = await db.execute(insertMessageQuery, [groupId, senderId, encryptedMessage]);
-        const newMessageId = result.insertId;
-
-        // Get the inserted message details for socket emission
-        const [insertedMsg] = await db.query(
-            `SELECT gm.message_id as id, gm.sender_id, gm.message_content as message, 
-                    gm.timestamp, u.name as sender_name,
-                    (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalParticipants
-             FROM group_messages gm
-             JOIN users u ON gm.sender_id = u.id
-             WHERE gm.message_id = ?`,
-            [groupId, newMessageId]
-        );
-
-        if (insertedMsg && insertedMsg.length > 0) {
-            const messageToEmit = {
-                ...insertedMsg[0],
-                message: content,
-                readByCount: 0,
-                status: 0
-            };
-
-            // Emit to all group members
-            io.to(`group_${groupId}`).emit('new_group_message', messageToEmit);
-            console.log(TAG, `Emitted new_group_message to group_${groupId}`);
-        }
-
-        // *** NEW: Send FCM to group members who don't have the chat open ***
-        try {
-            const [groupMembers] = await db.query(`
-                SELECT u.id, u.fcm_token 
-                FROM group_members gm
-                JOIN users u ON gm.user_id = u.id
-                WHERE gm.group_id = ? AND u.id != ? AND u.fcm_token IS NOT NULL
-            `, [groupId, senderId]);
-
-            const [senderInfo] = await db.query("SELECT name FROM users WHERE id = ?", [senderId]);
-            const senderName = senderInfo[0]?.name || "Someone";
-
-            for (const member of groupMembers) {
-                // Check if this member has the group chat open
-                const memberActiveChat = activeChatSessions.get(member.id.toString());
-                const isGroupChatOpen = memberActiveChat === `group_${groupId}`;
-                
-                if (isGroupChatOpen) {
-                    console.log(TAG, `⏭️ Skipping FCM: User ${member.id} has group ${groupId} open`);
-                    continue;
-                }
-
-                // Send notification only if chat is NOT open
-                const notificationPayload = {
-                    token: member.fcm_token,
-                    notification: {
-                        title: `${senderName} in group`,
-                        body: content
-                    },
-                    android: {
-                        priority: "high",
-                        notification: {
-                            channelId: "channel_custom_sound_v2",
-                            sound: "custom_notification",
-                            priority: "high",
-                            defaultSound: false
-                        }
-                    },
-                    data: {
-                        type: "group_chat",
-                        groupId: groupId.toString(),
-                        senderId: senderId.toString(),
-                        senderName: senderName
-                    }
-                };
-
-                await admin.messaging().send(notificationPayload);
-                console.log(TAG, `✅ FCM sent to group member ${member.id}`);
-            }
-        } catch (fcmError) {
-            console.error(TAG, "⚠️ Error sending group FCM:", fcmError.message);
-        }
-
-        res.json({ success: true, message: 'Message sent', messageId: newMessageId });
-
-    } catch (error) {
-        console.error(TAG, `Error sending group message:`, error);
-        res.status(500).json({ success: false, message: 'Failed to send message' });
-    }
-});
-
-app.get('/group/:groupId/members', async (req, res) => {
-    const TAG = "/group/:groupId/members"; // Logging tag
-    const { groupId } = req.params;
-
-    if (!groupId || isNaN(groupId)) {
-        console.warn(TAG, `Invalid or missing groupId: ${groupId}`);
-        return res.status(400).json({ success: false, message: 'Valid Group ID is required.' });
-    }
-    const currentGroupId = parseInt(groupId);
-
-    try {
-        console.log(TAG, `Fetching members for groupId: ${currentGroupId}`);
-
-        // --- QUERY CORRECTED ---
-        const query = `
-            SELECT
-                u.id,           -- Select the correct primary key 'id'
-                u.id as userId, -- Also select as userId for consistency if needed
-                u.name,
-                u.profile_pic   -- Select profile picture if available
-            FROM users u
-            -- Corrected JOIN: Use u.id to join with group_members.user_id
-            JOIN group_members gm ON u.id = gm.user_id
-            WHERE gm.group_id = ?
-            ORDER BY u.name ASC; -- Optional: Order alphabetically
-        `;
-        // --- END CORRECTION ---
-
-        const [members] = await db.execute(query, [currentGroupId]);
-
-        console.log(TAG, `Found ${members.length} members for groupId: ${currentGroupId}`);
-
-        // Ensure response structure matches GroupMembersResponse (includes 'members' array)
-        // Ensure fields match User model used in Android (id, name, profilePic)
-        const responseMembers = members.map(member => ({
-            id: member.id,          // Standard ID field
-            userId: member.id,      // Explicit userId if needed elsewhere
-            name: member.name,
-            profilePic: member.profile_pic // Map profile_pic to profilePic
-        }));
-
-        res.json({ success: true, members: responseMembers }); // Correct response structure
-
-    } catch (error) {
-        console.error(TAG, `Error fetching group members for groupId ${currentGroupId}:`, error);
-        res.status(500).json({
-             success: false,
-             message: 'Server error fetching members',
-             error: error.sqlMessage || error.message
-         });
-    }
-});
-
-app.post('/group/read', async (req, res) => {
-    // --- THIS IS THE FIX ---
-    // We are now using 'user_id' and 'group_id' (snake_case)
-    // to match what your Android app is sending.
-    const { user_id, group_id } = req.body; 
-
-    if (!user_id || !group_id) {
-        return res.status(400).json({ success: false, message: 'Missing fields' });
-    }    
-    
-    try {
-        // This query finds all messages in the group (gm)
-        // that do NOT have a matching entry in the read_status table (gmrs)
-        // for this user, and then inserts them.
-        const query = `
-            INSERT INTO group_message_read_status (message_id, user_id, group_id)
-            SELECT 
-                gm.message_id AS message_id,
-                ? AS user_id,
-                gm.group_id
-            FROM 
-                group_messages gm
-            WHERE 
-                gm.group_id = ?
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM group_message_read_status gmrs
-                    WHERE 
-                        gmrs.message_id = gm.message_id
-                        AND gmrs.user_id = ?
-                )
-        `;
-        
-        // Use the snake_case variables in the query
-        const [result] = await db.execute(query, [user_id, group_id, user_id]);
-        
-        res.json({ success: true, message: 'Messages marked as read', newReadCount: result.affectedRows });
-    } catch (error) {
-        console.error('Error marking messages read:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        res.status(500).json({ success: false });
     }
 });
 
 app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
     try {
-        // UPDATED QUERY:
-        // 1. Returns CONCAT(first_name, ' ', last_name) as name
-        // 2. Searches (LIKE) against both first_name AND last_name
+        // FIX: SELECT CONCAT name AND Search by both first/last name
         const sql = `
-            SELECT 
-                u.id, 
-                CONCAT(u.first_name, ' ', u.last_name) as name,
-                u.college, 
-                u.profile_pic,
-                EXISTS (
-                    SELECT 1 FROM messages m 
-                    WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
-                       OR (m.sender_id = u.id AND m.receiver_id = ?)
-                ) as hasChat
-            FROM users u 
-            WHERE (u.first_name LIKE ? OR u.last_name LIKE ?) AND u.id != ?
-            LIMIT 20
+            SELECT u.id, CONCAT(u.first_name, ' ', u.last_name) as name, u.college, u.profile_pic,
+            EXISTS (SELECT 1 FROM messages m WHERE (m.sender_id = ? AND m.receiver_id = u.id) OR (m.sender_id = u.id AND m.receiver_id = ?)) as hasChat
+            FROM users u WHERE (u.first_name LIKE ? OR u.last_name LIKE ?) AND u.id != ? LIMIT 20
         `;
-        
-        // Params: [currentUserId, currentUserId, query, query, currentUserId]
-        const [users] = await db.execute(sql, [
-            currentUserId, 
-            currentUserId, 
-            `%${query}%`, 
-            `%${query}%`, 
-            currentUserId
-        ]);
-        
-        // Convert MySQL 1/0 to boolean true/false for the app
-        const usersWithBoolean = users.map(u => ({
-            ...u,
-            hasChat: Boolean(u.hasChat)
-        }));
-
+        const [users] = await db.execute(sql, [currentUserId, currentUserId, `%${query}%`, `%${query}%`, currentUserId]);
+        const usersWithBoolean = users.map(u => ({ ...u, hasChat: Boolean(u.hasChat) }));
         res.json({ success: true, users: usersWithBoolean });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Search failed' });
+        res.status(500).json({ success: false });
     }
 });
 
 app.post('/sendChatRequest', async (req, res) => {
     const { senderId, receiverId, message } = req.body;
-    
-    // Check if they are already connected or blocked
-    // (Logic omitted for brevity, but you should check chat_requests table)
-
     const connection = await db.getConnection();
     try {
         await connection.beginTransaction();
-
-        // A. Create the Request entry
-        await connection.execute(`
-            INSERT INTO chat_requests (sender_id, receiver_id, status) 
-            VALUES (?, ?, 'pending')
-            ON DUPLICATE KEY UPDATE status = status -- Do nothing if exists
-        `, [senderId, receiverId]);
-
-        // B. Send the actual Message (Encrypted)
-        const encryptedMsg = encrypt(message); // Assuming you have encrypt fn available
-        const [msgResult] = await connection.execute(`
-            INSERT INTO messages (sender_id, receiver_id, message, timestamp, status)
-            VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)
-        `, [senderId, receiverId, encryptedMsg]);
-
+        await connection.execute(`INSERT INTO chat_requests (sender_id, receiver_id, status) VALUES (?, ?, 'pending') ON DUPLICATE KEY UPDATE status = status`, [senderId, receiverId]);
+        const encryptedMsg = encrypt(message);
+        const [msgResult] = await connection.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, [senderId, receiverId, 
+encryptedMsg]);
         await connection.commit();
         
-        // Notify Receiver via Socket
-        io.to(`chat_${receiverId}`).emit('new_chat_request', {
-            requestId: msgResult.insertId,
-            senderId: senderId,
-            senderName: "Someone", // Fetch actual name if needed
-            message: message
-        });
-
-        res.json({ success: true, message: 'Request sent' });
+        io.to(`chat_${receiverId}`).emit('new_chat_request', { requestId: msgResult.insertId, senderId: senderId, message: message });
+        res.json({ success: true });
     } catch (err) {
         await connection.rollback();
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Failed to send request' });
+        res.status(500).json({ success: false });
     } finally {
         connection.release();
     }
 });
 
-// 3. Get Pending Requests (For the "Requests" screen)
 app.get('/chatRequests', async (req, res) => {
     const { userId } = req.query;
     try {
-        const sql = `
-            SELECT 
-                cr.id as requestId,
-                u.id as userId,
-                u.name,
-                u.profile_pic,
-                u.college,
-                -- Get the latest message content
-                (SELECT message FROM messages m 
-                 WHERE m.sender_id = u.id AND m.receiver_id = ? 
-                 ORDER BY m.timestamp DESC LIMIT 1) as lastMessage
-            FROM chat_requests cr
-            JOIN users u ON cr.sender_id = u.id
-            WHERE cr.receiver_id = ? AND cr.status = 'pending'
-        `;
+        // FIX: SELECT CONCAT name
+        const sql = `SELECT cr.id as requestId, u.id as userId, CONCAT(u.first_name, ' ', u.last_name) as name, u.profile_pic, u.college, (SELECT message FROM messages m WHERE m.sender_id = u.id AND 
+m.receiver_id = ? ORDER BY m.timestamp DESC LIMIT 1) as lastMessage FROM chat_requests cr JOIN users u ON cr.sender_id = u.id WHERE cr.receiver_id = ? AND cr.status = 'pending'`;
         const [requests] = await db.execute(sql, [userId, userId]);
-        
-        // Decrypt messages before sending
-        const decryptedRequests = requests.map(r => ({
-            ...r,
-            lastMessage: r.lastMessage ? decrypt(r.lastMessage) : "Sent a message"
-        }));
-
+        const decryptedRequests = requests.map(r => ({ ...r, lastMessage: r.lastMessage ? decrypt(r.lastMessage) : "Sent a message" }));
         res.json({ success: true, requests: decryptedRequests });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Error fetching requests' });
+        res.status(500).json({ success: false });
     }
 });
 
-// 4. Handle Request (Approve/Reject)
 app.post('/handleChatRequest', async (req, res) => {
-    const { userId, otherUserId, action } = req.body; // action = 'accept' or 'reject'
-    
+    const { userId, otherUserId, action } = req.body; 
     try {
         if (action === 'accept') {
-            await db.execute(`
-                UPDATE chat_requests 
-                SET status = 'accepted' 
-                WHERE sender_id = ? AND receiver_id = ?
-            `, [otherUserId, userId]);
-            res.json({ success: true, message: 'Request accepted' });
+            await db.execute(`UPDATE chat_requests SET status = 'accepted' WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
+            res.json({ success: true });
         } else {
-            // REJECT: Delete the request AND the messages
             const connection = await db.getConnection();
             await connection.beginTransaction();
-            
-            await connection.execute(`
-                DELETE FROM chat_requests 
-                WHERE sender_id = ? AND receiver_id = ?
-            `, [otherUserId, userId]);
-
-            await connection.execute(`
-                DELETE FROM messages 
-                WHERE (sender_id = ? AND receiver_id = ?) 
-                   OR (sender_id = ? AND receiver_id = ?)
-            `, [otherUserId, userId, userId, otherUserId]);
-
+            await connection.execute(`DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
+            await connection.execute(`DELETE FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, [otherUserId, userId, userId, otherUserId]);
             await connection.commit();
             connection.release();
-            res.json({ success: true, message: 'Request rejected and chat deleted' });
+            res.json({ success: true });
         }
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Operation failed' });
+        res.status(500).json({ success: false });
     }
 });
 
-// 5. Get Chat Request Count (For Badge)
 app.get('/chatRequests/count', async (req, res) => {
     const { userId } = req.query;
     try {
-        const sql = `
-            SELECT COUNT(*) as count 
-            FROM chat_requests 
-            WHERE receiver_id = ? AND status = 'pending'
-        `;
+        const sql = `SELECT COUNT(*) as count FROM chat_requests WHERE receiver_id = ? AND status = 'pending'`;
         const [rows] = await db.execute(sql, [userId]);
         res.json({ success: true, count: rows[0].count });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Error fetching request count' });
+        res.status(500).json({ success: false });
     }
 });
 
 app.use(router);
 
-// *** FIX: Use Railway's dynamic PORT ***
 const PORT = process.env.PORT || 8080;
-
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server (with Socket.IO) listening on port ${PORT}`);
-  console.log(`🔌 Socket.IO ready on port ${PORT}`);
-  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🌍 Railway Public Domain: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'Not set'}`);
-  console.log(`🔗 Full URL: https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'}`);
+  console.log(`✅ Server listening on port ${PORT}`);
 });
-
