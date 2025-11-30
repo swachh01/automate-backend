@@ -428,15 +428,16 @@ app.get('/debug/routes', (req, res) => {
 app.post("/create-account", async (req, res) => {
     const TAG = "/create-account";
     try {
-        const { name, college, gender, phone, country_code, password } = req.body;
+        // 1. Accept first_name and last_name
+        const { first_name, last_name, college, gender, phone, country_code, password } = req.body;
 
-        // 1. --- Validation ---
-        if (!name || !college || !gender || !phone || !country_code || !password) {
+        // --- Validation ---
+        if (!first_name || !last_name || !college || !gender || !phone || !country_code || !password) {
             console.warn(TAG, "Request missing required fields.");
             return res.status(400).json({ success: false, message: "All fields are required." });
         }
 
-        // Add your password validation rules (same as /savePassword)
+        // Add your password validation rules
         if (password.length < 7 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password) || !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(password)) {
             return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
         }
@@ -458,14 +459,13 @@ app.post("/create-account", async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
         // 4. --- Create or Overwrite 'pending' user ---
-        // This query will INSERT a new user.
-        // If a user with that phone+country_code already exists (e.g., 'pending'),
-        // it will UPDATE their details instead. This is exactly the flow you wanted.
+        // UPDATED QUERY: Uses first_name and last_name
         const query = `
-            INSERT INTO users (name, college, gender, phone, country_code, password, signup_status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
+            INSERT INTO users (first_name, last_name, college, gender, phone, country_code, password, signup_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
             ON DUPLICATE KEY UPDATE
-                name = VALUES(name),
+                first_name = VALUES(first_name),
+                last_name = VALUES(last_name),
                 college = VALUES(college),
                 gender = VALUES(gender),
                 password = VALUES(password),
@@ -473,13 +473,17 @@ app.post("/create-account", async (req, res) => {
                 updated_at = NOW();
         `;
         
-        await db.query(query, [name, college, gender, phone, country_code, hashedPassword]);
+        await db.query(query, [first_name, last_name, college, gender, phone, country_code, hashedPassword]);
         console.log(TAG, `Successfully inserted/updated user for phone: ${country_code}${phone}`);
 
         // 5. --- Fetch and return the new user data ---
-        // (We fetch it again to get the auto-incremented ID)
+        // UPDATED QUERY: Concatenates names so Android receives "name"
         const [userRows] = await db.query(
-            'SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE phone = ? AND country_code = ?',
+            `SELECT 
+                id, 
+                CONCAT(first_name, ' ', last_name) as name, 
+                college, phone, gender, dob, degree, year, profile_pic 
+             FROM users WHERE phone = ? AND country_code = ?`,
             [phone, country_code]
         );
         
@@ -2267,12 +2271,12 @@ router.post('/favorites', async (req, res) => {
     }
 });
 
-// ADD THIS ENTIRE BLOCK TO YOUR index.js FILE
 
 app.get("/user/:userId", async (req, res) => {
-    const TAG = "/user/:userId"; // Logging tag
+    const TAG = "/user/:userId"; 
     try {
-        const { userId } = req.params; // Get the user ID from the URL path (e.g., "64")
+        const { userId } = req.params; 
+        const { viewerId } = req.query; // Required for the button logic
 
         // Validation
         if (!userId || isNaN(userId)) {
@@ -2280,18 +2284,27 @@ app.get("/user/:userId", async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid or missing user ID." });
         }
 
-        console.log(TAG, `Fetching profile data for userId: ${userId}`);
+        console.log(TAG, `Fetching profile data for userId: ${userId} by viewer: ${viewerId}`);
 
-        // --- Query the database for the user's details ---
-        // IMPORTANT: Explicitly list columns and EXCLUDE 'password'
+        // UPDATED QUERY: 
+        // 1. Concatenates first_name + last_name as 'name'
+        // 2. Checks if a chat exists between viewerId and userId
         const query = `
             SELECT
-                id, name, college, gender, dob, degree, year, profile_pic, profile_visibility
+                id, 
+                CONCAT(first_name, ' ', last_name) as name,
+                college, gender, dob, degree, year, profile_pic, profile_visibility,
+                EXISTS (
+                    SELECT 1 FROM messages m 
+                    WHERE (m.sender_id = ? AND m.receiver_id = users.id) 
+                       OR (m.sender_id = users.id AND m.receiver_id = ?)
+                ) as hasChat
             FROM users
             WHERE id = ?;
         `;
         
-        const [rows] = await db.query(query, [parseInt(userId)]);
+        // Params: [viewerId, viewerId, userId]
+        const [rows] = await db.query(query, [viewerId, viewerId, parseInt(userId)]);
 
         // Check if a user was found
         if (rows.length === 0) {
@@ -2299,21 +2312,19 @@ app.get("/user/:userId", async (req, res) => {
             return res.status(404).json({ success: false, message: "User not found." });
         }
 
-        const user = rows[0]; // The user data
-
-        // --- IMPORTANT: As requested, HIDE the phone number ---
-        // We didn't select 'phone' or 'country_code', so they won't be sent.
+        const user = rows[0]; 
+        
+        // Convert MySQL 1/0 to boolean
+        user.hasChat = Boolean(user.hasChat);
 
         console.log(TAG, `Successfully found user, returning profile for ID: ${userId}`);
         
-        // Send the successful response in the format GetUserResponse expects
         res.json({ 
             success: true, 
-            user: user // Send the user object
+            user: user 
         }); 
 
     } catch (err) {
-        // Handle any unexpected server or database errors
         console.error(TAG, `❌ Error fetching user profile for ID: ${req.params.userId}`, err);
         res.status(500).json({ success: false, message: "Server error while fetching user profile." });
     }
@@ -3017,15 +3028,16 @@ app.post('/group/read', async (req, res) => {
     }
 });
 
-// 1. Search Users by Name (Partial Match) + Check for Existing Chat
 app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
     try {
-        // We add a subquery (EXISTS) to check if any message exists between these two users
+        // UPDATED QUERY:
+        // 1. Returns CONCAT(first_name, ' ', last_name) as name
+        // 2. Searches (LIKE) against both first_name AND last_name
         const sql = `
             SELECT 
                 u.id, 
-                u.name, 
+                CONCAT(u.first_name, ' ', u.last_name) as name,
                 u.college, 
                 u.profile_pic,
                 EXISTS (
@@ -3034,12 +3046,18 @@ app.get('/searchUsers', async (req, res) => {
                        OR (m.sender_id = u.id AND m.receiver_id = ?)
                 ) as hasChat
             FROM users u 
-            WHERE u.name LIKE ? AND u.id != ?
+            WHERE (u.first_name LIKE ? OR u.last_name LIKE ?) AND u.id != ?
             LIMIT 20
         `;
         
-        // Params: [currentUserId, currentUserId, %query%, currentUserId]
-        const [users] = await db.execute(sql, [currentUserId, currentUserId, `%${query}%`, currentUserId]);
+        // Params: [currentUserId, currentUserId, query, query, currentUserId]
+        const [users] = await db.execute(sql, [
+            currentUserId, 
+            currentUserId, 
+            `%${query}%`, 
+            `%${query}%`, 
+            currentUserId
+        ]);
         
         // Convert MySQL 1/0 to boolean true/false for the app
         const usersWithBoolean = users.map(u => ({
