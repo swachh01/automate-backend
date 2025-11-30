@@ -517,10 +517,23 @@ app.post("/login", async (req, res) => {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
   try {
+    // --- UPDATED QUERY: Use CONCAT to combine first_name and last_name into 'name' ---
     const [rows] = await db.query(
-      `SELECT id, name, college, phone, gender, dob, degree, year, profile_pic, password FROM users WHERE phone = ?`,
+      `SELECT 
+        id, 
+        CONCAT(first_name, ' ', last_name) as name, 
+        college, 
+        phone, 
+        gender, 
+        dob, 
+        degree, 
+        year, 
+        profile_pic, 
+        password 
+       FROM users WHERE phone = ?`,
       [phone]
     );
+
     if (!rows.length) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
@@ -550,7 +563,6 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
 
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
