@@ -551,6 +551,7 @@ app.post("/login", async (req, res) => {
   }
 });
 
+
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request ===");
@@ -597,7 +598,22 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       
     await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
     
-    const [rows] = await db.query("SELECT id, name, college, phone, gender, dob, degree, year, profile_pic FROM users WHERE id = ?", [userId]);
+    // --- UPDATED QUERY BELOW ---
+    // Uses CONCAT(first_name, ' ', last_name) as name to fix the column error
+    const [rows] = await db.query(
+      `SELECT 
+        id, 
+        CONCAT(first_name, ' ', last_name) as name, 
+        college, 
+        phone, 
+        gender, 
+        dob, 
+        degree, 
+        year, 
+        profile_pic 
+       FROM users WHERE id = ?`, 
+      [userId]
+    );
     
     console.log("Updated user:", rows[0]);
     
