@@ -947,6 +947,10 @@ app.get('/getChatUsers', async (req, res) => {
                 CONCAT(u_sender.first_name, ' ', u_sender.last_name) AS last_sender_name,
                 CASE WHEN lc.chat_type = 'individual' THEN CONCAT(u_partner.first_name, ' ', u_partner.last_name) ELSE NULL END AS username,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_pic ELSE NULL END AS profile_pic,
+                
+                -- ADDED GENDER HERE
+                CASE WHEN lc.chat_type = 'individual' THEN u_partner.gender ELSE NULL END AS gender,
+                
                 CASE WHEN lc.chat_type = 'group' THEN gt.group_name ELSE NULL END AS group_name,
                  (SELECT COUNT(*) FROM messages m_unread
                   WHERE lc.chat_type = 'individual'
@@ -1003,6 +1007,7 @@ app.get('/getChatUsers', async (req, res) => {
                 timestamp: row.last_timestamp, 
                 unreadCount: unreadCount,
                 profilePicUrl: profilePicUrl,
+                gender: row.gender, // Mapped here
                 lastSenderId: row.last_sender_id,
                 lastSenderName: row.last_sender_name,
                 lastMessageStatus: row.last_message_status 
@@ -2075,14 +2080,40 @@ app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
     try {
         const sql = `
-            SELECT u.id, CONCAT(u.first_name, ' ', u.last_name) as name, u.college, u.profile_pic,
-            EXISTS (SELECT 1 FROM messages m WHERE (m.sender_id = ? AND m.receiver_id = u.id) OR (m.sender_id = u.id AND m.receiver_id = ?)) as hasChat
-            FROM users u WHERE (u.first_name LIKE ? OR u.last_name LIKE ?) AND u.id != ? LIMIT 20
+            SELECT 
+                u.id, 
+                CONCAT(u.first_name, ' ', u.last_name) as name, 
+                u.college, 
+                u.profile_pic,
+                u.gender, -- ADDED GENDER HERE
+                EXISTS (
+                    SELECT 1 FROM messages m 
+                    WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
+                       OR (m.sender_id = u.id AND m.receiver_id = ?)
+                ) as hasChat
+            FROM users u 
+            WHERE (u.first_name LIKE ? OR u.last_name LIKE ?) AND u.id != ?
+            LIMIT 20
         `;
-        const [users] = await db.execute(sql, [currentUserId, currentUserId, `%${query}%`, `%${query}%`, currentUserId]);
-        res.json({ success: true, users: users.map(u => ({ ...u, hasChat: Boolean(u.hasChat) })) });
+        
+        const [users] = await db.execute(sql, [
+            currentUserId, 
+            currentUserId, 
+            `%${query}%`, 
+            `%${query}%`, 
+            currentUserId
+        ]);
+
+        // Include gender in the mapped response
+        const usersWithBoolean = users.map(u => ({
+            ...u,
+            hasChat: Boolean(u.hasChat)
+        }));
+
+        res.json({ success: true, users: usersWithBoolean });
     } catch (err) {
-        res.status(500).json({ success: false });
+        console.error(err);
+        res.status(500).json({ success: false, message: 'Search failed' });
     }
 });
 
