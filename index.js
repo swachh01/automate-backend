@@ -735,6 +735,7 @@ app.get('/getMessages', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
+    // Select * will capture new columns (message_type, latitude, longitude, expires_at)
     const sql = `
       SELECT * FROM messages
       WHERE (sender_id = ? AND receiver_id = ?)
@@ -749,12 +750,14 @@ app.get('/getMessages', async (req, res) => {
     const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
         
     const decryptedMessages = visibleMessages.map(msg => {
-        return { ...msg, message: decrypt(msg.message) };
+        return { 
+            ...msg, 
+            message: decrypt(msg.message) // Decrypt content 
+        };
     });
         
     res.json({ success: true, messages: decryptedMessages });
   } catch (error) {
-    console.error('❌ Error fetching messages:', error);
     res.status(500).json({ success: false, message: 'Database error' });
   } 
 });
@@ -778,7 +781,8 @@ app.post('/sendMessage', async (req, res) => {
   const TAG = "/sendMessage";
 
   try {
-    const { sender_id, receiver_id, message } = req.body;
+    // --- UPDATED: Destructure new location fields ---
+    const { sender_id, receiver_id, message, message_type, latitude, longitude, duration } = req.body;
 
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'Missing fields' });
@@ -795,24 +799,48 @@ app.post('/sendMessage', async (req, res) => {
     }
 
     const encryptedMessage = encrypt(message);
-    const query = `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`;
-    const [result] = await db.query(query, [sender_id, receiver_id, encryptedMessage]);
+    
+    // --- UPDATED: Handle Message Type and Expiry ---
+    const type = message_type || 'text';
+    let expiresAt = null;
+
+    if (type === 'location' && duration && duration > 0) {
+        // Duration is in minutes
+        const date = new Date();
+        date.setMinutes(date.getMinutes() + duration);
+        // Format for MySQL: YYYY-MM-DD HH:MM:SS
+        expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
+    }
+
+    const query = `
+        INSERT INTO messages 
+        (sender_id, receiver_id, message, timestamp, status, message_type, latitude, longitude, expires_at) 
+        VALUES (?, ?, ?, UTC_TIMESTAMP(), 0, ?, ?, ?, ?)
+    `;
+    const [result] = await db.query(query, [
+        sender_id, receiver_id, encryptedMessage, type, latitude || null, longitude || null, expiresAt
+    ]);
 
     if (!result.insertId) {
       return res.status(500).json({ success: false, message: 'Failed to save message' });
     }
 
     const newMessageId = result.insertId;
-    const [insertedMsg] = await db.query('SELECT timestamp FROM messages WHERE id = ?', [newMessageId]);
-    const msgTimestamp = insertedMsg.length > 0 ? insertedMsg[0].timestamp : new Date();
+    // Fetch full message including new columns
+    const [insertedMsg] = await db.query('SELECT * FROM messages WHERE id = ?', [newMessageId]);
+    const msgData = insertedMsg[0];
 
     const messageToEmit = {
-      id: newMessageId,
-      sender_id: sender_id,
-      receiver_id: receiver_id,
-      message: message, 
-      timestamp: msgTimestamp,
-      status: 0
+      id: msgData.id,
+      sender_id: msgData.sender_id,
+      receiver_id: msgData.receiver_id,
+      message: message, // Send DECRYPTED to socket
+      timestamp: msgData.timestamp,
+      status: 0,
+      message_type: msgData.message_type,
+      latitude: msgData.latitude,
+      longitude: msgData.longitude,
+      expires_at: msgData.expires_at
     };
 
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
@@ -831,7 +859,7 @@ app.post('/sendMessage', async (req, res) => {
         if (userRows.length > 0 && userRows[0].fcm_token) {
           const messagePayload = {
             token: userRows[0].fcm_token,
-            notification: { title: senderName, body: message },
+            notification: { title: senderName, body: type === 'location' ? '📍 Shared a location' : message },
             android: {
               priority: "high",
               notification: { channelId: "channel_custom_sound_v2", sound: "custom_notification", priority: "high", defaultSound: false }
