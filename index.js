@@ -1044,13 +1044,25 @@ app.post("/deleteMessageForMe", async (req, res) => {
   }
 });
 
+// ================= BLOCK USER =================
 app.post('/block', async (req, res) => {
   try {
     const { blocker_id, blocked_id } = req.body;
     if (!blocker_id || !blocked_id) {
       return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
     }
+
     await db.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)', [blocker_id, blocked_id]);
+
+    // --- REAL-TIME UPDATE START ---
+    const eventData = { blockerId: parseInt(blocker_id), blockedId: parseInt(blocked_id) };
+    
+    // Notify the person being blocked (so their UI disables input)
+    io.to(`chat_${blocked_id}`).emit('user_blocked', eventData);
+    // Notify the blocker (optional, but good for multi-device sync)
+    io.to(`chat_${blocker_id}`).emit('user_blocked', eventData);
+    // --- REAL-TIME UPDATE END ---
+
     res.json({ success: true, message: 'User blocked successfully.' });
   } catch (err) {
     console.error(" Error blocking user:", err);
@@ -1058,13 +1070,25 @@ app.post('/block', async (req, res) => {
   }
 });
 
+// ================= UNBLOCK USER =================
 app.post('/unblock', async (req, res) => {
   try {
     const { blocker_id, blocked_id } = req.body;
     if (!blocker_id || !blocked_id) {
       return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
     }
+
     await db.query('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?', [blocker_id, blocked_id]);
+
+    // --- REAL-TIME UPDATE START ---
+    const eventData = { blockerId: parseInt(blocker_id), blockedId: parseInt(blocked_id) };
+
+    // Notify the person being unblocked
+    io.to(`chat_${blocked_id}`).emit('user_unblocked', eventData);
+    // Notify the blocker
+    io.to(`chat_${blocker_id}`).emit('user_unblocked', eventData);
+    // --- REAL-TIME UPDATE END ---
+
     res.json({ success: true, message: 'User unblocked successfully.' });
   } catch (err) {
     console.error(" Error unblocking user:", err);
