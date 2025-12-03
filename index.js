@@ -1961,6 +1961,20 @@ app.get('/group-members/:groupId', async (req, res) => {
     }
 });
 
+app.post('/leaveGroup', async (req, res) => {
+    const { userId, groupId } = req.body;
+    try {
+        await db.query("DELETE FROM group_members WHERE user_id = ? AND group_id = ?", [userId, groupId]);
+        
+        // Notify others that user left (Optional)
+        io.to(`group_${groupId}`).emit('group_notification', { message: `A user has left the group` });
+        
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false });
+    }
+});
+
 app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => {
     const TAG = "/update-group-icon";
     try {
