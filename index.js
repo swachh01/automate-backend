@@ -1687,22 +1687,49 @@ app.post("/cleanupDeletedMessages", async (req, res) => {
 });
 
 app.delete('/deleteMessage/:messageId', async (req, res) => {
+  const TAG = "DELETE /deleteMessage";
   try {
     const { messageId } = req.params;
     const { userId } = req.body;
+
     if (!userId) {
       return res.status(400).json({ success: false, message: 'userId is required' });
     }
-    const query = 'DELETE FROM messages WHERE id = ? AND sender_id = ?';
-    const [result] = await db.execute(query, [messageId, userId]);
+
+    // 1. Fetch message details first to identify the chat room partners
+    const [messages] = await db.execute('SELECT * FROM messages WHERE id = ?', [messageId]);
+    
+    if (messages.length === 0) {
+        return res.status(404).json({ success: false, message: 'Message not found' });
+    }
+
+    const msg = messages[0];
+
+    // Security check: Only sender can delete for everyone
+    if (msg.sender_id != userId) {
+        return res.status(403).json({ success: false, message: 'Only the sender can delete for everyone' });
+    }
+
+    // 2. Delete from database
+    const query = 'DELETE FROM messages WHERE id = ?';
+    const [result] = await db.execute(query, [messageId]);
 
     if (result.affectedRows > 0) {
+      // 3. EMIT SOCKET EVENT TO BOTH USERS
+      const eventData = { messageId: parseInt(messageId) };
+      
+      // Notify the receiver
+      io.to(`chat_${msg.receiver_id}`).emit('message_deleted', eventData);
+      
+      // Notify the sender (in case they have multiple devices or just to confirm)
+      io.to(`chat_${msg.sender_id}`).emit('message_deleted', eventData);
+
       res.json({ success: true, message: 'Message deleted successfully' });
     } else {
-      res.status(403).json({ success: false, message: 'Forbidden' });
+      res.status(404).json({ success: false, message: 'Message not found during delete' });
     }
   } catch (error) {
-    console.error('Error deleting message:', error);
+    console.error(TAG, 'Error deleting message:', error);
     res.status(500).json({ success: false, message: 'Failed to delete message' });
   }
 });
