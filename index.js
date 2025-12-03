@@ -1647,6 +1647,7 @@ app.post("/hideChat", async (req, res) => {
              return res.status(400).json({ success: false, message: 'Cannot hide chat with yourself' });
         }
         
+        // 1. Get all message IDs involved in this chat
         const [messages] = await db.query(
             `SELECT id FROM messages 
              WHERE (sender_id = ? AND receiver_id = ?) 
@@ -1658,6 +1659,7 @@ app.post("/hideChat", async (req, res) => {
             return res.json({ success: true, message: 'Chat hidden successfully (no messages).' });
         }
 
+        // 2. Mark them as hidden for the current user requesting the delete
         const valuesToHide = messages.map(msg => [msg.id, userId, new Date()]);
         
         const hideQuery = `
@@ -1665,7 +1667,35 @@ app.post("/hideChat", async (req, res) => {
             VALUES ?
         `; 
         await db.query(hideQuery, [valuesToHide]);
-        res.json({ success: true, message: 'Chat history hidden successfully.' });
+
+        // 3. NEW LOGIC: Check for messages hidden by BOTH users and delete permanently
+        const messageIds = messages.map(m => m.id);
+        
+        if (messageIds.length > 0) {
+            // Find message_ids from this specific chat that are now present 
+            // in hidden_messages for at least 2 distinct users (sender & receiver)
+            const [fullyHiddenMessages] = await db.query(`
+                SELECT message_id
+                FROM hidden_messages
+                WHERE message_id IN (?)
+                GROUP BY message_id
+                HAVING COUNT(DISTINCT user_id) >= 2
+            `, [messageIds]);
+
+            if (fullyHiddenMessages.length > 0) {
+                const idsToDelete = fullyHiddenMessages.map(x => x.message_id);
+                
+                // Delete from main messages table (Permanent Deletion)
+                await db.query(`DELETE FROM messages WHERE id IN (?)`, [idsToDelete]);
+                
+                // Cleanup the hidden_messages table reference
+                await db.query(`DELETE FROM hidden_messages WHERE message_id IN (?)`, [idsToDelete]);
+                
+                console.log(TAG, `Permanently deleted ${idsToDelete.length} messages as both users have hidden the chat.`);
+            }
+        }
+
+        res.json({ success: true, message: 'Chat history hidden and cleaned up.' });
 
     } catch (error) {
         console.error(TAG, "❌ Error in /hideChat:", error);
