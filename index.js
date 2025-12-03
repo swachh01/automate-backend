@@ -2035,12 +2035,13 @@ app.get('/group/:groupId/messages', async (req, res) => {
         }
 
         // --- NEW LOGIC: OPEN JOIN ---
-        // REMOVED 'joined_at' to fix the database error
+        // Ensure user is a member (Removed 'joined_at' to match your DB)
         await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
         
         // --- FETCH MESSAGES ---
         const messagesQuery = `
             SELECT gm.message_id as id, gm.sender_id, gm.message_content as message, gm.timestamp,
+                gm.message_type, gm.latitude, gm.longitude,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name, u.profile_pic as sender_profile_pic,
                 
                 (SELECT COUNT(DISTINCT gmrs.user_id) 
@@ -2099,7 +2100,7 @@ app.post('/updateGroupMessageStatus', async (req, res) => {
 });
 
 app.post('/group/send', async (req, res) => {
-    const { senderId, groupId, content } = req.body;
+    const { senderId, groupId, content, message_type, latitude, longitude } = req.body;
     const TAG = '/group/send';
     
     if (!senderId || !groupId || !content) {
@@ -2108,19 +2109,26 @@ app.post('/group/send', async (req, res) => {
 
     try {
         // --- NEW LOGIC: BECOME MEMBER ON SEND ---
-        // REMOVED 'joined_at' to fix the database error
+        // Removed 'joined_at' to match your DB
         await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [senderId, groupId]);
 
         // --- ENCRYPT & SEND ---
         const encryptedMessage = encrypt(content);
         
+        // Prepare variables for insertion (handle nulls)
+        const type = message_type || 'text';
+        const lat = latitude || null;
+        const lng = longitude || null;
+
         const [result] = await db.execute(
-            `INSERT INTO group_messages (group_id, sender_id, message_content, timestamp) VALUES (?, ?, ?, NOW())`, 
-            [groupId, senderId, encryptedMessage]
+            `INSERT INTO group_messages (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude) 
+             VALUES (?, ?, ?, NOW(), ?, ?, ?)`, 
+            [groupId, senderId, encryptedMessage, type, lat, lng]
         );
         
         const newMessageId = result.insertId;
 
+        // Fetch the inserted message metadata for the socket
         const [insertedMsg] = await db.query(
             `SELECT gm.message_id as id, gm.sender_id, gm.message_content, gm.timestamp, 
              CONCAT(u.first_name, ' ', u.last_name) as sender_name, u.profile_pic as sender_profile_pic
@@ -2132,9 +2140,14 @@ app.post('/group/send', async (req, res) => {
         
         if (insertedMsg.length > 0) {
             const msg = insertedMsg[0];
+            
+            // Emit to everyone in the group room
             io.to(`group_${groupId}`).emit('new_group_message', { 
                 ...msg, 
-                message: content,
+                message: content, // Send decrypted content
+                message_type: type,
+                latitude: lat,
+                longitude: lng,
                 readByCount: 0, 
                 status: 0 
             });
@@ -2152,13 +2165,15 @@ app.post('/group/send', async (req, res) => {
             const [senderInfo] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [senderId]);
             const senderName = senderInfo[0]?.name || "Someone";
 
+            const notificationBody = (type === 'location') ? '📍 Shared a location' : content;
+
             const notificationPromises = groupMembers.map(member => {
                 const memberActiveChat = activeChatSessions.get(member.id.toString());
                 if (memberActiveChat === `group_${groupId}`) return Promise.resolve();
 
                 return admin.messaging().send({
                     token: member.fcm_token,
-                    notification: { title: `${senderName} (Group)`, body: content },
+                    notification: { title: `${senderName} (Group)`, body: notificationBody },
                     android: { priority: "high", notification: { channelId: "channel_custom_sound_v2", sound: "custom_notification", priority: "high", defaultSound: false } },
                     data: { type: "group_chat", groupId: groupId.toString(), senderId: senderId.toString(), senderName: senderName }
                 }).catch(e => console.log(`Failed to send FCM to ${member.id}`));
