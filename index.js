@@ -2035,10 +2035,8 @@ app.get('/group/:groupId/messages', async (req, res) => {
         }
 
         // --- NEW LOGIC: OPEN JOIN ---
-        // We do not check for travel plans anymore. 
-        // If a user requests messages, we ensure they are a member immediately.
-        // INSERT IGNORE ensures we don't crash if they are already added.
-        await db.query(`INSERT IGNORE INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, NOW())`, [groupId, userId]);
+        // REMOVED 'joined_at' to fix the database error
+        await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
         
         // --- FETCH MESSAGES ---
         const messagesQuery = `
@@ -2071,7 +2069,6 @@ app.get('/group/:groupId/messages', async (req, res) => {
             LIMIT 300
         `;
 
-        // Parameters: [totalParticipants, status_case, isReadByCurrentUser, main_where]
         const [messages] = await db.execute(messagesQuery, [groupId, groupId, userId, groupId]);
 
         const decryptedMessages = messages.map(msg => {
@@ -2111,9 +2108,8 @@ app.post('/group/send', async (req, res) => {
 
     try {
         // --- NEW LOGIC: BECOME MEMBER ON SEND ---
-        // Ensure the sender is in the group_members table before message is logged.
-        // "Whoever sends a message... becomes a member"
-        await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id, joined_at) VALUES (?, ?, NOW())`, [senderId, groupId]);
+        // REMOVED 'joined_at' to fix the database error
+        await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [senderId, groupId]);
 
         // --- ENCRYPT & SEND ---
         const encryptedMessage = encrypt(content);
@@ -2125,7 +2121,6 @@ app.post('/group/send', async (req, res) => {
         
         const newMessageId = result.insertId;
 
-        // Fetch the inserted message to emit via Socket
         const [insertedMsg] = await db.query(
             `SELECT gm.message_id as id, gm.sender_id, gm.message_content, gm.timestamp, 
              CONCAT(u.first_name, ' ', u.last_name) as sender_name, u.profile_pic as sender_profile_pic
@@ -2137,16 +2132,15 @@ app.post('/group/send', async (req, res) => {
         
         if (insertedMsg.length > 0) {
             const msg = insertedMsg[0];
-            // Emit to everyone in the room
             io.to(`group_${groupId}`).emit('new_group_message', { 
                 ...msg, 
-                message: content, // Send decrypted content to socket
+                message: content,
                 readByCount: 0, 
                 status: 0 
             });
         }
 
-        // --- FCM NOTIFICATIONS (Optional but recommended) ---
+        // --- FCM NOTIFICATIONS ---
         try {
             const [groupMembers] = await db.query(
                 `SELECT u.id, u.fcm_token FROM group_members gm 
@@ -2160,7 +2154,6 @@ app.post('/group/send', async (req, res) => {
 
             const notificationPromises = groupMembers.map(member => {
                 const memberActiveChat = activeChatSessions.get(member.id.toString());
-                // Don't send notification if they are currently looking at this specific group
                 if (memberActiveChat === `group_${groupId}`) return Promise.resolve();
 
                 return admin.messaging().send({
