@@ -2467,6 +2467,45 @@ app.get('/chatRequest', async (req, res) => {
     }
 });
 
+app.get('/chatRequests', async (req, res) => {
+    const TAG = "/chatRequests";
+    const { userId } = req.query;
+    
+    if (!userId) {
+        return res.status(400).json({ success: false, message: 'userId required' });
+    }
+    
+    try {
+        const sql = `
+            SELECT 
+                cr.id as requestId, 
+                cr.initial_message,
+                u.id as userId, 
+                CONCAT(u.first_name, ' ', u.last_name) as name, 
+                u.profile_pic, 
+                u.gender,
+                u.college
+            FROM chat_requests cr 
+            JOIN users u ON cr.sender_id = u.id 
+            WHERE cr.receiver_id = ? AND cr.status = 'pending'
+            ORDER BY cr.id DESC
+        `;
+        
+        const [requests] = await db.execute(sql, [userId]);
+        
+        const formattedRequests = requests.map(r => ({
+            ...r,
+            lastMessage: r.initial_message || "Sent a message request"
+        }));
+        
+        res.json({ success: true, requests: formattedRequests });
+        
+    } catch (err) {
+        console.error(TAG, 'Error fetching chat requests:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch requests' });
+    }
+});
+
 app.get('/chatRequests/count', async (req, res) => {
     const { userId } = req.query;
     try {
