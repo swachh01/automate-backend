@@ -2422,55 +2422,17 @@ app.post('/handleChatRequest', async (req, res) => {
     }
 });
 
-// Update the /chatRequests endpoint to fetch the initial_message:
-
-app.get('/chatRequests', async (req, res) => {
-    const TAG = "/chatRequests";
-    const { userId } = req.query;
-    
-    if (!userId) {
-        return res.status(400).json({ success: false, message: 'userId required' });
-    }
-    
-    try {
-        const sql = `
-            SELECT 
-                cr.id as requestId, 
-                cr.initial_message,
-                u.id as userId, 
-                CONCAT(u.first_name, ' ', u.last_name) as name, 
-                u.profile_pic, 
-                u.gender,
-                u.college
-            FROM chat_requests cr 
-            JOIN users u ON cr.sender_id = u.id 
-            WHERE cr.receiver_id = ? AND cr.status = 'pending'
-            ORDER BY cr.id DESC
-        `;
-        
-        const [requests] = await db.execute(sql, [userId]);
-        
-        const formattedRequests = requests.map(r => ({
-            ...r,
-            lastMessage: r.initial_message || "Sent a message request"
-        }));
-        
-        res.json({ success: true, requests: formattedRequests });
-        
-    } catch (err) {
-        console.error(TAG, 'Error fetching chat requests:', err);
-        res.status(500).json({ success: false, message: 'Failed to fetch requests' });
-    }
-});
-
-// Add this new endpoint to fetch a single chat request:
+// Replace the /chatRequest endpoint in index.js with this fixed version:
 
 app.get('/chatRequest', async (req, res) => {
     const TAG = "/chatRequest";
     const { senderId, receiverId } = req.query;
     
     if (!senderId || !receiverId) {
-        return res.status(400).json({ success: false, message: 'senderId and receiverId required' });
+        return res.status(400).json({ 
+            success: false, 
+            message: 'senderId and receiverId required' 
+        });
     }
     
     try {
@@ -2484,17 +2446,24 @@ app.get('/chatRequest', async (req, res) => {
         const [rows] = await db.execute(sql, [senderId, receiverId]);
         
         if (rows.length === 0) {
-            return res.status(404).json({ success: false, message: 'Request not found' });
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Request not found' 
+            });
         }
         
+        // Return the actual message, not a fallback text
         res.json({ 
             success: true, 
-            initial_message: rows[0].initial_message || "Sent a message request"
+            initial_message: rows[0].initial_message || ""
         });
         
     } catch (err) {
         console.error(TAG, 'Error fetching chat request:', err);
-        res.status(500).json({ success: false, message: 'Failed to fetch request' });
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch request' 
+        });
     }
 });
 
