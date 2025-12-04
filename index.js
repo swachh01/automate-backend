@@ -2463,6 +2463,41 @@ app.get('/chatRequests', async (req, res) => {
     }
 });
 
+// Add this new endpoint to fetch a single chat request:
+
+app.get('/chatRequest', async (req, res) => {
+    const TAG = "/chatRequest";
+    const { senderId, receiverId } = req.query;
+    
+    if (!senderId || !receiverId) {
+        return res.status(400).json({ success: false, message: 'senderId and receiverId required' });
+    }
+    
+    try {
+        const sql = `
+            SELECT initial_message 
+            FROM chat_requests 
+            WHERE sender_id = ? AND receiver_id = ? AND status = 'pending'
+            LIMIT 1
+        `;
+        
+        const [rows] = await db.execute(sql, [senderId, receiverId]);
+        
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Request not found' });
+        }
+        
+        res.json({ 
+            success: true, 
+            initial_message: rows[0].initial_message || "Sent a message request"
+        });
+        
+    } catch (err) {
+        console.error(TAG, 'Error fetching chat request:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch request' });
+    }
+});
+
 app.get('/chatRequests/count', async (req, res) => {
     const { userId } = req.query;
     try {
