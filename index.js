@@ -2290,56 +2290,176 @@ app.get('/searchUsers', async (req, res) => {
     }
 });
 
+// Replace the /sendChatRequest endpoint with this:
+
 app.post('/sendChatRequest', async (req, res) => {
+    const TAG = "/sendChatRequest";
     const { senderId, receiverId, message } = req.body;
+    
+    if (!senderId || !receiverId || !message) {
+        return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
     const connection = await db.getConnection();
     try {
         await connection.beginTransaction();
-        await connection.execute(`INSERT INTO chat_requests (sender_id, receiver_id, status) VALUES (?, ?, 'pending') ON DUPLICATE KEY UPDATE status = status`, [senderId, receiverId]);
-        const encryptedMsg = encrypt(message);
-        const [msgResult] = await connection.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, [senderId, receiverId, 
-encryptedMsg]);
+        
+        // Insert or update chat request to 'pending'
+        await connection.execute(
+            `INSERT INTO chat_requests (sender_id, receiver_id, status) 
+             VALUES (?, ?, 'pending') 
+             ON DUPLICATE KEY UPDATE status = 'pending'`, 
+            [senderId, receiverId]
+        );
+        
+        // DON'T insert the message into the messages table yet
+        // Just store it temporarily in chat_requests or handle it differently
+        // The message will only be sent when the request is ACCEPTED
+        
+        // Optional: Store the initial message in chat_requests table
+        await connection.execute(
+            `UPDATE chat_requests SET initial_message = ? WHERE sender_id = ? AND receiver_id = ?`,
+            [message, senderId, receiverId]
+        );
+        
         await connection.commit();
-        io.to(`chat_${receiverId}`).emit('new_chat_request', { requestId: msgResult.insertId, senderId, message });
-        res.json({ success: true });
+        
+        // Emit socket event for new request
+        io.to(`chat_${receiverId}`).emit('new_chat_request', { 
+            senderId, 
+            message 
+        });
+        
+        console.log(TAG, `Chat request sent from ${senderId} to ${receiverId}`);
+        res.json({ success: true, message: 'Chat request sent' });
+        
     } catch (err) {
         await connection.rollback();
-        res.status(500).json({ success: false });
+        console.error(TAG, 'Error sending chat request:', err);
+        res.status(500).json({ success: false, message: 'Failed to send request' });
     } finally {
         connection.release();
     }
 });
 
-app.get('/chatRequests', async (req, res) => {
-    const { userId } = req.query;
+// Update the /handleChatRequest endpoint:
+
+app.post('/handleChatRequest', async (req, res) => {
+    const TAG = "/handleChatRequest";
+    const { userId, otherUserId, action } = req.body;
+    
+    if (!userId || !otherUserId || !action) {
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+    }
+
+    const connection = await db.getConnection();
     try {
-        const sql = `SELECT cr.id as requestId, u.id as userId, CONCAT(u.first_name, ' ', u.last_name) as name, u.profile_pic, u.college, (SELECT message FROM messages m WHERE m.sender_id = u.id AND 
-m.receiver_id = ? ORDER BY m.timestamp DESC LIMIT 1) as lastMessage FROM chat_requests cr JOIN users u ON cr.sender_id = u.id WHERE cr.receiver_id = ? AND cr.status = 'pending'`;
-        const [requests] = await db.execute(sql, [userId, userId]);
-        const decrypted = requests.map(r => ({ ...r, lastMessage: r.lastMessage ? decrypt(r.lastMessage) : "Sent a message" }));
-        res.json({ success: true, requests: decrypted });
+        await connection.beginTransaction();
+        
+        if (action === 'accept') {
+            // Update request status to 'accepted'
+            await connection.execute(
+                `UPDATE chat_requests SET status = 'accepted' 
+                 WHERE sender_id = ? AND receiver_id = ?`, 
+                [otherUserId, userId]
+            );
+            
+            // NOW send the initial message to messages table
+            const [requestRows] = await connection.execute(
+                `SELECT initial_message FROM chat_requests 
+                 WHERE sender_id = ? AND receiver_id = ?`,
+                [otherUserId, userId]
+            );
+            
+            if (requestRows.length > 0 && requestRows[0].initial_message) {
+                const encryptedMsg = encrypt(requestRows[0].initial_message);
+                const [msgResult] = await connection.execute(
+                    `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) 
+                     VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`,
+                    [otherUserId, userId, encryptedMsg]
+                );
+                
+                // Emit the message to both users
+                const messageToEmit = {
+                    id: msgResult.insertId,
+                    sender_id: otherUserId,
+                    receiver_id: userId,
+                    message: requestRows[0].initial_message,
+                    timestamp: new Date().toISOString(),
+                    status: 0
+                };
+                
+                io.to(`chat_${userId}`).emit('new_message_received', messageToEmit);
+                io.to(`chat_${otherUserId}`).emit('new_message_received', messageToEmit);
+            }
+            
+            await connection.commit();
+            console.log(TAG, `Chat request accepted: ${otherUserId} -> ${userId}`);
+            res.json({ success: true, message: 'Chat request accepted' });
+            
+        } else if (action === 'reject') {
+            // Delete the chat request (no messages to delete since we didn't create any)
+            await connection.execute(
+                `DELETE FROM chat_requests 
+                 WHERE sender_id = ? AND receiver_id = ?`, 
+                [otherUserId, userId]
+            );
+            
+            await connection.commit();
+            console.log(TAG, `Chat request rejected: ${otherUserId} -> ${userId}`);
+            res.json({ success: true, message: 'Chat request rejected' });
+        } else {
+            await connection.rollback();
+            return res.status(400).json({ success: false, message: 'Invalid action' });
+        }
+        
     } catch (err) {
-        res.status(500).json({ success: false });
+        await connection.rollback();
+        console.error(TAG, 'Error handling chat request:', err);
+        res.status(500).json({ success: false, message: 'Failed to handle request' });
+    } finally {
+        connection.release();
     }
 });
 
-app.post('/handleChatRequest', async (req, res) => {
-    const { userId, otherUserId, action } = req.body;
+// Update the /chatRequests endpoint to fetch the initial_message:
+
+app.get('/chatRequests', async (req, res) => {
+    const TAG = "/chatRequests";
+    const { userId } = req.query;
+    
+    if (!userId) {
+        return res.status(400).json({ success: false, message: 'userId required' });
+    }
+    
     try {
-        if (action === 'accept') {
-            await db.execute(`UPDATE chat_requests SET status = 'accepted' WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
-            res.json({ success: true });
-        } else {
-            const connection = await db.getConnection();
-            await connection.beginTransaction();
-            await connection.execute(`DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
-            await connection.execute(`DELETE FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, [otherUserId, userId, userId, otherUserId]);
-            await connection.commit();
-            connection.release();
-            res.json({ success: true });
-        }
+        const sql = `
+            SELECT 
+                cr.id as requestId, 
+                cr.initial_message,
+                u.id as userId, 
+                CONCAT(u.first_name, ' ', u.last_name) as name, 
+                u.profile_pic, 
+                u.gender,
+                u.college
+            FROM chat_requests cr 
+            JOIN users u ON cr.sender_id = u.id 
+            WHERE cr.receiver_id = ? AND cr.status = 'pending'
+            ORDER BY cr.id DESC
+        `;
+        
+        const [requests] = await db.execute(sql, [userId]);
+        
+        const formattedRequests = requests.map(r => ({
+            ...r,
+            lastMessage: r.initial_message || "Sent a message request"
+        }));
+        
+        res.json({ success: true, requests: formattedRequests });
+        
     } catch (err) {
-        res.status(500).json({ success: false });
+        console.error(TAG, 'Error fetching chat requests:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch requests' });
     }
 });
 
