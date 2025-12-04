@@ -2467,6 +2467,8 @@ app.get('/chatRequest', async (req, res) => {
     }
 });
 
+// Replace the /chatRequests endpoint in index.js with this updated version:
+
 app.get('/chatRequests', async (req, res) => {
     const TAG = "/chatRequests";
     const { userId } = req.query;
