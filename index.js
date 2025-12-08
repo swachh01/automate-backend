@@ -76,7 +76,13 @@ const pool = mysql.createPool({
   user: process.env.MYSQLUSER || "root",
   password: process.env.MYSQLPASSWORD || "",
   database: process.env.MYSQLDATABASE || "yourdbname",
-  port: process.env.MYSQLPORT ? Number(process.env.MYSQLPORT) : 3306,
+  port: process.env.DB_PORT || 4000, // TiDB defaults to 4000
+
+  // 👇 IMPORTANT: TiDB requires this SSL block to connect
+  ssl: {
+      minVersion: 'TLSv1.2',
+      rejectUnauthorized: true
+  },
   timezone: 'Z',
   connectionLimit: 20,
   waitForConnections: true,
