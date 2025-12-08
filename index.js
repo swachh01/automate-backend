@@ -81,7 +81,7 @@ const pool = mysql.createPool({
   // 👇 IMPORTANT: TiDB requires this SSL block to connect
   ssl: {
       minVersion: 'TLSv1.2',
-      rejectUnauthorized: true
+      rejectUnauthorized: false
   },
   timezone: 'Z',
   connectionLimit: 20,
