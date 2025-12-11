@@ -432,15 +432,30 @@ app.post("/login", async (req, res) => {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
   try {
+    // 1. Fetch the user including signup_status
     const [rows] = await db.query(
-      `SELECT id, CONCAT(first_name, ' ', last_name) as name, college, phone, gender, dob, degree, year, profile_pic, password FROM users WHERE phone = ?`,
+      `SELECT id, CONCAT(first_name, ' ', last_name) as name, college, phone, gender, dob, degree, year, profile_pic, password, signup_status 
+       FROM users WHERE phone = ?`,
       [phone]
     );
+
     if (!rows.length) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
     
     const user = rows[0];
+
+    // 2. 👇 NEW CHECK: If status is pending, block login but return ID so app can resume
+    if (user.signup_status === 'pending') {
+        return res.status(403).json({ 
+            success: false, 
+            message: "Profile incomplete. Please finish setup.",
+            isPending: true, // Flag for Android to detect
+            userId: user.id  // Send ID so Android knows who to update
+        });
+    }
+
+    // 3. Password Validation (Existing Logic)
     let isPasswordValid = false;
 
     if (user.password.startsWith('$2') && user.password.length > 50) {
@@ -458,14 +473,15 @@ app.post("/login", async (req, res) => {
     }
 
     delete user.password;
+    
+    // Login Success
     res.json({ success: true, message: "Login successful", user: { ...user, year: user.year || 0 } });
+
   } catch (err) {
     console.error("❌ /login error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
-
-// ================= UPDATE PROFILE =================
 
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
