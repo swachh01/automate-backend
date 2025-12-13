@@ -2273,6 +2273,14 @@ app.post('/group/read', async (req, res) => {
 
 app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
+
+    // Trim whitespace to ensure clean matching
+    const searchTerm = query ? query.trim() : "";
+
+    if (!searchTerm) {
+        return res.json({ success: true, users: [] });
+    }
+
     try {
         const sql = `
             SELECT 
@@ -2280,26 +2288,40 @@ app.get('/searchUsers', async (req, res) => {
                 CONCAT(u.first_name, ' ', u.last_name) as name, 
                 u.college, 
                 u.profile_pic,
-                u.gender, -- ADDED GENDER HERE
+                u.gender,
+                -- Check if a chat exists
                 EXISTS (
                     SELECT 1 FROM messages m 
                     WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
                        OR (m.sender_id = u.id AND m.receiver_id = ?)
                 ) as hasChat
             FROM users u 
-            WHERE (u.first_name LIKE ? OR u.last_name LIKE ?) AND u.id != ?
+            -- 1. Filter: Find anyone with the letter anywhere in their name
+            WHERE CONCAT(u.first_name, ' ', u.last_name) LIKE ? 
+            AND u.id != ?
+            ORDER BY 
+                -- 2. Priority 1: Show friends/existing chats FIRST
+                hasChat DESC,
+                
+                -- 3. Priority 2: Show names STARTING with the letter before names CONTAINING it
+                CASE 
+                    WHEN CONCAT(u.first_name, ' ', u.last_name) LIKE ? THEN 1 
+                    ELSE 2 
+                END ASC,
+                
+                -- 4. Priority 3: Alphabetical sort for neatness
+                name ASC
             LIMIT 20
         `;
         
         const [users] = await db.execute(sql, [
-            currentUserId, 
-            currentUserId, 
-            `%${query}%`, 
-            `%${query}%`, 
-            currentUserId
+            currentUserId,          // for hasChat check 1
+            currentUserId,          // for hasChat check 2
+            `%${searchTerm}%`,      // WHERE LIKE (matches 'a' anywhere)
+            currentUserId,          // exclude self
+            `${searchTerm}%`        // ORDER BY LIKE (matches 'a' at start only)
         ]);
 
-        // Include gender in the mapped response
         const usersWithBoolean = users.map(u => ({
             ...u,
             hasChat: Boolean(u.hasChat)
@@ -2307,12 +2329,10 @@ app.get('/searchUsers', async (req, res) => {
 
         res.json({ success: true, users: usersWithBoolean });
     } catch (err) {
-        console.error(err);
+        console.error('Error in /searchUsers:', err);
         res.status(500).json({ success: false, message: 'Search failed' });
     }
 });
-
-// Replace the /sendChatRequest endpoint with this:
 
 app.post('/sendChatRequest', async (req, res) => {
     const TAG = "/sendChatRequest";
