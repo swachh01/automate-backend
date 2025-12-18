@@ -1261,19 +1261,80 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 });
 
+// Add this at the top of index.js with other requires
+const axios = require('axios');
 
+// Add your Google Maps API key in .env file
+// GOOGLE_MAPS_API_KEY=your_api_key_here
+
+// Helper function to get address from coordinates using Google Geocoding API
+async function getAddressFromCoordinates(lat, lng) {
+  try {
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    
+    if (!apiKey) {
+      console.warn('Google Maps API key not configured');
+      return null;
+    }
+
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}`;
+    const response = await axios.get(url);
+
+    if (response.data.status === 'OK' && response.data.results.length > 0) {
+      const result = response.data.results[0];
+      
+      // Extract city, state, country from address components
+      let city = '';
+      let state = '';
+      let country = '';
+      
+      result.address_components.forEach(component => {
+        if (component.types.includes('locality')) {
+          city = component.long_name;
+        }
+        if (component.types.includes('administrative_area_level_1')) {
+          state = component.long_name;
+        }
+        if (component.types.includes('country')) {
+          country = component.long_name;
+        }
+      });
+      
+      // Format: "City, State, Country" or use formatted_address
+      if (city && state && country) {
+        return `${city}, ${state}, ${country}`;
+      }
+      
+      // Fallback to formatted address
+      return result.formatted_address;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Geocoding error:', error.message);
+    return null;
+  }
+}
+
+// REPLACE the /travel-plans/destinations endpoint with this:
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
     const { userId } = req.query;
     if (!userId) {
-      return res.status(400).json({ success: false, message: 'Current user ID (userId) is required as a query parameter.' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Current user ID (userId) is required as a query parameter.' 
+      });
     }
+    
     const query = `
       SELECT
         ANY_VALUE(tp.to_place) as destination,
         COUNT(tp.user_id) as userCount,
         ANY_VALUE(g.group_id) as group_id,
-        SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing
+        SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
+        ANY_VALUE(tp.to_place_lat) as latitude,
+        ANY_VALUE(tp.to_place_lng) as longitude
       FROM travel_plans tp
       JOIN \`group_table\` g ON tp.to_place = g.group_name
       WHERE
@@ -1287,13 +1348,28 @@ app.get("/travel-plans/destinations", async (req, res) => {
       ORDER BY
         userCount DESC;
     `;
+    
     const [destinations] = await db.query(query, [userId]);
-    res.json({ success: true, destinations: destinations || [] });
+    
+    // Get addresses for all destinations in parallel
+    const destinationsWithAddress = await Promise.all(
+      destinations.map(async (dest) => {
+        const address = await getAddressFromCoordinates(dest.latitude, dest.longitude);
+        return {
+          ...dest,
+          fullAddress: address || dest.destination // Fallback to destination name
+        };
+      })
+    );
+    
+    res.json({ success: true, destinations: destinationsWithAddress || [] });
+    
   } catch (err) {
-    console.error(" Error fetching travel plan destinations:", err);
+    console.error("Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
   }
 });
+
 
 app.get('/travel-plans/by-destination', async (req, res) => {
     const { destination, currentUserId } = req.query;
