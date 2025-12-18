@@ -2275,7 +2275,7 @@ app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
 
     // Trim whitespace to ensure clean matching
-    const searchTerm = query ? query.trim() : "";
+    const searchTerm = query ? query.trim().toLowerCase() : "";
 
     if (!searchTerm) {
         return res.json({ success: true, users: [] });
@@ -2294,36 +2294,46 @@ app.get('/searchUsers', async (req, res) => {
                     SELECT 1 FROM messages m 
                     WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
                        OR (m.sender_id = u.id AND m.receiver_id = ?)
-                ) as hasChat
+                ) as hasChat,
+                -- Calculate match position for sorting
+                LOCATE(?, LOWER(CONCAT(u.first_name, ' ', u.last_name))) as match_position
             FROM users u 
-            -- 1. Filter: Find anyone with the letter anywhere in their name
-            WHERE CONCAT(u.first_name, ' ', u.last_name) LIKE ? 
+            -- Filter: Find anyone with the search term anywhere in their name (case-insensitive)
+            WHERE LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ? 
             AND u.id != ?
             ORDER BY 
-                -- 2. Priority 1: Show friends/existing chats FIRST
+                -- Priority 1: Exact match first
+                CASE WHEN LOWER(CONCAT(u.first_name, ' ', u.last_name)) = ? THEN 0 ELSE 1 END,
+                
+                -- Priority 2: Names starting with search term (position = 1)
+                CASE WHEN match_position = 1 THEN 0 ELSE 1 END,
+                
+                -- Priority 3: Show friends/existing chats before non-friends
                 hasChat DESC,
                 
-                -- 3. Priority 2: Show names STARTING with the letter before names CONTAINING it
-                CASE 
-                    WHEN CONCAT(u.first_name, ' ', u.last_name) LIKE ? THEN 1 
-                    ELSE 2 
-                END ASC,
+                -- Priority 4: Earlier position in name = higher priority
+                match_position ASC,
                 
-                -- 4. Priority 3: Alphabetical sort for neatness
+                -- Priority 5: Alphabetical sort for neatness
                 name ASC
-            LIMIT 20
+            LIMIT 50
         `;
         
         const [users] = await db.execute(sql, [
-            currentUserId,          // for hasChat check 1
-            currentUserId,          // for hasChat check 2
-            `%${searchTerm}%`,      // WHERE LIKE (matches 'a' anywhere)
-            currentUserId,          // exclude self
-            `${searchTerm}%`        // ORDER BY LIKE (matches 'a' at start only)
+            currentUserId,              // for hasChat check 1
+            currentUserId,              // for hasChat check 2
+            searchTerm,                 // for LOCATE function
+            `%${searchTerm}%`,          // WHERE LIKE (matches anywhere)
+            currentUserId,              // exclude self
+            searchTerm                  // exact match check
         ]);
 
         const usersWithBoolean = users.map(u => ({
-            ...u,
+            id: u.id,
+            name: u.name,
+            college: u.college,
+            profile_pic: u.profile_pic,
+            gender: u.gender,
             hasChat: Boolean(u.hasChat)
         }));
 
