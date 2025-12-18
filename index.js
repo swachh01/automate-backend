@@ -670,6 +670,16 @@ app.get('/users/destination', async (req, res) => {
     const currentUserId = parseInt(userId);
 
     try {
+        // Get friend IDs
+        const friendsQuery = `
+            SELECT DISTINCT
+                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
+            FROM messages
+            WHERE sender_id = ? OR receiver_id = ?
+        `;
+        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const friendIds = new Set(friendRows.map(row => row.friend_id));
+
         const query = `
             SELECT
                 u.id,           
@@ -678,6 +688,7 @@ app.get('/users/destination', async (req, res) => {
                 u.college,
                 u.profile_pic AS profilePic,
                 u.gender,
+                u.profile_visibility,
                 tp.time,        
                 tp.from_place AS fromPlace, 
                 tp.to_place AS toPlace     
@@ -695,9 +706,19 @@ app.get('/users/destination', async (req, res) => {
         const [users] = await db.execute(query, [currentGroupId, currentGroupId, currentUserId]);
 
         const responseUsers = users.map(user => ({
-            ...user,
             id: user.id, 
-            userId: user.id 
+            userId: user.id,
+            name: user.name,
+            college: user.college,
+            profilePic: getVisibleProfilePic(
+                { ...user, profile_pic: user.profilePic, user_id: user.id }, 
+                currentUserId, 
+                friendIds
+            ),
+            gender: user.gender,
+            time: user.time,
+            fromPlace: user.fromPlace,
+            toPlace: user.toPlace
         }));
 
         res.json({ success: true, users: responseUsers }); 
@@ -707,6 +728,7 @@ app.get('/users/destination', async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error fetching users' });
     }
 });
+
 
 app.post("/updateFcmToken", async (req, res) => {
     const { userId, token } = req.body;
@@ -918,6 +940,16 @@ app.get('/getChatUsers', async (req, res) => {
         }
         const currentUserId = parseInt(userId);
         
+        // Get friend IDs first
+        const friendsQuery = `
+            SELECT DISTINCT
+                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
+            FROM messages
+            WHERE sender_id = ? OR receiver_id = ?
+        `;
+        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const friendIds = new Set(friendRows.map(row => row.friend_id));
+        
         const combinedQuery = `
             WITH LatestChats AS (
                 SELECT
@@ -969,10 +1001,8 @@ app.get('/getChatUsers', async (req, res) => {
                 CONCAT(u_sender.first_name, ' ', u_sender.last_name) AS last_sender_name,
                 CASE WHEN lc.chat_type = 'individual' THEN CONCAT(u_partner.first_name, ' ', u_partner.last_name) ELSE NULL END AS username,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_pic ELSE NULL END AS profile_pic,
-                
-                -- ADDED GENDER HERE
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.gender ELSE NULL END AS gender,
-                
+                CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_visibility ELSE NULL END AS profile_visibility,
                 CASE WHEN lc.chat_type = 'group' THEN gt.group_name ELSE NULL END AS group_name,
                  (SELECT COUNT(*) FROM messages m_unread
                   WHERE lc.chat_type = 'individual'
@@ -1013,12 +1043,31 @@ app.get('/getChatUsers', async (req, res) => {
 
         const chatListItems = rows.map(row => {
             let lastMessage = "";
-            try { lastMessage = row.last_message_content ? decrypt(row.last_message_content) : ""; } catch (e) { lastMessage = "[Encrypted Message]"; }
+            try { 
+                lastMessage = row.last_message_content ? decrypt(row.last_message_content) : ""; 
+            } catch (e) { 
+                lastMessage = "[Encrypted Message]"; 
+            }
 
             const isGroup = row.chat_type === 'group';
             const chatId = row.chat_id; 
             const chatName = isGroup ? row.group_name : row.username;
-            const profilePicUrl = isGroup ? 'default_group_icon' : row.profile_pic; 
+            
+            // Apply visibility logic for individual chats
+            let profilePicUrl = isGroup ? 'default_group_icon' : row.profile_pic;
+            if (!isGroup) {
+                profilePicUrl = getVisibleProfilePic(
+                    { 
+                        id: chatId, 
+                        profile_pic: row.profile_pic, 
+                        profile_visibility: row.profile_visibility,
+                        gender: row.gender 
+                    }, 
+                    currentUserId, 
+                    friendIds
+                );
+            }
+            
             const unreadCount = isGroup ? row.group_unread_count : row.individual_unread_count;
 
             return {
@@ -1029,7 +1078,7 @@ app.get('/getChatUsers', async (req, res) => {
                 timestamp: row.last_timestamp, 
                 unreadCount: unreadCount,
                 profilePicUrl: profilePicUrl,
-                gender: row.gender, // Mapped here
+                gender: row.gender,
                 lastSenderId: row.last_sender_id,
                 lastSenderName: row.last_sender_name,
                 lastMessageStatus: row.last_message_status 
@@ -1194,27 +1243,24 @@ app.get("/getUsersGoing", async (req, res) => {
         `;
         const [rows] = await db.query(plansQuery);
 
-        const usersGoing = rows.map(user => {
-            let finalProfilePic = user.profile_pic;
-            if (user.profile_visibility === 'none') { finalProfilePic = 'default'; } 
-            else if (user.profile_visibility === 'friends' && !friendIds.has(user.user_id)) { finalProfilePic = 'default'; }
-            return {
-                id: user.user_id,
-                userId: user.user_id,
-                name: user.name,
-                fromPlace: user.fromPlace,
-                toPlace: user.toPlace,
-                time: user.time,
-                gender: user.gender,
-                profile_pic: finalProfilePic
-            };
-        });
+        const usersGoing = rows.map(user => ({
+            id: user.user_id,
+            userId: user.user_id,
+            name: user.name,
+            fromPlace: user.fromPlace,
+            toPlace: user.toPlace,
+            time: user.time,
+            gender: user.gender,
+            profile_pic: getVisibleProfilePic(user, parseInt(currentUserId), friendIds)
+        }));
+        
         res.json({ success: true, users: usersGoing });
     } catch (err) {
-        console.error(" Error fetching users going:", err);
+        console.error("Error fetching users going:", err);
         res.status(500).json({ success: false, message: "Database error" });
     }
 });
+
 
 app.get("/travel-plans/destinations", async (req, res) => {
   try {
@@ -1267,7 +1313,12 @@ app.get('/travel-plans/by-destination', async (req, res) => {
 
         const plansQuery = `
             SELECT
-                u.id, CONCAT(u.first_name, ' ', u.last_name) as name, u.college, u.gender, u.profile_pic, u.profile_visibility,
+                u.id, 
+                CONCAT(u.first_name, ' ', u.last_name) as name, 
+                u.college, 
+                u.gender, 
+                u.profile_pic, 
+                u.profile_visibility,
                 tp.from_place as fromPlace,
                 tp.to_place as toPlace,
                 DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
@@ -1278,17 +1329,44 @@ app.get('/travel-plans/by-destination', async (req, res) => {
         `;
         const [users] = await db.query(plansQuery, [destination]);
 
-        const filteredUsers = users.map(user => {
-            let finalProfilePic = user.profile_pic;
-            if (user.profile_visibility === 'none') { finalProfilePic = 'default'; } else if (user.profile_visibility === 'friends' && !friendIds.has(user.id)) { finalProfilePic = 'default'; }
-            return { ...user, profile_pic: finalProfilePic };
-        });
+        const filteredUsers = users.map(user => ({
+            ...user,
+            profile_pic: getVisibleProfilePic(user, parseInt(currentUserId), friendIds)
+        }));
+        
         res.json({ success: true, users: filteredUsers });
     } catch (error) {
-        console.error(' Error fetching users by destination:', error);
+        console.error('Error fetching users by destination:', error);
         res.status(500).json({ success: false, message: 'Database error' });
     }
 });
+
+
+function getVisibleProfilePic(user, viewerId, friendIds) {
+    // Owner always sees their own picture
+    if (user.id === viewerId || user.user_id === viewerId) {
+        return user.profile_pic;
+    }
+
+    const visibility = user.profile_visibility || 'everyone';
+    
+    // If visibility is 'none', return default based on gender
+    if (visibility === 'none') {
+        return user.gender === 'Female' ? 'default_female' : 'default_male';
+    }
+    
+    // If visibility is 'friends', check if viewer is a friend
+    if (visibility === 'friends') {
+        const userId = user.id || user.user_id;
+        if (friendIds && friendIds.has(userId)) {
+            return user.profile_pic;
+        }
+        return user.gender === 'Female' ? 'default_female' : 'default_male';
+    }
+    
+    // visibility is 'everyone'
+    return user.profile_pic;
+}
 
 app.delete("/user/profile/:userId", async (req, res) => {
     const TAG = "/user/profile/:userId (DELETE)";
@@ -1865,6 +1943,16 @@ app.get("/user/:userId", async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid or missing user ID." });
         }
 
+        // Get friend IDs for visibility check
+        const friendsQuery = `
+            SELECT DISTINCT
+                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
+            FROM messages
+            WHERE sender_id = ? OR receiver_id = ?
+        `;
+        const [friendRows] = await db.query(friendsQuery, [viewerId, viewerId, viewerId]);
+        const friendIds = new Set(friendRows.map(row => row.friend_id));
+
         const query = `
             SELECT
                 id, CONCAT(first_name, ' ', last_name) as name,
@@ -1882,14 +1970,18 @@ app.get("/user/:userId", async (req, res) => {
         if (rows.length === 0) {
             return res.status(404).json({ success: false, message: "User not found." });
         }
+        
         const user = rows[0]; 
         user.hasChat = Boolean(user.hasChat);
+        user.profile_pic = getVisibleProfilePic(user, parseInt(viewerId), friendIds);
+        
         res.json({ success: true, user: user }); 
     } catch (err) {
         console.error(TAG, `❌ Error fetching user profile`, err);
         res.status(500).json({ success: false, message: "Server error." });
     }
 });
+
 
 app.delete('/favorites/:userId/:favoriteId', async (req, res) => {
     const { userId, favoriteId } = req.params;
@@ -2274,7 +2366,6 @@ app.post('/group/read', async (req, res) => {
 app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
 
-    // Trim whitespace to ensure clean matching
     const searchTerm = query ? query.trim().toLowerCase() : "";
 
     if (!searchTerm) {
@@ -2282,6 +2373,16 @@ app.get('/searchUsers', async (req, res) => {
     }
 
     try {
+        // First get friend IDs
+        const friendsQuery = `
+            SELECT DISTINCT
+                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
+            FROM messages
+            WHERE sender_id = ? OR receiver_id = ?
+        `;
+        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const friendIds = new Set(friendRows.map(row => row.friend_id));
+
         const sql = `
             SELECT 
                 u.id, 
@@ -2289,50 +2390,39 @@ app.get('/searchUsers', async (req, res) => {
                 u.college, 
                 u.profile_pic,
                 u.gender,
-                -- Check if a chat exists
+                u.profile_visibility,
                 EXISTS (
                     SELECT 1 FROM messages m 
                     WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
                        OR (m.sender_id = u.id AND m.receiver_id = ?)
                 ) as hasChat,
-                -- Calculate match position for sorting
                 LOCATE(?, LOWER(CONCAT(u.first_name, ' ', u.last_name))) as match_position
             FROM users u 
-            -- Filter: Find anyone with the search term anywhere in their name (case-insensitive)
             WHERE LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ? 
             AND u.id != ?
             ORDER BY 
-                -- Priority 1: Exact match first
                 CASE WHEN LOWER(CONCAT(u.first_name, ' ', u.last_name)) = ? THEN 0 ELSE 1 END,
-                
-                -- Priority 2: Names starting with search term (position = 1)
                 CASE WHEN match_position = 1 THEN 0 ELSE 1 END,
-                
-                -- Priority 3: Show friends/existing chats before non-friends
                 hasChat DESC,
-                
-                -- Priority 4: Earlier position in name = higher priority
                 match_position ASC,
-                
-                -- Priority 5: Alphabetical sort for neatness
                 name ASC
             LIMIT 50
         `;
         
         const [users] = await db.execute(sql, [
-            currentUserId,              // for hasChat check 1
-            currentUserId,              // for hasChat check 2
-            searchTerm,                 // for LOCATE function
-            `%${searchTerm}%`,          // WHERE LIKE (matches anywhere)
-            currentUserId,              // exclude self
-            searchTerm                  // exact match check
+            currentUserId,
+            currentUserId,
+            searchTerm,
+            `%${searchTerm}%`,
+            currentUserId,
+            searchTerm
         ]);
 
         const usersWithBoolean = users.map(u => ({
             id: u.id,
             name: u.name,
             college: u.college,
-            profile_pic: u.profile_pic,
+            profile_pic: getVisibleProfilePic(u, parseInt(currentUserId), friendIds),
             gender: u.gender,
             hasChat: Boolean(u.hasChat)
         }));
@@ -2343,6 +2433,7 @@ app.get('/searchUsers', async (req, res) => {
         res.status(500).json({ success: false, message: 'Search failed' });
     }
 });
+
 
 app.post('/sendChatRequest', async (req, res) => {
     const TAG = "/sendChatRequest";
