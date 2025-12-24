@@ -396,8 +396,21 @@ app.post("/create-account", async (req, res) => {
         
         await db.query(query, [first_name, last_name, work_category, work_detail, gender, phone, country_code, hashedPassword]);
 
+        // ✅ FIX: Include bio and home_location in the SELECT query
         const [userRows] = await db.query(
-            `SELECT id, CONCAT(first_name, ' ', last_name) as name, work_category, phone, gender, dob, work_detail, profile_pic FROM users WHERE phone = ? AND country_code = ?`,
+            `SELECT 
+                id, 
+                CONCAT(first_name, ' ', last_name) as name, 
+                work_category, 
+                phone, 
+                gender, 
+                dob, 
+                work_detail, 
+                profile_pic,
+                COALESCE(bio, '') as bio,
+                COALESCE(home_location, '') as home_location
+            FROM users 
+            WHERE phone = ? AND country_code = ?`,
             [phone, country_code]
         );
         
