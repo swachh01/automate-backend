@@ -445,7 +445,21 @@ app.post("/login", async (req, res) => {
   }
   try {
     const [rows] = await db.query(
-      `SELECT id, CONCAT(first_name, ' ', last_name) as name, work_category, phone, gender, dob, work_detail, profile_pic, password, signup_status 
+      `SELECT 
+        id, 
+        CONCAT(first_name, ' ', last_name) as name, 
+        work_category, 
+        phone, 
+        gender, 
+        dob, 
+        work_detail, 
+        profile_pic, 
+        password, 
+        signup_status,
+        COALESCE(bio, '') as bio,
+        COALESCE(home_location, '') as home_location,
+        home_lat,
+        home_lng
        FROM users WHERE phone = ?`,
       [phone]
     );
