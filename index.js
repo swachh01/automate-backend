@@ -381,19 +381,20 @@ app.post("/create-account", async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
         const query = `
-            INSERT INTO users (first_name, last_name, work_category, gender, phone, country_code, password, signup_status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
+            INSERT INTO users (first_name, last_name, work_category, work_detail, gender, phone, country_code, password, signup_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
             ON DUPLICATE KEY UPDATE
                 first_name = VALUES(first_name),
                 last_name = VALUES(last_name),
                 work_category = VALUES(work_category),
+                work_detail = VALUES(work_detail),
                 gender = VALUES(gender),
                 password = VALUES(password),
                 signup_status = 'pending',
                 updated_at = NOW();
         `;
         
-        await db.query(query, [first_name, last_name, work_category, gender, phone, country_code, hashedPassword]);
+        await db.query(query, [first_name, last_name, work_category, work_detail, gender, phone, country_code, hashedPassword]);
 
         const [userRows] = await db.query(
             `SELECT id, CONCAT(first_name, ' ', last_name) as name, work_category, phone, gender, dob, work_detail, profile_pic FROM users WHERE phone = ? AND country_code = ?`,
