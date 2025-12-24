@@ -480,53 +480,109 @@ app.post("/login", async (req, res) => {
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request ===");
-    
-    const { userId, dob, work_detail } = req.body || {};
-    
+
+    // Extract fields from body: userId, dob, bio, and Google Places data
+    const { 
+      userId, 
+      dob, 
+      bio, 
+      home_location, 
+      home_lat, 
+      home_lng 
+    } = req.body || {};
+
     if (!userId) {
       return res.status(400).json({ success: false, message: "Missing userId" });
     }
-    
+
     const sets = [];
     const params = [];
+
+    // Dynamically build the update query based on provided fields from Stage 4
+    if (dob) {
+      sets.push("dob = ?");
+      params.push(dob);
+    }
+    if (bio) {
+      sets.push("bio = ?");
+      params.push(bio);
+    }
+    if (home_location) {
+      sets.push("home_location = ?");
+      params.push(home_location);
+    }
+    if (home_lat) {
+      sets.push("home_lat = ?");
+      params.push(home_lat);
+    }
+    if (home_lng) {
+      sets.push("home_lng = ?");
+      params.push(home_lng);
+    }
     
-    if (dob) { sets.push("dob = ?"); params.push(dob); }
-    if (work_detail) { sets.push("work_detail = ?"); params.push(work_detail); }
+    // Handle Profile Picture if uploaded via Multer/Cloudinary
     if (req.file && req.file.path) {
       sets.push("profile_pic = ?");
       params.push(req.file.path);
     }
-    
+
+    // Validation: Ensure at least one field is being updated
     if (sets.length === 0) {
       return res.status(400).json({ success: false, message: "Nothing to update" });
     }
-    
+
+    // Append userId to params for the SQL WHERE clause
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
     params.push(userId);
-    
+
     const [result] = await db.query(sql, params);
-    
+
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
-      
+
+    // Successfully reached Stage 4 and submitted, so mark signup_status as completed
     await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
-    
+
+    // Final fetch of the full user object with new Location and Bio fields to return to Android
     const [rows] = await db.query(
-      `SELECT id, CONCAT(first_name, ' ', last_name) as name, work_category, phone, gender, dob, work_detail, profile_pic FROM users WHERE id = ?`,
+      `SELECT
+        id,
+        CONCAT(first_name, ' ', last_name) as name,
+        work_category,
+        work_detail,
+        phone,
+        gender,
+        dob,
+        bio,
+        home_location,
+        home_lat,
+        home_lng,
+        profile_pic,
+        signup_status
+      FROM users WHERE id = ?`,
       [userId]
     );
-    
-    console.log("Updated user:", rows[0]);
-    
-    res.json({ success: true, message: "Profile updated and signup complete!", user: rows[0] });
-  } catch (err) {
-    console.error("=== /updateProfile ERROR ===");
-    res.status(500).json({ success: false, message: "Internal Server Error", error: err.message });
-  } 
-});
 
-// ================= ADD TRAVEL PLAN =================
+    const updatedUser = rows[0];
+    console.log("✅ Profile Updated for User:", updatedUser.id);
+
+    res.json({
+      success: true,
+      message: "Profile updated and signup complete!",
+      user: updatedUser
+    });
+
+  } catch (err) {
+    console.error("❌ === /updateProfile ERROR ===");
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: err.message
+    });
+  }
+});
 
 app.post("/addTravelPlan", async (req, res) => {
     const TAG = "/addTravelPlan"; 
