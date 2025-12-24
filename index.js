@@ -357,9 +357,9 @@ app.get('/debug/routes', (req, res) => {
 app.post("/create-account", async (req, res) => {
     const TAG = "/create-account";
     try {
-        const { first_name, last_name, work_category, gender, phone, country_code, password } = req.body;
+        const { first_name, last_name, work_category, work_detail, gender, phone, country_code, password } = req.body;
 
-        if (!first_name || !last_name || !work_category || !gender || !phone || !country_code || !password) {
+        if (!first_name || !last_name || !work_category || || !work_detail || !gender || !phone || !country_code || !password) {
             return res.status(400).json({ success: false, message: "All fields are required." });
         }
 
