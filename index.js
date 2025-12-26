@@ -467,26 +467,44 @@ app.get("/check-phone-availability", async (req, res) => {
     }
 });
 
+// Add this BEFORE your other routes (after the app declarations)
 app.get("/debug/check-user", async (req, res) => {
     const { phone, country_code } = req.query;
     
     try {
-        // Check all variations
+        // Check exact match
         const [exact] = await db.query(
-            `SELECT id, phone, country_code, signup_status, CHAR_LENGTH(phone) as phone_length, CHAR_LENGTH(country_code) as code_length 
-             FROM users WHERE phone = ? AND country_code = ?`,
+            `SELECT id, phone, country_code, signup_status, 
+                    CHAR_LENGTH(phone) as phone_length, 
+                    CHAR_LENGTH(country_code) as code_length,
+                    HEX(phone) as phone_hex,
+                    HEX(country_code) as code_hex
+             FROM users 
+             WHERE phone = ? AND country_code = ?`,
             [phone, country_code]
         );
         
-        const [allUsers] = await db.query(
-            `SELECT id, phone, country_code, signup_status FROM users WHERE phone LIKE ?`,
-            [`%${phone}%`]
+        // Check with completed status
+        const [withStatus] = await db.query(
+            `SELECT id, phone, country_code, signup_status 
+             FROM users 
+             WHERE phone = ? AND country_code = ? AND signup_status = 'completed'`,
+            [phone, country_code]
+        );
+        
+        // Check all users with this phone (any country code)
+        const [allWithPhone] = await db.query(
+            `SELECT id, phone, country_code, signup_status 
+             FROM users 
+             WHERE phone = ?`,
+            [phone]
         );
         
         res.json({
+            searchedFor: { phone, country_code },
             exactMatch: exact,
-            allMatches: allUsers,
-            searchedFor: { phone, country_code }
+            withCompletedStatus: withStatus,
+            allWithThisPhone: allWithPhone
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
