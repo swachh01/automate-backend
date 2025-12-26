@@ -810,6 +810,83 @@ app.post("/addTravelPlan", async (req, res) => {
     }
 });
 
+// --- NEW: Add Cab Travel Plan ---
+app.post("/addCabTravelPlan", async (req, res) => {
+    const { userId, companyName, date, time, pickup, destination, landmark } = req.body;
+    try {
+        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_date, travel_time, pickup_location, destination, landmark) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?)`;
+        await db.query(query, [userId, companyName, date, time, pickup, destination, landmark]);
+        res.status(201).json({ success: true, message: "Cab plan saved successfully" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
+// --- NEW: Add Own Vehicle Plan ---
+app.post("/addOwnVehiclePlan", async (req, res) => {
+    const { userId, vehicleType, vehicleNumber, pickup, destination, time } = req.body;
+    try {
+        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time) 
+                       VALUES (?, ?, ?, ?, ?, ?)`;
+        await db.query(query, [userId, vehicleType, vehicleNumber, pickup, destination, time]);
+        res.status(201).json({ success: true, message: "Vehicle plan saved successfully" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
+app.get("/travel-plans/destinations-by-type", async (req, res) => {
+    const { userId, commuteType } = req.query;
+
+    let tableName;
+    let destinationCol;
+    let statusFilter = "status = 'Active'";
+
+    // Determine which table to query based on commuteType
+    if (commuteType === 'Cab') {
+        tableName = 'travel_plans_cab';
+        destinationCol = 'destination';
+    } else if (commuteType === 'Own') {
+        tableName = 'travel_plans_own';
+        destinationCol = 'destination';
+    } else {
+        tableName = 'travel_plans';
+        destinationCol = 'to_place'; // Original table uses to_place
+    }
+
+    try {
+        // Query to get unique destinations and count of people going there
+        const query = `
+            SELECT 
+                ${destinationCol} as destination, 
+                COUNT(*) as userCount,
+                SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing
+            FROM ${tableName}
+            WHERE ${statusFilter}
+            GROUP BY ${destinationCol}
+            ORDER BY userCount DESC
+        `;
+
+        const [destinations] = await db.query(query, [userId]);
+        
+        // Map data to match your existing DestinationGroup model structure
+        const formattedDestinations = destinations.map((d, index) => ({
+            groupId: index + 100, // Dummy ID for groups since Cabs/Own don't have group_table entries yet
+            destination: d.destination,
+            userCount: d.userCount,
+            isCurrentUserGoing: d.isCurrentUserGoing
+        }));
+
+        res.json({ success: true, destinations: formattedDestinations });
+    } catch (err) {
+        console.error("Error fetching filtered destinations:", err);
+        res.status(500).json({ success: false, message: "Database error" });
+    }
+});
+
 app.get('/users/destination', async (req, res) => {
     const TAG = "/users/destination";
     const { groupId, userId } = req.query; 
