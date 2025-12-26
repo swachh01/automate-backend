@@ -1087,7 +1087,7 @@ app.get('/getChatUsers', async (req, res) => {
                     AND NOT EXISTS (
                         SELECT 1 
                         FROM group_message_read_status gmrs
-                        WHERE gmrs.message_id = gm.message_id
+                        WHERE gmrs.message_id = gm_unread.message_id
                           AND gmrs.user_id = ?
                     )
                  ) AS group_unread_count
