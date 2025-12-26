@@ -435,9 +435,11 @@ app.post("/create-account", async (req, res) => {
     }
 });
 
-// Check if phone number is already registered
 app.get("/check-phone-availability", async (req, res) => {
+    const TAG = "/check-phone-availability";
     const { phone, country_code } = req.query;
+
+    console.log(TAG, `Checking: phone=${phone}, country_code=${country_code}`);
 
     if (!phone || !country_code) {
         return res.status(400).json({ success: false, message: "Phone and country code required." });
@@ -445,23 +447,25 @@ app.get("/check-phone-availability", async (req, res) => {
 
     try {
         const [rows] = await db.query(
-            `SELECT id FROM users WHERE phone = ? AND country_code = ? AND signup_status = 'completed'`,
+            `SELECT id, phone, country_code, signup_status FROM users WHERE phone = ? AND country_code = ? AND signup_status = 'completed'`,
             [phone, country_code]
         );
 
+        console.log(TAG, `Query result: found ${rows.length} rows`);
         if (rows.length > 0) {
-            // User exists and has completed signup
+            console.log(TAG, `User exists:`, rows[0]);
+        }
+
+        if (rows.length > 0) {
             return res.json({ available: false, message: "This mobile number is already linked with another account." });
         } else {
-            // User does not exist or didn't finish previous signup
             return res.json({ available: true });
         }
     } catch (err) {
-        console.error("Error checking availability:", err);
+        console.error(TAG, "Error checking availability:", err);
         res.status(500).json({ success: false, message: "Server error" });
     }
 });
-
 // ================= LOGIN =================
 
 app.post("/login", async (req, res) => {
