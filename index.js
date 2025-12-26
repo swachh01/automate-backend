@@ -1661,50 +1661,89 @@ app.get('/tripHistory/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const { page = 1, limit = 20 } = req.query;
+
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
     }
-    const updateStatusQuery = `UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW() AND added_fare = FALSE`;
-    await db.query(updateStatusQuery, [parseInt(userId)]);
-    const offset = (page - 1) * limit;
+
+    const uId = parseInt(userId);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // 1. Auto-update status for overdue plans across all tables
+    await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW()`, [uId]);
+    await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_date < CURDATE()`, [uId]);
+    await db.query(`UPDATE travel_plans_own SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_time < NOW()`, [uId]);
+
+    // 2. Unified History Query using UNION ALL
     const historyQuery = `
-      SELECT
-        tp.id, tp.from_place, tp.to_place,
-        DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-        tp.fare, tp.status, tp.added_fare as hasAddedFare
-      FROM travel_plans tp
-      WHERE tp.user_id = ?
-      ORDER BY tp.time DESC
+      SELECT * FROM (
+        -- Rickshaw Plans
+        SELECT 
+            id, from_place, to_place, 
+            DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+            fare, status, added_fare as hasAddedFare, 'Rickshaw' as commute_type
+        FROM travel_plans WHERE user_id = ?
+
+        UNION ALL
+
+        -- Cab Plans
+        SELECT 
+            id, pickup_location as from_place, destination as to_place,
+            DATE_FORMAT(CONCAT(travel_date, ' ', travel_time), '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+            0 as fare, status, 0 as hasAddedFare, 'Cab' as commute_type
+        FROM travel_plans_cab WHERE user_id = ?
+
+        UNION ALL
+
+        -- Own Vehicle Plans
+        SELECT 
+            id, pickup_location as from_place, destination as to_place,
+            DATE_FORMAT(travel_time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+            0 as fare, status, 0 as hasAddedFare, 'Own' as commute_type
+        FROM travel_plans_own WHERE user_id = ?
+      ) AS combined_history
+      ORDER BY travel_time DESC
       LIMIT ? OFFSET ?
     `;
-    const [trips] = await db.query(historyQuery, [parseInt(userId), parseInt(limit), parseInt(offset)]);
+
+    const [trips] = await db.query(historyQuery, [uId, uId, uId, parseInt(limit), offset]);
+
     const processedTrips = trips.map(trip => ({
-        id: trip.id,
-        from_place: trip.from_place,
-        to_place: trip.to_place,
-        travel_time: trip.travel_time,
-        fare: trip.fare ? parseFloat(trip.fare) : null,
-        status: trip.status,
-        hasAddedFare: Boolean(trip.hasAddedFare),
-        addedFare: trip.fare ? parseFloat(trip.fare) : null
+      id: trip.id,
+      from_place: trip.from_place,
+      to_place: trip.to_place,
+      travel_time: trip.travel_time,
+      fare: trip.fare ? parseFloat(trip.fare) : null,
+      status: trip.status,
+      hasAddedFare: Boolean(trip.hasAddedFare),
+      commute_type: trip.commute_type // Added this field for your Android UI
     }));
-    const countQuery = 'SELECT COUNT(*) as total FROM travel_plans WHERE user_id = ?';
-    const [countResult] = await db.query(countQuery, [parseInt(userId)]);
+
+    // 3. Count Total across all tables for pagination
+    const [countResult] = await db.query(`
+      SELECT 
+        (SELECT COUNT(*) FROM travel_plans WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM travel_plans_cab WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM travel_plans_own WHERE user_id = ?) as total
+    `, [uId, uId, uId]);
+
+    const totalTrips = countResult[0].total;
+
     res.json({
       success: true,
       data: {
         trips: processedTrips,
         pagination: {
           currentPage: parseInt(page),
-          totalPages: Math.ceil(countResult[0].total / limit),
-          totalTrips: countResult[0].total,
-          hasMore: offset + processedTrips.length < countResult[0].total
+          totalPages: Math.ceil(totalTrips / limit),
+          totalTrips: totalTrips,
+          hasMore: offset + processedTrips.length < totalTrips
         }
       }
     });
   } catch (error) {
-    console.error(TAG, '❌ Error fetching trip history:', error);
-    res.status(500).json({ success: false, message: 'Error fetching trip history', error: error.message });
+    console.error(TAG, '❌ Error fetching unified trip history:', error);
+    res.status(500).json({ success: false, message: 'Server Error', error: error.message });
   }
 });
 
