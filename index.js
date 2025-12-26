@@ -126,7 +126,6 @@ async function updateUserPresence(userId, isOnline) {
   }
 }
 
-// ================= SOCKET.IO LOGIC =================
 
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
