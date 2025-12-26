@@ -1927,23 +1927,50 @@ app.get("/user/:userId", async (req, res) => {
     try {
         const { userId } = req.params; 
         const { viewerId } = req.query; 
+        
         if (!userId || isNaN(userId)) return res.status(400).json({ success: false });
-        const [friendRows] = await db.query(`SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
-[viewerId, viewerId, viewerId]);
+
+        const [friendRows] = await db.query(
+            `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
+             FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
+            [viewerId, viewerId, viewerId]
+        );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
-        const query = `SELECT id, CONCAT(first_name, ' ', last_name) as name, work_category, gender, dob, work_detail, profile_pic, profile_visibility, EXISTS (SELECT 1 FROM messages m WHERE 
-(m.sender_id = ? AND m.receiver_id = users.id) OR (m.sender_id = users.id AND m.receiver_id = ?)) as hasChat FROM users WHERE id = ?`;
+
+        // ✅ UPDATED QUERY: Added bio and home_location
+        const query = `
+            SELECT 
+                id, 
+                CONCAT(first_name, ' ', last_name) as name, 
+                work_category, 
+                gender, 
+                dob, 
+                work_detail, 
+                profile_pic, 
+                profile_visibility,
+                COALESCE(bio, '') as bio,
+                COALESCE(home_location, '') as home_location,
+                EXISTS (
+                    SELECT 1 FROM messages m 
+                    WHERE (m.sender_id = ? AND m.receiver_id = users.id) 
+                       OR (m.sender_id = users.id AND m.receiver_id = ?)
+                ) as hasChat 
+            FROM users WHERE id = ?`;
+
         const [rows] = await db.query(query, [viewerId, viewerId, parseInt(userId)]);
+        
         if (rows.length === 0) return res.status(404).json({ success: false });
+        
         const user = rows[0]; 
         user.hasChat = Boolean(user.hasChat);
         user.profile_pic = getVisibleProfilePic(user, parseInt(viewerId), friendIds);
+        
         res.json({ success: true, user: user }); 
     } catch (err) {
+        console.error(TAG, err);
         res.status(500).json({ success: false });
     }
 });
-
 
 app.delete('/favorites/:userId/:favoriteId', async (req, res) => {
     const { userId, favoriteId } = req.params;
