@@ -466,6 +466,33 @@ app.get("/check-phone-availability", async (req, res) => {
         res.status(500).json({ success: false, message: "Server error" });
     }
 });
+
+app.get("/debug/check-user", async (req, res) => {
+    const { phone, country_code } = req.query;
+    
+    try {
+        // Check all variations
+        const [exact] = await db.query(
+            `SELECT id, phone, country_code, signup_status, CHAR_LENGTH(phone) as phone_length, CHAR_LENGTH(country_code) as code_length 
+             FROM users WHERE phone = ? AND country_code = ?`,
+            [phone, country_code]
+        );
+        
+        const [allUsers] = await db.query(
+            `SELECT id, phone, country_code, signup_status FROM users WHERE phone LIKE ?`,
+            [`%${phone}%`]
+        );
+        
+        res.json({
+            exactMatch: exact,
+            allMatches: allUsers,
+            searchedFor: { phone, country_code }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ================= LOGIN =================
 
 app.post("/login", async (req, res) => {
