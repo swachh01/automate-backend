@@ -889,14 +889,32 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
 app.get('/users/destination', async (req, res) => {
     const TAG = "/users/destination";
-    const { groupId, userId } = req.query; 
+    // Added commuteType to the destructuring
+    const { groupId, userId, commuteType } = req.query; 
 
     if (!groupId || !userId) {
         return res.status(400).json({ success: false, message: 'Missing groupId or userId' });
     }
 
-    const currentGroupId = parseInt(groupId);
     const currentUserId = parseInt(userId);
+
+    // Determine target table and column names
+    let tableName = 'travel_plans';
+    let fromCol = 'from_place';
+    let toCol = 'to_place';
+    let timeCol = 'time';
+
+    if (commuteType === 'Cab') {
+        tableName = 'travel_plans_cab';
+        fromCol = 'pickup_location';
+        toCol = 'destination';
+        timeCol = 'travel_time';
+    } else if (commuteType === 'Own') {
+        tableName = 'travel_plans_own';
+        fromCol = 'pickup_location';
+        toCol = 'destination';
+        timeCol = 'travel_time';
+    }
 
     try {
         const friendsQuery = `
@@ -908,6 +926,7 @@ app.get('/users/destination', async (req, res) => {
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
+        // Unified Query: We use the dynamic table name determined above
         const query = `
             SELECT
                 u.id,           
@@ -917,21 +936,23 @@ app.get('/users/destination', async (req, res) => {
                 u.profile_pic AS profilePic,
                 u.gender,
                 u.profile_visibility,
-                tp.time,        
-                tp.from_place AS fromPlace, 
-                tp.to_place AS toPlace     
-            FROM group_members gm
-            JOIN users u ON gm.user_id = u.id
-            INNER JOIN travel_plans tp ON u.id = tp.user_id
-                AND tp.status = 'Active' 
-                AND tp.to_place = (SELECT group_name FROM \`group_table\` WHERE group_id = ?)
+                tp.${timeCol} as time,        
+                tp.${fromCol} AS fromPlace, 
+                tp.${toCol} AS toPlace     
+            FROM users u
+            INNER JOIN ${tableName} tp ON u.id = tp.user_id
             WHERE
-                gm.group_id = ?       
-                AND gm.user_id != ?   
+                tp.status = 'Active' 
+                -- We match the destination name instead of group_id for Cab/Own
+                AND tp.${toCol} = (SELECT group_name FROM \`group_table\` WHERE group_id = ? OR group_name = ?)
+                AND u.id != ?   
             ORDER BY
-                tp.time ASC; 
+                tp.${timeCol} ASC; 
         `;
-        const [users] = await db.execute(query, [currentGroupId, currentGroupId, currentUserId]);
+        
+        // Note: We pass the groupId as an index/placeholder for Rickshaws 
+        // but we also search by the name if it's a Cab/Own plan.
+        const [users] = await db.execute(query, [groupId, groupId, currentUserId]);
 
         const responseUsers = users.map(user => ({
             id: user.id, 
@@ -956,7 +977,6 @@ app.get('/users/destination', async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error fetching users' });
     }
 });
-
 
 app.post("/updateFcmToken", async (req, res) => {
     const { userId, token } = req.body;
