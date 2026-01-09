@@ -888,93 +888,55 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 });
 
 app.get('/users/destination', async (req, res) => {
-    const TAG = "/users/destination";
-    // Added commuteType to the destructuring
-    const { groupId, userId, commuteType } = req.query; 
-
-    if (!groupId || !userId) {
-        return res.status(400).json({ success: false, message: 'Missing groupId or userId' });
-    }
+    const { groupId, userId, commuteType, destinationName } = req.query; 
 
     const currentUserId = parseInt(userId);
-
-    // Determine target table and column names
     let tableName = 'travel_plans';
-    let fromCol = 'from_place';
-    let toCol = 'to_place';
+    let destCol = 'to_place';
     let timeCol = 'time';
 
+    // Route to correct table
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
-        fromCol = 'pickup_location';
-        toCol = 'destination';
+        destCol = 'destination';
         timeCol = 'travel_time';
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
-        fromCol = 'pickup_location';
-        toCol = 'destination';
+        destCol = 'destination';
         timeCol = 'travel_time';
     }
 
     try {
-        const friendsQuery = `
-            SELECT DISTINCT
-                CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
-            FROM messages
-            WHERE sender_id = ? OR receiver_id = ?
-        `;
-        const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
+        const [friendRows] = await db.query(
+            `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
+             FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
+            [currentUserId, currentUserId, currentUserId]
+        );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-        // Unified Query: We use the dynamic table name determined above
+        // THE FIX: If it's a Cab/Own plan, match by NAME. If Rickshaw, match by GroupID.
         const query = `
             SELECT
-                u.id,           
-                u.id as userId, 
-                CONCAT(u.first_name, ' ', u.last_name) as name,
-                u.work_category,
-                u.profile_pic AS profilePic,
-                u.gender,
-                u.profile_visibility,
-                tp.${timeCol} as time,        
-                tp.${fromCol} AS fromPlace, 
-                tp.${toCol} AS toPlace     
+                u.id, u.id as userId, CONCAT(u.first_name, ' ', u.last_name) as name,
+                u.work_category, u.profile_pic AS profilePic, u.gender,
+                tp.${timeCol} as time, tp.from_place as fromPlace, tp.${destCol} as toPlace
             FROM users u
             INNER JOIN ${tableName} tp ON u.id = tp.user_id
-            WHERE
-                tp.status = 'Active' 
-                -- We match the destination name instead of group_id for Cab/Own
-                AND tp.${toCol} = (SELECT group_name FROM \`group_table\` WHERE group_id = ? OR group_name = ?)
-                AND u.id != ?   
-            ORDER BY
-                tp.${timeCol} ASC; 
+            WHERE tp.status = 'Active' 
+              AND u.id != ?
+              AND (tp.${destCol} = ? OR tp.${destCol} = (SELECT group_name FROM group_table WHERE group_id = ?))
+            ORDER BY tp.${timeCol} ASC
         `;
-        
-        // Note: We pass the groupId as an index/placeholder for Rickshaws 
-        // but we also search by the name if it's a Cab/Own plan.
-        const [users] = await db.execute(query, [groupId, groupId, currentUserId]);
 
-        const responseUsers = users.map(user => ({
-            id: user.id, 
-            userId: user.id,
-            name: user.name,
-            work_category: user.work_category,
-            profilePic: getVisibleProfilePic(
-                { ...user, profile_pic: user.profilePic, user_id: user.id }, 
-                currentUserId, 
-                friendIds
-            ),
-            gender: user.gender,
-            time: user.time,
-            fromPlace: user.fromPlace,
-            toPlace: user.toPlace
-        }));
+        const [users] = await db.execute(query, [currentUserId, destinationName, groupId]);
 
-        res.json({ success: true, users: responseUsers }); 
+        res.json({ success: true, users: users.map(user => ({
+            ...user,
+            profilePic: getVisibleProfilePic(user, currentUserId, friendIds)
+        }))}); 
 
     } catch (error) {
-        console.error(TAG, `Error fetching active users:`, error);
-        res.status(500).json({ success: false, message: 'Server error fetching users' });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
