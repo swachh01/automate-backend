@@ -888,25 +888,36 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 });
 
 app.get('/users/destination', async (req, res) => {
+    const TAG = "/users/destination";
+    // We added destinationName to the query extraction
     const { groupId, userId, commuteType, destinationName } = req.query; 
 
+    if (!userId || (!groupId && !destinationName)) {
+        return res.status(400).json({ success: false, message: 'Missing required parameters' });
+    }
+
     const currentUserId = parseInt(userId);
+
+    // 1. Determine target table based on commuteType
     let tableName = 'travel_plans';
-    let destCol = 'to_place';
+    let fromCol = 'from_place';
+    let toCol = 'to_place';
     let timeCol = 'time';
 
-    // Route to correct table
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
-        destCol = 'destination';
+        fromCol = 'pickup_location';
+        toCol = 'destination';
         timeCol = 'travel_time';
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
-        destCol = 'destination';
+        fromCol = 'pickup_location';
+        toCol = 'destination';
         timeCol = 'travel_time';
     }
 
     try {
+        // Get friends for visibility
         const [friendRows] = await db.query(
             `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
              FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
@@ -914,29 +925,57 @@ app.get('/users/destination', async (req, res) => {
         );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-        // THE FIX: If it's a Cab/Own plan, match by NAME. If Rickshaw, match by GroupID.
+        // 2. Resolve the Destination Name
+        // If we have destinationName, use it. Otherwise, look it up via groupId.
+        let finalDestName = destinationName;
+        if (!finalDestName && groupId) {
+            const [groupRows] = await db.query("SELECT group_name FROM \`group_table\` WHERE group_id = ?", [groupId]);
+            if (groupRows.length > 0) finalDestName = groupRows[0].group_name;
+        }
+
+        if (!finalDestName) {
+            return res.status(404).json({ success: false, message: 'Destination not identified' });
+        }
+
+        // 3. Query the specific travel table directly by Destination Name
         const query = `
             SELECT
-                u.id, u.id as userId, CONCAT(u.first_name, ' ', u.last_name) as name,
-                u.work_category, u.profile_pic AS profilePic, u.gender,
-                tp.${timeCol} as time, tp.from_place as fromPlace, tp.${destCol} as toPlace
-            FROM users u
-            INNER JOIN ${tableName} tp ON u.id = tp.user_id
-            WHERE tp.status = 'Active' 
-              AND u.id != ?
-              AND (tp.${destCol} = ? OR tp.${destCol} = (SELECT group_name FROM group_table WHERE group_id = ?))
-            ORDER BY tp.${timeCol} ASC
+                u.id,           
+                u.id as userId, 
+                CONCAT(u.first_name, ' ', u.last_name) as name,
+                u.work_category,
+                u.profile_pic AS profilePic,
+                u.gender,
+                u.profile_visibility,
+                tp.${timeCol} as time,        
+                tp.${fromCol} AS fromPlace, 
+                tp.${toCol} AS toPlace     
+            FROM ${tableName} tp
+            JOIN users u ON tp.user_id = u.id
+            WHERE
+                tp.${toCol} = ?
+                AND tp.status = 'Active' 
+                AND tp.user_id != ?   
+            ORDER BY
+                tp.${timeCol} ASC; 
         `;
+        
+        const [users] = await db.execute(query, [finalDestName, currentUserId]);
 
-        const [users] = await db.execute(query, [currentUserId, destinationName, groupId]);
-
-        res.json({ success: true, users: users.map(user => ({
+        const responseUsers = users.map(user => ({
             ...user,
-            profilePic: getVisibleProfilePic(user, currentUserId, friendIds)
-        }))}); 
+            profilePic: getVisibleProfilePic(
+                { ...user, profile_pic: user.profilePic, user_id: user.id }, 
+                currentUserId, 
+                friendIds
+            )
+        }));
+
+        res.json({ success: true, users: responseUsers }); 
 
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error(TAG, `Error fetching users:`, error);
+        res.status(500).json({ success: false, message: 'Server error fetching users' });
     }
 });
 
