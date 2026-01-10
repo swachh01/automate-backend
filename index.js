@@ -72,10 +72,10 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 const pool = mysql.createPool({
-  host: process.env.MYSQLHOST || "localhost",
-  user: process.env.MYSQLUSER || "root",
-  password: process.env.MYSQLPASSWORD || "",
-  database: process.env.MYSQLDATABASE || "yourdbname",
+  host: process.env.MYSQLHOST,
+  user: process.env.MYSQLUSER,
+  password: process.env.MYSQLPASSWORD,
+  database: process.env.MYSQLDATABASE,
   port: process.env.DB_PORT || 4000, 
   ssl: {
       minVersion: 'TLSv1.2',
@@ -93,9 +93,9 @@ const db = pool.promise();
 
 pool.getConnection((err, connection) => {
   if (err) {
-    console.error('❌ Database connection failed:', err.message);
+    console.error('Database connection failed:', err.message);
   } else {
-    console.log('✅ Database connected successfully');
+    console.log('Database connected successfully');
     connection.release();
   }
 });
@@ -122,13 +122,13 @@ async function updateUserPresence(userId, isOnline) {
     `;
     await db.query(query, [userId, isOnline]);
   } catch (error) {
-    console.error('❌ Error updating user presence:', error);
+    console.error('Error updating user presence:', error);
   }
 }
 
 
 io.on('connection', (socket) => {
-  console.log('🔌 User connected:', socket.id);
+  console.log('User connected:', socket.id);
 
   socket.on('user_online', async (userId) => {
     try {
@@ -140,7 +140,7 @@ io.on('connection', (socket) => {
         await updateUserPresence(userId, true);
         
         socket.join(`chat_${userId}`);
-        console.log(`✅ User ${userId} joined private chat room: chat_${userId}`);
+        console.log(`User ${userId} joined private chat room: chat_${userId}`);
         
         socket.broadcast.emit('user_status_changed', {
             userId: userId.toString(),
@@ -148,7 +148,7 @@ io.on('connection', (socket) => {
             lastSeen: new Date()
         });
     } catch (error) {
-        console.error('❌ Error handling user_online:', error);
+        console.error('Error handling user_online:', error);
     }
   });
   
@@ -185,7 +185,7 @@ io.on('connection', (socket) => {
         });
       }
     } catch (error) {
-      console.error('❌ Error handling disconnect:', error);
+      console.error('Error handling disconnect:', error);
     }
   });
 
@@ -320,7 +320,7 @@ app.get("/health", async (_req, res) => {
     await db.query('SELECT 1');
     res.json({ status: "OK", timestamp: new Date().toISOString() });
   } catch (err) {
-    console.error("❌ Health check failed:", err);
+    console.error("Health check failed:", err);
     res.status(500).json({ status: "ERROR", message: `Database connection failed: ${err.message}` });
   }
 });
@@ -394,8 +394,6 @@ app.post("/create-account", async (req, res) => {
         `;
         
         await db.query(query, [first_name, last_name, work_category, work_detail, gender, phone, country_code, hashedPassword]);
-
-        // ✅ FIX: Include bio and home_location in the SELECT query
         const [userRows] = await db.query(
             `SELECT 
                 id, 
@@ -426,7 +424,7 @@ app.post("/create-account", async (req, res) => {
         });
 
     } catch (err) {
-        console.error(TAG, "❌ Error in /create-account:", err);
+        console.error(TAG, "Error in /create-account:", err);
         res.status(500).json({ 
             success: false, 
             message: "Server error during account creation.",
@@ -467,12 +465,10 @@ app.get("/check-phone-availability", async (req, res) => {
     }
 });
 
-// Add this BEFORE your other routes (after the app declarations)
 app.get("/debug/check-user", async (req, res) => {
     const { phone, country_code } = req.query;
     
     try {
-        // Check exact match
         const [exact] = await db.query(
             `SELECT id, phone, country_code, signup_status, 
                     CHAR_LENGTH(phone) as phone_length, 
@@ -484,7 +480,6 @@ app.get("/debug/check-user", async (req, res) => {
             [phone, country_code]
         );
         
-        // Check with completed status
         const [withStatus] = await db.query(
             `SELECT id, phone, country_code, signup_status 
              FROM users 
@@ -492,7 +487,6 @@ app.get("/debug/check-user", async (req, res) => {
             [phone, country_code]
         );
         
-        // Check all users with this phone (any country code)
         const [allWithPhone] = await db.query(
             `SELECT id, phone, country_code, signup_status 
              FROM users 
@@ -575,7 +569,7 @@ app.post("/login", async (req, res) => {
     res.json({ success: true, message: "Login successful", user: user });
 
   } catch (err) {
-    console.error("❌ /login error:", err);
+    console.error("/login error:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
@@ -583,8 +577,6 @@ app.post("/login", async (req, res) => {
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request ===");
-
-    // Extract fields from body: userId, dob, bio, and Google Places data
     const { 
       userId, 
       dob, 
@@ -601,7 +593,6 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     const sets = [];
     const params = [];
 
-    // Dynamically build the update query based on provided fields from Stage 4
     if (dob) {
       sets.push("dob = ?");
       params.push(dob);
@@ -623,18 +614,15 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       params.push(home_lng);
     }
     
-    // Handle Profile Picture if uploaded via Multer/Cloudinary
     if (req.file && req.file.path) {
       sets.push("profile_pic = ?");
       params.push(req.file.path);
     }
 
-    // Validation: Ensure at least one field is being updated
     if (sets.length === 0) {
       return res.status(400).json({ success: false, message: "Nothing to update" });
     }
 
-    // Append userId to params for the SQL WHERE clause
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
     params.push(userId);
 
@@ -644,10 +632,8 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Successfully reached Stage 4 and submitted, so mark signup_status as completed
     await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
 
-    // Final fetch of the full user object with new Location and Bio fields to return to Android
     const [rows] = await db.query(
       `SELECT
         id,
@@ -668,7 +654,7 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     );
 
     const updatedUser = rows[0];
-    console.log("✅ Profile Updated for User:", updatedUser.id);
+    console.log("Profile Updated for User:", updatedUser.id);
 
     res.json({
       success: true,
@@ -677,7 +663,7 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ === /updateProfile ERROR ===");
+    console.error("=== /updateProfile ERROR ===");
     console.error(err);
     res.status(500).json({
       success: false,
@@ -686,6 +672,8 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     });
   }
 });
+
+//==============================================ADD TRAVEL PLAN=========================================================
 
 app.post("/addTravelPlan", async (req, res) => {
     const TAG = "/addTravelPlan"; 
@@ -790,7 +778,7 @@ app.post("/addTravelPlan", async (req, res) => {
                 await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
-            console.error(TAG, "⚠️ Error sending travel match notification:", notifyError.message);
+            console.error(TAG, "Error sending travel match notification:", notifyError.message);
         }
 
         res.status(201).json({
@@ -803,14 +791,14 @@ app.post("/addTravelPlan", async (req, res) => {
         if (connection) {
             try { await connection.rollback(); } catch (e) {}
         }
-        console.error(TAG, `❌ Error saving travel plan:`, err);
+        console.error(TAG, `Error saving travel plan:`, err);
         res.status(500).json({ success: false, message: "Server error occurred." });
     } finally {
         if (connection) { connection.release(); }
     }
 });
 
-// --- NEW: Add Cab Travel Plan ---
+//==========================================================================CAB TRAVEL PLAN==========================================================================================
 app.post("/addCabTravelPlan", async (req, res) => {
     const { userId, companyName, date, time, pickup, destination, landmark } = req.body;
     try {
@@ -824,7 +812,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
     }
 });
 
-// --- NEW: Add Own Vehicle Plan ---
+//==========================================================================OWN VEHICLE PLAN=========================================================================================
 app.post("/addOwnVehiclePlan", async (req, res) => {
     const { userId, vehicleType, vehicleNumber, pickup, destination, time } = req.body;
     try {
@@ -845,7 +833,6 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     let destinationCol;
     let statusFilter = "status = 'Active'";
 
-    // Determine which table to query based on commuteType
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
@@ -854,11 +841,10 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         destinationCol = 'destination';
     } else {
         tableName = 'travel_plans';
-        destinationCol = 'to_place'; // Original table uses to_place
+        destinationCol = 'to_place'; 
     }
 
     try {
-        // Query to get unique destinations and count of people going there
         const query = `
             SELECT 
                 ${destinationCol} as destination, 
@@ -871,10 +857,8 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         `;
 
         const [destinations] = await db.query(query, [userId]);
-        
-        // Map data to match your existing DestinationGroup model structure
         const formattedDestinations = destinations.map((d, index) => ({
-            groupId: index + 100, // Dummy ID for groups since Cabs/Own don't have group_table entries yet
+            groupId: index + 100, 
             destination: d.destination,
             userCount: d.userCount,
             isCurrentUserGoing: d.isCurrentUserGoing
@@ -889,7 +873,6 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
 app.get('/users/destination', async (req, res) => {
     const TAG = "/users/destination";
-    // We added destinationName to the query extraction
     const { groupId, userId, commuteType, destinationName } = req.query; 
 
     if (!userId || (!groupId && !destinationName)) {
@@ -898,7 +881,6 @@ app.get('/users/destination', async (req, res) => {
 
     const currentUserId = parseInt(userId);
 
-    // 1. Determine target table based on commuteType
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
@@ -917,7 +899,6 @@ app.get('/users/destination', async (req, res) => {
     }
 
     try {
-        // Get friends for visibility
         const [friendRows] = await db.query(
             `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
              FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
@@ -925,8 +906,6 @@ app.get('/users/destination', async (req, res) => {
         );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-        // 2. Resolve the Destination Name
-        // If we have destinationName, use it. Otherwise, look it up via groupId.
         let finalDestName = destinationName;
         if (!finalDestName && groupId) {
             const [groupRows] = await db.query("SELECT group_name FROM \`group_table\` WHERE group_id = ?", [groupId]);
@@ -937,7 +916,6 @@ app.get('/users/destination', async (req, res) => {
             return res.status(404).json({ success: false, message: 'Destination not identified' });
         }
 
-        // 3. Query the specific travel table directly by Destination Name
         const query = `
             SELECT
                 u.id,           
@@ -1146,7 +1124,7 @@ app.post('/sendMessage', async (req, res) => {
         if (userRows.length > 0 && userRows[0].fcm_token) {
           const messagePayload = {
             token: userRows[0].fcm_token,
-            notification: { title: senderName, body: type === 'location' ? '📍 Shared a location' : message },
+            notification: { title: senderName, body: type === 'location' ? 'Shared a location' : message },
             android: {
               priority: "high",
               notification: { channelId: "channel_custom_sound_v2", sound: "custom_notification", priority: "high", defaultSound: false }
@@ -1163,13 +1141,13 @@ app.post('/sendMessage', async (req, res) => {
         }
       }
     } catch (fcmError) {
-      console.error(TAG, "⚠️ Error sending FCM:", fcmError.message);
+      console.error(TAG, " Error sending FCM:", fcmError.message);
     }
 
     res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
   } catch (error) {
-    console.error(TAG, '❌ Error in /sendMessage:', error);
+    console.error(TAG, 'Error in /sendMessage:', error);
     res.status(500).json({ success: false, message: 'Failed to send message' });
   }
 });
@@ -1329,7 +1307,7 @@ app.get('/getChatUsers', async (req, res) => {
         res.json({ success: true, chats: chatListItems });
 
     } catch (error) {
-        console.error(TAG, '❌ Error fetching chat list:', error);
+        console.error(TAG, 'Error fetching chat list:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch chat list' });
     }
 });
@@ -1494,7 +1472,6 @@ app.get("/getUsersGoing", async (req, res) => {
     }
 });
 
-// Helper function to get address from coordinates using Google Geocoding API
 async function getAddressFromCoordinates(lat, lng) {
   try {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -1690,12 +1667,10 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const uId = parseInt(userId);
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // 1. Auto-update status for overdue plans across all tables
     await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_date < CURDATE()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_time < NOW()`, [uId]);
 
-    // 2. Unified History Query using UNION ALL
     const historyQuery = `
       SELECT * FROM (
         -- Rickshaw Plans
@@ -1740,7 +1715,6 @@ app.get('/tripHistory/:userId', async (req, res) => {
       commute_type: trip.commute_type // Added this field for your Android UI
     }));
 
-    // 3. Count Total across all tables for pagination
     const [countResult] = await db.query(`
       SELECT 
         (SELECT COUNT(*) FROM travel_plans WHERE user_id = ?) +
@@ -1763,7 +1737,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error(TAG, '❌ Error fetching unified trip history:', error);
+    console.error(TAG, 'Error fetching unified trip history:', error);
     res.status(500).json({ success: false, message: 'Server Error', error: error.message });
   }
 });
@@ -1825,7 +1799,7 @@ app.put('/trip/complete/:tripId', async (req, res) => {
       res.status(404).json({ success: false, message: 'Trip not found' });
     }
   } catch (error) {
-    console.error(TAG, '❌ Error completing trip:', error);
+    console.error(TAG, 'Error completing trip:', error);
     res.status(500).json({ success: false, message: 'Error completing trip' });
   }
 });
@@ -1950,7 +1924,7 @@ app.post('/reset-password', async (req, res) => {
         await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
         res.json({ success: true, message: 'Password reset successfully' });
     } catch (error) {
-        console.error(TAG, '❌ Error resetting password:', error);
+        console.error(TAG, 'Error resetting password:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 });
@@ -1985,7 +1959,7 @@ app.get("/getUserByPhone", async (req, res) => {
         delete user.password;
         res.json({ success: true, userId: user.id, user: user });
     } catch (err) {
-        console.error(TAG, `❌ Error searching for user:`, err);
+        console.error(TAG, `Error searching for user:`, err);
         res.status(500).json({ success: false, message: "Server error." });
     }
 });
@@ -2149,7 +2123,6 @@ app.get("/user/:userId", async (req, res) => {
         );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-        // ✅ UPDATED QUERY: Added bio and home_location
         const query = `
             SELECT 
                 id, 
@@ -2407,5 +2380,5 @@ app.get('/chatRequests/count', async (req, res) => {
 app.use(router);
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server listening on port ${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
