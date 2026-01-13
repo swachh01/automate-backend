@@ -1051,7 +1051,18 @@ app.post('/sendMessage', async (req, res) => {
   const TAG = "/sendMessage";
 
   try {
-    const { sender_id, receiver_id, message, message_type, latitude, longitude, duration } = req.body;
+    const { 
+      sender_id, 
+      receiver_id, 
+      message, 
+      message_type, 
+      latitude, 
+      longitude, 
+      duration,
+      reply_to_id,      // NEW: ID of the message being replied to
+      quoted_message,   // NEW: Text content of the quoted message
+      quoted_user_name  // NEW: Name of the user being quoted
+    } = req.body;
 
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'Missing fields' });
@@ -1078,13 +1089,25 @@ app.post('/sendMessage', async (req, res) => {
         expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
     }
 
+    // UPDATED: Added the 3 new columns to the INSERT statement
     const query = `
         INSERT INTO messages 
-        (sender_id, receiver_id, message, timestamp, status, message_type, latitude, longitude, expires_at) 
-        VALUES (?, ?, ?, UTC_TIMESTAMP(), 0, ?, ?, ?, ?)
+        (sender_id, receiver_id, message, timestamp, status, message_type, latitude, longitude, expires_at, reply_to_id, quoted_message, quoted_user_name) 
+        VALUES (?, ?, ?, UTC_TIMESTAMP(), 0, ?, ?, ?, ?, ?, ?, ?)
     `;
+    
+    // UPDATED: Added the 3 new values to the parameters array
     const [result] = await db.query(query, [
-        sender_id, receiver_id, encryptedMessage, type, latitude || null, longitude || null, expiresAt
+        sender_id, 
+        receiver_id, 
+        encryptedMessage, 
+        type, 
+        latitude || null, 
+        longitude || null, 
+        expiresAt,
+        reply_to_id || null,      // NEW
+        quoted_message || null,   // NEW
+        quoted_user_name || null  // NEW
     ]);
 
     if (!result.insertId) {
@@ -1095,6 +1118,8 @@ app.post('/sendMessage', async (req, res) => {
     const [insertedMsg] = await db.query('SELECT * FROM messages WHERE id = ?', [newMessageId]);
     const msgData = insertedMsg[0];
 
+    // UPDATED: The emission object now contains the reply data so the receiver's 
+    // RecyclerView can render the reply box immediately.
     const messageToEmit = {
       id: msgData.id,
       sender_id: msgData.sender_id,
@@ -1105,7 +1130,10 @@ app.post('/sendMessage', async (req, res) => {
       message_type: msgData.message_type,
       latitude: msgData.latitude,
       longitude: msgData.longitude,
-      expires_at: msgData.expires_at
+      expires_at: msgData.expires_at,
+      reply_to_id: msgData.reply_to_id,           // NEW
+      quoted_message: msgData.quoted_message,     // NEW
+      quoted_user_name: msgData.quoted_user_name   // NEW
     };
 
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
