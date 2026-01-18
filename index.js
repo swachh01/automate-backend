@@ -300,6 +300,32 @@ socket.on('group_read', async (data) => {
     }
 });
 
+  socket.on('update_live_location', (data) => {
+    const { senderId, receiverId, lat, lng, type } = data;
+    
+    socket.to(`chat_${receiverId}`).emit('update_live_location', {
+      senderId,
+      lat,
+      lng,
+      type: 'live_update'
+    });
+    if (type === 'stop_sharing') {
+        console.log(`User ${senderId} stopped sharing with ${receiverId}`);
+    }
+    console.log(`Relaying live location from ${senderId} to ${receiverId}: ${lat}, ${lng}`);
+  });
+
+  socket.on('update_group_live_location', (data) => {
+    const { senderId, groupId, lat, lng } = data;
+    socket.to(`group_${groupId}`).emit('group_live_location_update', {
+      senderId,
+      lat,
+      lng
+    });
+    if (type === 'stop_sharing') {
+        console.log(`User ${senderId} stopped sharing with ${receiverId}`);
+    }
+  });
 }); 
 
 async function getUserByPhone(phone) {
