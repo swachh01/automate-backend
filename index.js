@@ -301,19 +301,20 @@ socket.on('group_read', async (data) => {
 });
 
   socket.on('update_live_location', (data) => {
-    const { senderId, receiverId, lat, lng, type } = data;
-    
-    socket.to(`chat_${receiverId}`).emit('update_live_location', {
-      senderId,
-      lat,
-      lng,
-      type: 'live_update'
-    });
-    if (type === 'stop_sharing') {
-        console.log(`User ${senderId} stopped sharing with ${receiverId}`);
-    }
-    console.log(`Relaying live location from ${senderId} to ${receiverId}: ${lat}, ${lng}`);
+  const { senderId, receiverId, lat, lng, type } = data;
+  
+  // Relay the update (location OR stop signal) to the receiver
+  socket.to(`chat_${receiverId}`).emit('update_live_location', {
+    senderId,
+    lat,
+    lng,
+    type: type // This will now correctly relay 'stop_sharing'
   });
+
+  if (type === 'stop_sharing') {
+      console.log(`User ${senderId} stopped sharing with ${receiverId}`);
+  }
+});
 
   socket.on('update_group_live_location', (data) => {
     const { senderId, groupId, lat, lng } = data;
@@ -1525,6 +1526,20 @@ app.post('/updateNotificationSettings', async (req, res) => {
         console.error('Error updating settings:', error);
         res.status(500).json({ success: false, message: 'Server error' });
     }
+});
+
+app.post('/stopLiveLocation', async (req, res) => {
+  const { messageId, userId } = req.body;
+  try {
+    // Set expires_at to current time so isExpired() will return true on reload
+    const query = `UPDATE messages SET expires_at = UTC_TIMESTAMP() WHERE id = ? AND sender_id = ?`;
+    const [result] = await db.execute(query, [messageId, userId]);
+    
+    res.json({ success: true, message: 'Live location ended in database' });
+  } catch (error) {
+    console.error('Error stopping live location in DB:', error);
+    res.status(500).json({ success: false });
+  }
 });
 
 app.get("/getUsersGoing", async (req, res) => {
