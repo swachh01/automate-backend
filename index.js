@@ -1085,9 +1085,9 @@ app.post('/sendMessage', async (req, res) => {
       latitude, 
       longitude, 
       duration,
-      reply_to_id,      // NEW: ID of the message being replied to
-      quoted_message,   // NEW: Text content of the quoted message
-      quoted_user_name  // NEW: Name of the user being quoted
+      reply_to_id,
+      quoted_message,
+      quoted_user_name
     } = req.body;
 
     if (!sender_id || !receiver_id || !message) {
@@ -1109,21 +1109,24 @@ app.post('/sendMessage', async (req, res) => {
     const type = message_type || 'text';
     let expiresAt = null;
 
-    if (type === 'location' && duration && duration > 0) {
+    // FIXED: Calculate expires_at for ALL location types with duration
+    if ((type === 'location' || type === 'live_location') && duration && duration > 0) {
         const date = new Date();
         date.setMinutes(date.getMinutes() + duration);
         expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
     }
 
-    // UPDATED: Added the 3 new columns to the INSERT statement
-    const query = `
+    // FIXED: Only include reply fields if they exist
+    let query, params;
+    
+    if (reply_to_id && quoted_message && quoted_user_name) {
+      // WITH reply data
+      query = `
         INSERT INTO messages 
         (sender_id, receiver_id, message, timestamp, status, message_type, latitude, longitude, expires_at, reply_to_id, quoted_message, quoted_user_name) 
         VALUES (?, ?, ?, UTC_TIMESTAMP(), 0, ?, ?, ?, ?, ?, ?, ?)
-    `;
-    
-    // UPDATED: Added the 3 new values to the parameters array
-    const [result] = await db.query(query, [
+      `;
+      params = [
         sender_id, 
         receiver_id, 
         encryptedMessage, 
@@ -1131,10 +1134,29 @@ app.post('/sendMessage', async (req, res) => {
         latitude || null, 
         longitude || null, 
         expiresAt,
-        reply_to_id || null,      // NEW
-        quoted_message || null,   // NEW
-        quoted_user_name || null  // NEW
-    ]);
+        reply_to_id,
+        quoted_message,
+        quoted_user_name
+      ];
+    } else {
+      // WITHOUT reply data (original working query)
+      query = `
+        INSERT INTO messages 
+        (sender_id, receiver_id, message, timestamp, status, message_type, latitude, longitude, expires_at) 
+        VALUES (?, ?, ?, UTC_TIMESTAMP(), 0, ?, ?, ?, ?)
+      `;
+      params = [
+        sender_id, 
+        receiver_id, 
+        encryptedMessage, 
+        type, 
+        latitude || null, 
+        longitude || null, 
+        expiresAt
+      ];
+    }
+    
+    const [result] = await db.query(query, params);
 
     if (!result.insertId) {
       return res.status(500).json({ success: false, message: 'Failed to save message' });
@@ -1144,8 +1166,6 @@ app.post('/sendMessage', async (req, res) => {
     const [insertedMsg] = await db.query('SELECT * FROM messages WHERE id = ?', [newMessageId]);
     const msgData = insertedMsg[0];
 
-    // UPDATED: The emission object now contains the reply data so the receiver's 
-    // RecyclerView can render the reply box immediately.
     const messageToEmit = {
       id: msgData.id,
       sender_id: msgData.sender_id,
@@ -1157,9 +1177,9 @@ app.post('/sendMessage', async (req, res) => {
       latitude: msgData.latitude,
       longitude: msgData.longitude,
       expires_at: msgData.expires_at,
-      reply_to_id: msgData.reply_to_id,           // NEW
-      quoted_message: msgData.quoted_message,     // NEW
-      quoted_user_name: msgData.quoted_user_name   // NEW
+      reply_to_id: msgData.reply_to_id || null,
+      quoted_message: msgData.quoted_message || null,
+      quoted_user_name: msgData.quoted_user_name || null
     };
 
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
@@ -1178,10 +1198,18 @@ app.post('/sendMessage', async (req, res) => {
         if (userRows.length > 0 && userRows[0].fcm_token) {
           const messagePayload = {
             token: userRows[0].fcm_token,
-            notification: { title: senderName, body: type === 'location' ? 'Shared a location' : message },
+            notification: { 
+              title: senderName, 
+              body: type === 'location' || type === 'live_location' ? 'Shared a location' : message 
+            },
             android: {
               priority: "high",
-              notification: { channelId: "channel_custom_sound_v2", sound: "custom_notification", priority: "high", defaultSound: false }
+              notification: { 
+                channelId: "channel_custom_sound_v2", 
+                sound: "custom_notification", 
+                priority: "high", 
+                defaultSound: false 
+              }
             },
             data: {
               type: "chat",
