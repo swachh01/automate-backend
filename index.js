@@ -1090,6 +1090,18 @@ app.post('/sendMessage', async (req, res) => {
       quoted_user_name
     } = req.body;
 
+    // ENHANCED LOGGING
+    console.log(TAG, 'Received message:', {
+      sender_id,
+      receiver_id,
+      message_type,
+      has_lat: !!latitude,
+      has_lng: !!longitude,
+      duration,
+      reply_to_id,
+      has_quoted: !!quoted_message
+    });
+
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'Missing fields' });
     }
@@ -1109,18 +1121,25 @@ app.post('/sendMessage', async (req, res) => {
     const type = message_type || 'text';
     let expiresAt = null;
 
-    // FIXED: Calculate expires_at for ALL location types with duration
+    // Calculate expires_at for location messages with duration
     if ((type === 'location' || type === 'live_location') && duration && duration > 0) {
         const date = new Date();
         date.setMinutes(date.getMinutes() + duration);
         expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
+        console.log(TAG, 'Set expires_at to:', expiresAt);
     }
 
-    // FIXED: Only include reply fields if they exist
+    // CRITICAL FIX: Handle reply fields more carefully
+    // Only include them if ALL three exist AND are valid
+    const hasReplyData = reply_to_id && 
+                         reply_to_id !== 0 && 
+                         quoted_message && 
+                         quoted_user_name;
+
     let query, params;
     
-    if (reply_to_id && quoted_message && quoted_user_name) {
-      // WITH reply data
+    if (hasReplyData) {
+      console.log(TAG, 'Inserting WITH reply data');
       query = `
         INSERT INTO messages 
         (sender_id, receiver_id, message, timestamp, status, message_type, latitude, longitude, expires_at, reply_to_id, quoted_message, quoted_user_name) 
@@ -1139,7 +1158,7 @@ app.post('/sendMessage', async (req, res) => {
         quoted_user_name
       ];
     } else {
-      // WITHOUT reply data (original working query)
+      console.log(TAG, 'Inserting WITHOUT reply data');
       query = `
         INSERT INTO messages 
         (sender_id, receiver_id, message, timestamp, status, message_type, latitude, longitude, expires_at) 
@@ -1156,11 +1175,15 @@ app.post('/sendMessage', async (req, res) => {
       ];
     }
     
+    console.log(TAG, 'Executing query with params:', params);
     const [result] = await db.query(query, params);
 
     if (!result.insertId) {
+      console.error(TAG, 'Insert failed - no insertId returned');
       return res.status(500).json({ success: false, message: 'Failed to save message' });
     }
+
+    console.log(TAG, 'Message saved with ID:', result.insertId);
 
     const newMessageId = result.insertId;
     const [insertedMsg] = await db.query('SELECT * FROM messages WHERE id = ?', [newMessageId]);
@@ -1229,8 +1252,9 @@ app.post('/sendMessage', async (req, res) => {
     res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
   } catch (error) {
-    console.error(TAG, 'Error in /sendMessage:', error);
-    res.status(500).json({ success: false, message: 'Failed to send message' });
+    console.error(TAG, 'CRITICAL ERROR in /sendMessage:', error);
+    console.error(TAG, 'Error stack:', error.stack);
+    res.status(500).json({ success: false, message: 'Failed to send message', error: error.message });
   }
 });
 
