@@ -2391,37 +2391,37 @@ sender_name, u.profile_pic as sender_profile_pic FROM group_messages gm JOIN use
 });
 
 app.post('/group/send', async (req, res) => {
-    // 1. Updated destructuring to match the snake_case keys sent by Android
+    // Android sends: sender_id, group_id, message_content, message_type, latitude, longitude, reply_to_id
     const { sender_id, group_id, message_content, message_type, latitude, longitude, reply_to_id } = req.body;
 
     try {
-        // Ensure user is part of the members table
+        // 1. Ensure membership
         await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [sender_id, group_id]);
 
+        // 2. Encrypt
         const encrypted = encrypt(message_content);
 
-        // 2. Updated table name to 'group_message' (singular) as per your schema
-        // 3. Added 'reply_to_id' to the INSERT statement
-        const [result] = await db.execute(
-            `INSERT INTO group_message 
+        // 3. Insert (using your plural table name 'group_messages')
+        // We use 7 placeholders for the 7 variables in the array below.
+        const query = `INSERT INTO group_messages 
             (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude, reply_to_id) 
-            VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)`, 
-            [
-                group_id, 
-                sender_id, 
-                encrypted, 
-                message_type || 'text', 
-                latitude || null, 
-                longitude || null, 
-                reply_to_id || null // Handles messages that aren't replies
-            ]
-        );
+            VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)`;
 
-        // Emit via Socket.io so other users see it immediately
+        const [result] = await db.execute(query, [
+            group_id, 
+            sender_id, 
+            encrypted, 
+            message_type || 'text', 
+            latitude || null, 
+            longitude || null, 
+            reply_to_id || null
+        ]);
+
+        // 4. Socket emit
         io.to(`group_${group_id}`).emit('new_group_message', { 
             id: result.insertId, 
             sender_id: sender_id, 
-            message: message_content, // Send unencrypted text to socket
+            message: message_content, 
             message_type: message_type || 'text',
             reply_to_id: reply_to_id || null,
             timestamp: new Date() 
@@ -2429,8 +2429,9 @@ app.post('/group/send', async (req, res) => {
 
         res.json({ success: true, messageId: result.insertId });
     } catch (error) {
-        console.error("Database Error:", error); // Helpful for debugging
-        res.status(500).json({ success: false });
+        // This log is CRITICAL. Check your server terminal/console for this output!
+        console.error("DATABASE ERROR:", error.message); 
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
