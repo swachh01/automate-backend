@@ -2378,43 +2378,45 @@ app.post('/remove-group-icon', async (req, res) => {
 app.get('/group/:groupId/messages', async (req, res) => {
     const { groupId } = req.params;
     const { userId } = req.query;
-
+         
     if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
-
+        
     try {
         // Ensure user is a member
         await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
-
+         
         const query = `
-            SELECT 
-                gm.message_id as id, 
-                gm.sender_id, 
-                gm.message_content as message, 
-                gm.timestamp, 
-                gm.message_type, 
-                gm.latitude, 
+            SELECT
+                gm.message_id as id,
+                gm.sender_id,
+                gm.message_content as message,
+                gm.timestamp,
+                gm.message_type,
+                gm.latitude,
                 gm.longitude,
                 gm.reply_to_id,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name,
                 u.profile_pic as sender_profile_pic,
-                (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalParticipants,
-                (SELECT COUNT(*) FROM group_message_read_status WHERE message_id = gm.message_id) as readByCount,
-                (SELECT GROUP_CONCAT(u2.first_name SEPARATOR ', ') 
-                 FROM group_message_read_status gmrs 
-                 JOIN users u2 ON gmrs.user_id = u2.id 
-                 WHERE gmrs.message_id = gm.message_id AND gmrs.group_id = ?) as readByNames
+                -- Fix: Count unique members except the sender
+                ((SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
+                -- Fix: Count unique readers except the sender
+                (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
+                -- Fix: List unique reader names except the sender
+                (SELECT GROUP_CONCAT(DISTINCT u2.first_name SEPARATOR ', ')
+                 FROM group_message_read_status gmrs
+                 JOIN users u2 ON gmrs.user_id = u2.id
+                 WHERE gmrs.message_id = gm.message_id AND gmrs.user_id != gm.sender_id) as readByNames
             FROM group_messages gm 
-            JOIN users u ON gm.sender_id = u.id 
-            WHERE gm.group_id = ? 
-            ORDER BY gm.timestamp ASC 
+            JOIN users u ON gm.sender_id = u.id
+            WHERE gm.group_id = ?
+            ORDER BY gm.timestamp ASC
             LIMIT 300`;
 
-        // Pass groupId three times for the three placeholders (?)
-        const [messages] = await db.execute(query, [groupId, groupId, groupId]);
+        const [messages] = await db.execute(query, [groupId, groupId]);
 
-        const decrypted = messages.map(msg => ({ 
-            ...msg, 
-            message: decrypt(msg.message) 
+        const decrypted = messages.map(msg => ({
+            ...msg,
+            message: decrypt(msg.message)
         }));
 
         res.json({ success: true, messages: decrypted });
@@ -2572,8 +2574,14 @@ app.get('/group/:groupId/members', async (req, res) => {
 app.post('/group/read', async (req, res) => {
     const { user_id, group_id } = req.body;
     try {
-        const query = `INSERT INTO group_message_read_status (message_id, user_id, group_id) SELECT gm.message_id, ?, gm.group_id FROM group_messages gm WHERE gm.group_id = ? AND NOT EXISTS (SELECT 
-1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.message_id AND gmrs.user_id = ?)`;
+        const query = `INSERT INTO group_message_read_status (message_id, user_id, group_id) 
+                       SELECT gm.message_id, ?, gm.group_id 
+                       FROM group_messages gm 
+                       WHERE gm.group_id = ? 
+                       AND NOT EXISTS (
+                           SELECT 1 FROM group_message_read_status gmrs 
+                           WHERE gmrs.message_id = gm.message_id AND gmrs.user_id = ?
+                       )`;
         const [result] = await db.execute(query, [user_id, group_id, user_id]);
         res.json({ success: true, newReadCount: result.affectedRows });
     } catch (error) {
