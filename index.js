@@ -2395,15 +2395,13 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.latitude,
                 gm.longitude,
                 gm.reply_to_id,
-                gm.expires_at,
+                -- Format for Android: 2026-01-23T15:46:30.000Z
+                DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
                 gm.duration,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name,
                 u.profile_pic as sender_profile_pic,
-                -- Fix: Count unique members except the sender
                 ((SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
-                -- Fix: Count unique readers except the sender
                 (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
-                -- Fix: List unique reader names except the sender
                 (SELECT GROUP_CONCAT(DISTINCT u2.first_name SEPARATOR ', ')
                  FROM group_message_read_status gmrs
                  JOIN users u2 ON gmrs.user_id = u2.id
@@ -2508,18 +2506,18 @@ app.post('/group/send', async (req, res) => {
         // 5. Encrypt message content
         const encrypted = encrypt(message_content);
 
-        // --- NEW: Calculate Expiration for Live Location ---
+        // --- FIXED: Reliable UTC Expiration Calculation ---
         let expiresAt = null;
-        if (message_type === 'live_location' && duration) {
-            const durationInt = parseInt(duration);
-            if (durationInt > 0) {
-                const date = new Date();
-                date.setMinutes(date.getTimezoneOffset() * -1 + date.getMinutes() + durationInt); // Local to UTC adjustment if needed, or simple:
-                expiresAt = new Date(Date.now() + durationInt * 60000).toISOString().slice(0, 19).replace('T', ' ');
-            }
+        if (message_type === 'live_location') {
+            const durationInt = parseInt(duration) || 60; // Default to 60 mins if missing
+            // Create a date object representing "Now + Duration"
+            const expiryDate = new Date(Date.now() + durationInt * 60000);
+            // Format to SQL compatible UTC string: YYYY-MM-DD HH:MM:SS
+            expiresAt = expiryDate.toISOString().slice(0, 19).replace('T', ' ');
+            console.log(TAG, "Setting live location expiry to:", expiresAt);
         }
 
-        // 6. Insert message into database (including expires_at and duration)
+        // 6. Insert message into database
         const query = `INSERT INTO group_messages
             (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude, reply_to_id, expires_at, duration)
             VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`;
@@ -2538,7 +2536,7 @@ app.post('/group/send', async (req, res) => {
 
         console.log(TAG, "Message inserted successfully:", result.insertId);
 
-        // 7. Socket emit
+        // 7. Socket emit - Including expiration data
         io.to(`group_${group_id}`).emit('new_group_message', {
             id: result.insertId,
             sender_id: sender_id,
@@ -2550,7 +2548,7 @@ app.post('/group/send', async (req, res) => {
             reply_to_id: reply_to_id || null,
             expires_at: expiresAt,
             duration: duration || 0,
-            timestamp: new Date()
+            timestamp: new Date().toISOString()
         });
 
         // 8. Return success response to the app
