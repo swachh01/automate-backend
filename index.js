@@ -2391,34 +2391,38 @@ sender_name, u.profile_pic as sender_profile_pic FROM group_messages gm JOIN use
 });
 
 app.post('/group/send', async (req, res) => {
+    const TAG = "/group/send";
     const { sender_id, group_id, message_content, message_type, latitude, longitude, reply_to_id } = req.body;
 
     try {
-        // 1. First, check if group exists, if not create it
-        if (group_id === 0) {
+        console.log(TAG, "Received request:", { sender_id, group_id, message_content, message_type });
+
+        // Validate group_id
+        if (!group_id || group_id === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: "Invalid group_id. Group ID cannot be 0." 
+                error: "Invalid group_id. Group ID must be a valid number." 
             });
         }
 
-        // Get the group name from group_table
+        // Check if group exists
         const [groupCheck] = await db.query('SELECT group_id, group_name FROM `group_table` WHERE group_id = ?', [group_id]);
         
         if (groupCheck.length === 0) {
+            console.log(TAG, "Group not found:", group_id);
             return res.status(404).json({ 
                 success: false, 
-                error: "Group does not exist. Please join the group first." 
+                error: "Group does not exist. Please create or join the group first." 
             });
         }
 
-        // 2. Ensure membership
+        // Ensure user is a member of this group
         await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [sender_id, group_id]);
 
-        // 3. Encrypt
+        // Encrypt message
         const encrypted = encrypt(message_content);
 
-        // 4. Insert message
+        // Insert message
         const query = `INSERT INTO group_messages 
             (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude, reply_to_id) 
             VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)`;
@@ -2433,7 +2437,9 @@ app.post('/group/send', async (req, res) => {
             reply_to_id || null
         ]);
 
-        // 5. Socket emit
+        console.log(TAG, "Message inserted successfully:", result.insertId);
+
+        // Socket emit
         io.to(`group_${group_id}`).emit('new_group_message', { 
             id: result.insertId, 
             sender_id: sender_id, 
@@ -2445,7 +2451,7 @@ app.post('/group/send', async (req, res) => {
 
         res.json({ success: true, messageId: result.insertId });
     } catch (error) {
-        console.error("DATABASE ERROR:", error.message); 
+        console.error(TAG, "DATABASE ERROR:", error.message); 
         res.status(500).json({ success: false, error: error.message });
     }
 });
