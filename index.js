@@ -2378,16 +2378,16 @@ app.post('/remove-group-icon', async (req, res) => {
 app.get('/group/:groupId/messages', async (req, res) => {
     const { groupId } = req.params;
     const { userId } = req.query;
-         
+
     if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
-        
+
     try {
         // Ensure user is a member
         await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
-         
+
         const query = `
             SELECT
-                gm.message_id as id,
+                gm.message_id as id, 
                 gm.sender_id,
                 gm.message_content as message,
                 gm.timestamp,
@@ -2395,6 +2395,8 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.latitude,
                 gm.longitude,
                 gm.reply_to_id,
+                gm.expires_at,
+                gm.duration,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name,
                 u.profile_pic as sender_profile_pic,
                 -- Fix: Count unique members except the sender
@@ -2406,7 +2408,7 @@ app.get('/group/:groupId/messages', async (req, res) => {
                  FROM group_message_read_status gmrs
                  JOIN users u2 ON gmrs.user_id = u2.id
                  WHERE gmrs.message_id = gm.message_id AND gmrs.user_id != gm.sender_id) as readByNames
-            FROM group_messages gm 
+            FROM group_messages gm
             JOIN users u ON gm.sender_id = u.id
             WHERE gm.group_id = ?
             ORDER BY gm.timestamp ASC
@@ -2468,22 +2470,22 @@ app.get('/group/by-name', async (req, res) => {
 
 app.post('/group/send', async (req, res) => {
     const TAG = "/group/send";
-    const { sender_id, group_id, message_content, message_type, latitude, longitude, reply_to_id } = req.body;
+    const { sender_id, group_id, message_content, message_type, latitude, longitude, reply_to_id, duration } = req.body;
 
     try {
         console.log(TAG, "Received request:", { sender_id, group_id, message_content, message_type });
 
         // 1. Validate group_id
         if (!group_id || group_id === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Invalid group_id. Group ID must be a valid number." 
+            return res.status(400).json({
+                success: false,
+                error: "Invalid group_id. Group ID must be a valid number."
             });
         }
 
         // 2. Fetch sender name FIRST so it is defined for the socket emit and parsing
         const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [sender_id]);
-        
+
         if (userRows.length === 0) {
             return res.status(404).json({ success: false, error: "Sender user not found." });
         }
@@ -2491,12 +2493,12 @@ app.post('/group/send', async (req, res) => {
 
         // 3. Check if group exists
         const [groupCheck] = await db.query('SELECT group_id, group_name FROM `group_table` WHERE group_id = ?', [group_id]);
-        
+
         if (groupCheck.length === 0) {
             console.log(TAG, "Group not found:", group_id);
-            return res.status(404).json({ 
-                success: false, 
-                error: "Group does not exist. Please create or join the group first." 
+            return res.status(404).json({
+                success: false,
+                error: "Group does not exist. Please create or join the group first."
             });
         }
 
@@ -2506,41 +2508,56 @@ app.post('/group/send', async (req, res) => {
         // 5. Encrypt message content
         const encrypted = encrypt(message_content);
 
-        // 6. Insert message into database
-        const query = `INSERT INTO group_messages 
-            (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude, reply_to_id) 
-            VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)`;
+        // --- NEW: Calculate Expiration for Live Location ---
+        let expiresAt = null;
+        if (message_type === 'live_location' && duration) {
+            const durationInt = parseInt(duration);
+            if (durationInt > 0) {
+                const date = new Date();
+                date.setMinutes(date.getTimezoneOffset() * -1 + date.getMinutes() + durationInt); // Local to UTC adjustment if needed, or simple:
+                expiresAt = new Date(Date.now() + durationInt * 60000).toISOString().slice(0, 19).replace('T', ' ');
+            }
+        }
+
+        // 6. Insert message into database (including expires_at and duration)
+        const query = `INSERT INTO group_messages
+            (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude, reply_to_id, expires_at, duration)
+            VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`;
 
         const [result] = await db.execute(query, [
-            group_id, 
-            sender_id, 
-            encrypted, 
-            message_type || 'text', 
-            latitude || null, 
-            longitude || null, 
-            reply_to_id || null
+            group_id,
+            sender_id,
+            encrypted,
+            message_type || 'text',
+            latitude || null,
+            longitude || null,
+            reply_to_id || null,
+            expiresAt,
+            duration || 0
         ]);
 
         console.log(TAG, "Message inserted successfully:", result.insertId);
 
-        // 7. Socket emit - Now senderName is guaranteed to be defined
-        io.to(`group_${group_id}`).emit('new_group_message', { 
-            id: result.insertId, 
-            sender_id: sender_id, 
-            sender_name: senderName, 
-            message: message_content, 
+        // 7. Socket emit
+        io.to(`group_${group_id}`).emit('new_group_message', {
+            id: result.insertId,
+            sender_id: sender_id,
+            sender_name: senderName,
+            message: message_content,
             message_type: message_type || 'text',
             latitude: latitude || null,
             longitude: longitude || null,
             reply_to_id: reply_to_id || null,
-            timestamp: new Date() 
+            expires_at: expiresAt,
+            duration: duration || 0,
+            timestamp: new Date()
         });
 
         // 8. Return success response to the app
         res.json({ success: true, messageId: result.insertId });
 
     } catch (error) {
-        console.error(TAG, "DATABASE ERROR:", error.message); 
+        console.error(TAG, "DATABASE ERROR:", error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -2589,7 +2606,7 @@ app.post('/group/read', async (req, res) => {
     }
 });
 
-// Endpoint to manually expire a group live location session in the database
+
 app.post('/group/stop-location', async (req, res) => {
     const TAG = "/group/stop-location";
     const { userId, groupId } = req.body;
@@ -2601,8 +2618,7 @@ app.post('/group/stop-location', async (req, res) => {
     try {
         console.log(TAG, `Stopping live location for user ${userId} in group ${groupId}`);
 
-        // Update the most recent live location message for this user in this group
-        // We set expires_at to NOW (UTC) so isExpired() in Android returns true immediately
+        // Update the most recent live location message for this user in this group to EXPIRED
         const query = `
             UPDATE group_messages 
             SET expires_at = UTC_TIMESTAMP() 
@@ -2616,10 +2632,8 @@ app.post('/group/stop-location', async (req, res) => {
         const [result] = await db.execute(query, [userId, groupId]);
 
         if (result.affectedRows > 0) {
-            console.log(TAG, "Successfully updated database entry to expired.");
             res.json({ success: true, message: "Live location ended in database" });
         } else {
-            console.log(TAG, "No active live location found to stop.");
             res.json({ success: false, message: "No active session found" });
         }
     } catch (error) {
