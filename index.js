@@ -2390,6 +2390,46 @@ sender_name, u.profile_pic as sender_profile_pic FROM group_messages gm JOIN use
     }
 });
 
+app.get('/group/by-name', async (req, res) => {
+    const TAG = "/group/by-name";
+    try {
+        const { groupName } = req.query;
+        
+        if (!groupName) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Group name is required' 
+            });
+        }
+
+        const [groupRows] = await db.query(
+            'SELECT group_id, group_name, group_icon FROM `group_table` WHERE group_name = ?', 
+            [groupName]
+        );
+
+        if (groupRows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Group not found' 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            groupId: groupRows[0].group_id,
+            groupName: groupRows[0].group_name,
+            groupIcon: groupRows[0].group_icon
+        });
+
+    } catch (error) {
+        console.error(TAG, 'Error fetching group:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error' 
+        });
+    }
+});
+
 app.post('/group/send', async (req, res) => {
     const TAG = "/group/send";
     const { sender_id, group_id, message_content, message_type, latitude, longitude, reply_to_id } = req.body;
