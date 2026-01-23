@@ -2546,20 +2546,26 @@ app.post('/group/send', async (req, res) => {
 app.get('/group/:groupId/members', async (req, res) => {
     const { groupId } = req.params;
     try {
-        const [members] = await db.execute(`
-            SELECT DISTINCT
-                u.id,
-                u.id as userId,
-                CONCAT(u.first_name, ' ', u.last_name) as name,
-                u.profile_pic as profilePic
-            FROM users u
-            JOIN group_members gm ON u.id = gm.user_id
-            WHERE gm.group_id = ?
-            ORDER BY u.first_name ASC`, [groupId]);
+        // Using a more robust query to ensure distinct user IDs
+        const query = `
+            SELECT 
+                u.id, 
+                u.id as userId, 
+                CONCAT(u.first_name, ' ', u.last_name) as name, 
+                u.profile_pic as profilePic 
+            FROM users u 
+            WHERE u.id IN (
+                SELECT DISTINCT user_id 
+                FROM group_members 
+                WHERE group_id = ?
+            )
+            ORDER BY u.first_name ASC`;
+            
+        const [members] = await db.execute(query, [groupId]);
         res.json({ success: true, members: members });
     } catch (error) {
         console.error("Error fetching group members:", error);
-        res.status(500).json({ success: false });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
