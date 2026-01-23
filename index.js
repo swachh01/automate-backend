@@ -2589,6 +2589,45 @@ app.post('/group/read', async (req, res) => {
     }
 });
 
+// Endpoint to manually expire a group live location session in the database
+app.post('/group/stop-location', async (req, res) => {
+    const TAG = "/group/stop-location";
+    const { userId, groupId } = req.body;
+
+    if (!userId || !groupId) {
+        return res.status(400).json({ success: false, message: "Missing userId or groupId" });
+    }
+
+    try {
+        console.log(TAG, `Stopping live location for user ${userId} in group ${groupId}`);
+
+        // Update the most recent live location message for this user in this group
+        // We set expires_at to NOW (UTC) so isExpired() in Android returns true immediately
+        const query = `
+            UPDATE group_messages 
+            SET expires_at = UTC_TIMESTAMP() 
+            WHERE sender_id = ? 
+              AND group_id = ? 
+              AND message_type = 'live_location' 
+            ORDER BY timestamp DESC 
+            LIMIT 1
+        `;
+
+        const [result] = await db.execute(query, [userId, groupId]);
+
+        if (result.affectedRows > 0) {
+            console.log(TAG, "Successfully updated database entry to expired.");
+            res.json({ success: true, message: "Live location ended in database" });
+        } else {
+            console.log(TAG, "No active live location found to stop.");
+            res.json({ success: false, message: "No active session found" });
+        }
+    } catch (error) {
+        console.error(TAG, "Error stopping group live location:", error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
     const searchTerm = query ? query.trim().toLowerCase() : "";
