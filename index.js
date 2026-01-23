@@ -2377,7 +2377,14 @@ app.post('/remove-group-icon', async (req, res) => {
 
 app.get('/group/:groupId/messages', async (req, res) => {
     const { groupId } = req.params;
+    const { userId } = req.query;
+
+    if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
+
     try {
+        // Ensure user is a member
+        await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
+
         const query = `
             SELECT 
                 gm.message_id as id, 
@@ -2385,21 +2392,34 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.message_content as message, 
                 gm.timestamp, 
                 gm.message_type, 
+                gm.latitude, 
+                gm.longitude,
+                gm.reply_to_id,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name,
+                u.profile_pic as sender_profile_pic,
                 (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalParticipants,
                 (SELECT COUNT(*) FROM group_message_read_status WHERE message_id = gm.message_id) as readByCount,
                 (SELECT GROUP_CONCAT(u2.first_name SEPARATOR ', ') 
                  FROM group_message_read_status gmrs 
                  JOIN users u2 ON gmrs.user_id = u2.id 
-                 WHERE gmrs.message_id = gm.message_id) as readByNames
+                 WHERE gmrs.message_id = gm.message_id AND gmrs.group_id = ?) as readByNames
             FROM group_messages gm 
             JOIN users u ON gm.sender_id = u.id 
             WHERE gm.group_id = ? 
-            ORDER BY gm.timestamp ASC`;
+            ORDER BY gm.timestamp ASC 
+            LIMIT 300`;
 
-        const [messages] = await db.execute(query, [groupId, groupId]);
-        // ... rest of your decryption code
+        // Pass groupId three times for the three placeholders (?)
+        const [messages] = await db.execute(query, [groupId, groupId, groupId]);
+
+        const decrypted = messages.map(msg => ({ 
+            ...msg, 
+            message: decrypt(msg.message) 
+        }));
+
+        res.json({ success: true, messages: decrypted });
     } catch (error) {
+        console.error("Error fetching group messages:", error);
         res.status(500).json({ success: false });
     }
 });
@@ -2451,7 +2471,7 @@ app.post('/group/send', async (req, res) => {
     try {
         console.log(TAG, "Received request:", { sender_id, group_id, message_content, message_type });
 
-        // Validate group_id
+        // 1. Validate group_id
         if (!group_id || group_id === 0) {
             return res.status(400).json({ 
                 success: false, 
@@ -2459,7 +2479,15 @@ app.post('/group/send', async (req, res) => {
             });
         }
 
-        // Check if group exists
+        // 2. Fetch sender name FIRST so it is defined for the socket emit and parsing
+        const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [sender_id]);
+        
+        if (userRows.length === 0) {
+            return res.status(404).json({ success: false, error: "Sender user not found." });
+        }
+        const senderName = userRows[0].name;
+
+        // 3. Check if group exists
         const [groupCheck] = await db.query('SELECT group_id, group_name FROM `group_table` WHERE group_id = ?', [group_id]);
         
         if (groupCheck.length === 0) {
@@ -2470,13 +2498,13 @@ app.post('/group/send', async (req, res) => {
             });
         }
 
-        // Ensure user is a member of this group
+        // 4. Ensure user is a member of this group
         await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [sender_id, group_id]);
 
-        // Encrypt message
+        // 5. Encrypt message content
         const encrypted = encrypt(message_content);
 
-        // Insert message
+        // 6. Insert message into database
         const query = `INSERT INTO group_messages 
             (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude, reply_to_id) 
             VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)`;
@@ -2493,18 +2521,22 @@ app.post('/group/send', async (req, res) => {
 
         console.log(TAG, "Message inserted successfully:", result.insertId);
 
-        // Socket emit
+        // 7. Socket emit - Now senderName is guaranteed to be defined
         io.to(`group_${group_id}`).emit('new_group_message', { 
             id: result.insertId, 
-            sender_id: sender_id,
+            sender_id: sender_id, 
             sender_name: senderName, 
             message: message_content, 
             message_type: message_type || 'text',
+            latitude: latitude || null,
+            longitude: longitude || null,
             reply_to_id: reply_to_id || null,
             timestamp: new Date() 
         });
 
+        // 8. Return success response to the app
         res.json({ success: true, messageId: result.insertId });
+
     } catch (error) {
         console.error(TAG, "DATABASE ERROR:", error.message); 
         res.status(500).json({ success: false, error: error.message });
@@ -2514,19 +2546,19 @@ app.post('/group/send', async (req, res) => {
 app.get('/group/:groupId/members', async (req, res) => {
     const { groupId } = req.params;
     try {
-        // ADD DISTINCT HERE
         const [members] = await db.execute(`
-            SELECT DISTINCT 
-                u.id, 
-                u.id as userId, 
-                CONCAT(u.first_name, ' ', u.last_name) as name, 
-                u.profile_pic as profilePic 
-            FROM users u 
-            JOIN group_members gm ON u.id = gm.user_id 
-            WHERE gm.group_id = ? 
+            SELECT DISTINCT
+                u.id,
+                u.id as userId,
+                CONCAT(u.first_name, ' ', u.last_name) as name,
+                u.profile_pic as profilePic
+            FROM users u
+            JOIN group_members gm ON u.id = gm.user_id
+            WHERE gm.group_id = ?
             ORDER BY u.first_name ASC`, [groupId]);
         res.json({ success: true, members: members });
     } catch (error) {
+        console.error("Error fetching group members:", error);
         res.status(500).json({ success: false });
     }
 });
