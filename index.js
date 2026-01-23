@@ -2377,14 +2377,28 @@ app.post('/remove-group-icon', async (req, res) => {
 
 app.get('/group/:groupId/messages', async (req, res) => {
     const { groupId } = req.params;
-    const { userId } = req.query;
     try {
-        await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
-        const query = `SELECT gm.message_id as id, gm.sender_id, gm.message_content as message, gm.timestamp, gm.message_type, gm.latitude, gm.longitude, CONCAT(u.first_name, ' ', u.last_name) as 
-sender_name, u.profile_pic as sender_profile_pic FROM group_messages gm JOIN users u ON gm.sender_id = u.id WHERE gm.group_id = ? ORDER BY gm.timestamp ASC LIMIT 300`;
-        const [messages] = await db.execute(query, [groupId]);
-        const decrypted = messages.map(msg => ({ ...msg, message: decrypt(msg.message) }));
-        res.json({ success: true, messages: decrypted });
+        const query = `
+            SELECT 
+                gm.message_id as id, 
+                gm.sender_id, 
+                gm.message_content as message, 
+                gm.timestamp, 
+                gm.message_type, 
+                CONCAT(u.first_name, ' ', u.last_name) as sender_name,
+                (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalParticipants,
+                (SELECT COUNT(*) FROM group_message_read_status WHERE message_id = gm.message_id) as readByCount,
+                (SELECT GROUP_CONCAT(u2.first_name SEPARATOR ', ') 
+                 FROM group_message_read_status gmrs 
+                 JOIN users u2 ON gmrs.user_id = u2.id 
+                 WHERE gmrs.message_id = gm.message_id) as readByNames
+            FROM group_messages gm 
+            JOIN users u ON gm.sender_id = u.id 
+            WHERE gm.group_id = ? 
+            ORDER BY gm.timestamp ASC`;
+
+        const [messages] = await db.execute(query, [groupId, groupId]);
+        // ... rest of your decryption code
     } catch (error) {
         res.status(500).json({ success: false });
     }
@@ -2482,7 +2496,8 @@ app.post('/group/send', async (req, res) => {
         // Socket emit
         io.to(`group_${group_id}`).emit('new_group_message', { 
             id: result.insertId, 
-            sender_id: sender_id, 
+            sender_id: sender_id,
+            sender_name: senderName, 
             message: message_content, 
             message_type: message_type || 'text',
             reply_to_id: reply_to_id || null,
