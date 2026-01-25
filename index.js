@@ -1130,8 +1130,6 @@ app.post('/sendMessage', async (req, res) => {
         console.log(TAG, 'Set expires_at to:', expiresAt);
     }
 
-    // CRITICAL FIX: Handle reply fields more carefully
-    // Only include them if ALL three exist AND are valid
     const hasReplyData = reply_to_id && 
                          reply_to_id !== 0 && 
                          quoted_message && 
