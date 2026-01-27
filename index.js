@@ -229,11 +229,17 @@ socket.on('i_read_messages', (data) => {
     });
 });  
 
-  socket.on('join_group', (groupId) => {
-    socket.join(`group_${groupId}`);
-    socket.join(roomName);
-    console.log(`Socket ${socket.id} joined room group_${groupId}`);
-  });
+// --- REPLACE THIS BLOCK ---
+socket.on('join_group', (groupId) => {
+    try {
+        if (!groupId) return;
+        const roomName = `group_${groupId}`; // Define the variable here
+        socket.join(roomName);
+        console.log(`Socket ${socket.id} joined room: ${roomName}`);
+    } catch (err) {
+        console.error("Error in join_group socket:", err);
+    }
+});
 
   socket.on('new_group_message_sent', (data) => {
     socket.to(`group_${data.groupId}`).emit('new_group_message', data.messageObject);
