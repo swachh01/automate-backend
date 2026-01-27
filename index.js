@@ -231,6 +231,7 @@ socket.on('i_read_messages', (data) => {
 
   socket.on('join_group', (groupId) => {
     socket.join(`group_${groupId}`);
+    socket.join(roomName);
     console.log(`Socket ${socket.id} joined room group_${groupId}`);
   });
 
