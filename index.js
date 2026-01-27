@@ -2125,10 +2125,17 @@ app.get('/getTotalUnreadCount', async (req, res) => {
     try {
         const individualQuery = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND status < 2`;
         const [individualRows] = await db.execute(individualQuery, [currentUserId]);
+        
         const groupQuery = `SELECT COUNT(*) as totalUnreadCount FROM group_messages gm WHERE gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?) AND gm.sender_id != ? AND NOT 
 EXISTS (SELECT 1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.message_id AND gmrs.user_id = ?)`;
         const [groupRows] = await db.execute(groupQuery, [currentUserId, currentUserId, currentUserId]);
-        res.json({ success: true, unreadCount: individualRows[0].totalUnreadCount + groupRows[0].totalUnreadCount });
+
+        const requestQuery = `SELECT COUNT(*) as totalRequests FROM chat_requests WHERE receiver_id = ? AND status = 'pending'`;
+        const [requestRows] = await db.execute(requestQuery, [currentUserId]);
+
+        const total = individualRows[0].totalUnreadCount + groupRows[0].totalUnreadCount + requestRows[0].totalRequests;
+        
+        res.json({ success: true, unreadCount: total });
     } catch (error) {
         res.status(500).json({ success: false });
     }
@@ -2701,8 +2708,9 @@ JOIN users u ON cr.sender_id = u.id WHERE cr.receiver_id = ? AND cr.status = 'pe
 });
 
 app.get('/chatRequests/count', async (req, res) => {
+    const { userId } = req.query; // Add this line
     try {
-        const [rows] = await db.execute(`SELECT COUNT(*) as count FROM chat_requests WHERE receiver_id = ? AND status = 'pending'`, [req.query.userId]);
+        const [rows] = await db.execute(`SELECT COUNT(*) as count FROM chat_requests WHERE receiver_id = ? AND status = 'pending'`, [userId]);
         res.json({ success: true, count: rows[0].count });
     } catch (err) {
         res.status(500).json({ success: false });
