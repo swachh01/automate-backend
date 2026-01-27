@@ -1216,6 +1216,7 @@ app.post('/sendMessage', async (req, res) => {
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
     try {
+      const isOnline = onlineUsers.has(receiver_id.toString());
       const receiverActiveChat = activeChatSessions.get(receiver_id.toString());
       const isChatOpen = receiverActiveChat === `user_${sender_id}`;
       
