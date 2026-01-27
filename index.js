@@ -2505,6 +2505,8 @@ app.post('/group/send', async (req, res) => {
             });
         }
 
+        const groupName = groupCheck[0].group_name;
+
         // 4. Ensure user is a member of this group
         await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [sender_id, group_id]);
 
@@ -2556,7 +2558,50 @@ app.post('/group/send', async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
-        // 8. Return success response to the app
+        // 8. ADDED: FCM Push Notifications for group members
+        try {
+            // Find tokens of all group members except the sender
+            const [members] = await db.query(`
+                SELECT u.fcm_token 
+                FROM group_members gm 
+                JOIN users u ON gm.user_id = u.id 
+                WHERE gm.group_id = ? AND gm.user_id != ? AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
+            `, [group_id, sender_id]);
+
+            const tokens = members.map(m => m.fcm_token);
+
+            if (tokens.length > 0) {
+                const messagePayload = {
+                    tokens: tokens,
+                    notification: {
+                        title: groupName,
+                        body: `${senderName}: ${message_type === 'text' ? message_content : 'Shared a location'}`
+                    },
+                    android: {
+                        priority: "high",
+                        notification: {
+                            channelId: "chat_channel_id",
+                            sound: "default",
+                            clickAction: "TOP_LEVEL_NOTIFICATION_ACTION"
+                        }
+                    },
+                    data: {
+                        type: "group_chat",
+                        groupId: String(group_id),
+                        groupName: groupName,
+                        senderId: String(sender_id)
+                    }
+                };
+                
+                // Using multicast to send to all members in one call
+                await admin.messaging().sendEachForMulticast(messagePayload);
+                console.log(TAG, `FCM group notification sent to ${tokens.length} members`);
+            }
+        } catch (fcmError) {
+            console.error(TAG, "Error sending Group FCM:", fcmError.message);
+        }
+
+        // 9. Return success response to the app
         res.json({ success: true, messageId: result.insertId });
 
     } catch (error) {
