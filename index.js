@@ -2615,6 +2615,7 @@ app.post('/group/send', async (req, res) => {
                         type: "group_chat",
                         groupId: String(group_id),
                         groupName: groupName,
+                        groupIcon: groupCheck[0].group_icon || "",
                         senderId: String(sender_id)
                     }
                 };
