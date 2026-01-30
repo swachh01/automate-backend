@@ -2496,8 +2496,6 @@ app.get('/group/by-name', async (req, res) => {
     }
 });
 
-// REPLACE your existing /group/send endpoint with this updated version:
-
 app.post('/group/send', async (req, res) => {
     const TAG = "/group/send";
     const { 
@@ -2569,7 +2567,7 @@ app.post('/group/send', async (req, res) => {
         let query, params;
 
         if (hasReplyData) {
-            // WITH reply data
+            // Total columns: 12 | Total values: 12
             query = `INSERT INTO group_messages
                 (group_id, sender_id, message_content, timestamp, message_type, 
                  latitude, longitude, reply_to_id, quoted_message, quoted_user_name, 
@@ -2590,11 +2588,13 @@ app.post('/group/send', async (req, res) => {
                 duration || 0
             ];
         } else {
-            // WITHOUT reply data
+            // Total columns: 12 | Total values: 12
+            // We pass NULL for the 3 reply-related columns to keep count consistent
             query = `INSERT INTO group_messages
                 (group_id, sender_id, message_content, timestamp, message_type, 
-                 latitude, longitude, reply_to_id, quoted_message, quoted_user_name, expires_at, duration)
-                VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`;
+                 latitude, longitude, reply_to_id, quoted_message, quoted_user_name, 
+                 expires_at, duration)
+                VALUES (?, ?, ?, NOW(), ?, ?, ?, NULL, NULL, NULL, ?, ?)`;
             
             params = [
                 group_id,
@@ -2603,7 +2603,6 @@ app.post('/group/send', async (req, res) => {
                 message_type || 'text',
                 latitude || null,
                 longitude || null,
-                reply_to_id || null,
                 expiresAt,
                 duration || 0
             ];
@@ -2622,8 +2621,8 @@ app.post('/group/send', async (req, res) => {
             latitude: latitude || null,
             longitude: longitude || null,
             reply_to_id: reply_to_id || null,
-            quoted_message: quoted_message || null,        // NEW
-            quoted_user_name: quoted_user_name || null,    // NEW
+            quoted_message: quoted_message || null,
+            quoted_user_name: quoted_user_name || null,
             expires_at: expiresAt,
             duration: duration || 0,
             timestamp: new Date().toISOString()
