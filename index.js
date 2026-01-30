@@ -2399,6 +2399,8 @@ app.post('/remove-group-icon', async (req, res) => {
     }
 });
 
+// ALSO UPDATE your GET /group/:groupId/messages endpoint to include the new fields:
+
 app.get('/group/:groupId/messages', async (req, res) => {
     const { groupId } = req.params;
     const { userId } = req.query;
@@ -2419,17 +2421,21 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.latitude,
                 gm.longitude,
                 gm.reply_to_id,
-                -- Format for Android: 2026-01-23T15:46:30.000Z
+                gm.quoted_message,          -- NEW
+                gm.quoted_user_name,        -- NEW
                 DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
                 gm.duration,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name,
                 u.profile_pic as sender_profile_pic,
                 ((SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
-                (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
+                (SELECT COUNT(DISTINCT user_id) 
+                 FROM group_message_read_status 
+                 WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
                 (SELECT GROUP_CONCAT(DISTINCT u2.first_name SEPARATOR ', ')
                  FROM group_message_read_status gmrs
                  JOIN users u2 ON gmrs.user_id = u2.id
-                 WHERE gmrs.message_id = gm.message_id AND gmrs.user_id != gm.sender_id) as readByNames
+                 WHERE gmrs.message_id = gm.message_id 
+                   AND gmrs.user_id != gm.sender_id) as readByNames
             FROM group_messages gm
             JOIN users u ON gm.sender_id = u.id
             WHERE gm.group_id = ?
@@ -2490,12 +2496,25 @@ app.get('/group/by-name', async (req, res) => {
     }
 });
 
+// REPLACE your existing /group/send endpoint with this updated version:
+
 app.post('/group/send', async (req, res) => {
     const TAG = "/group/send";
-    const { sender_id, group_id, message_content, message_type, latitude, longitude, reply_to_id, duration } = req.body;
+    const { 
+        sender_id, 
+        group_id, 
+        message_content, 
+        message_type, 
+        latitude, 
+        longitude, 
+        reply_to_id, 
+        duration,
+        quoted_message,      // NEW
+        quoted_user_name     // NEW
+    } = req.body;
 
     try {
-        console.log(TAG, "Received request:", { sender_id, group_id, message_content, message_type });
+        console.log(TAG, "Received request:", { sender_id, group_id, message_content, message_type, has_reply: !!reply_to_id });
 
         // 1. Validate group_id
         if (!group_id || group_id === 0) {
@@ -2505,7 +2524,7 @@ app.post('/group/send', async (req, res) => {
             });
         }
 
-        // 2. Fetch sender name FIRST so it is defined for the socket emit and parsing
+        // 2. Fetch sender name
         const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [sender_id]);
 
         if (userRows.length === 0) {
@@ -2514,7 +2533,7 @@ app.post('/group/send', async (req, res) => {
         const senderName = userRows[0].name;
 
         // 3. Check if group exists
-        const [groupCheck] = await db.query('SELECT group_id, group_name FROM `group_table` WHERE group_id = ?', [group_id]);
+        const [groupCheck] = await db.query('SELECT group_id, group_name, group_icon FROM `group_table` WHERE group_id = ?', [group_id]);
 
         if (groupCheck.length === 0) {
             console.log(TAG, "Group not found:", group_id);
@@ -2526,43 +2545,74 @@ app.post('/group/send', async (req, res) => {
 
         const groupName = groupCheck[0].group_name;
 
-        // 4. Ensure user is a member of this group
+        // 4. Ensure user is a member
         await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [sender_id, group_id]);
 
         // 5. Encrypt message content
         const encrypted = encrypt(message_content);
 
-        // --- FIXED: Reliable UTC Expiration Calculation ---
+        // 6. Calculate expiration for live location
         let expiresAt = null;
         if (message_type === 'live_location') {
-            const durationInt = parseInt(duration) || 60; // Default to 60 mins if missing
-            // Create a date object representing "Now + Duration"
+            const durationInt = parseInt(duration) || 60;
             const expiryDate = new Date(Date.now() + durationInt * 60000);
-            // Format to SQL compatible UTC string: YYYY-MM-DD HH:MM:SS
             expiresAt = expiryDate.toISOString().slice(0, 19).replace('T', ' ');
             console.log(TAG, "Setting live location expiry to:", expiresAt);
         }
 
-        // 6. Insert message into database
-        const query = `INSERT INTO group_messages
-            (group_id, sender_id, message_content, timestamp, message_type, latitude, longitude, reply_to_id, expires_at, duration)
-            VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`;
+        // 7. Prepare query with quoted message support
+        const hasReplyData = reply_to_id && 
+                             reply_to_id !== 0 && 
+                             quoted_message && 
+                             quoted_user_name;
 
-        const [result] = await db.execute(query, [
-            group_id,
-            sender_id,
-            encrypted,
-            message_type || 'text',
-            latitude || null,
-            longitude || null,
-            reply_to_id || null,
-            expiresAt,
-            duration || 0
-        ]);
+        let query, params;
 
+        if (hasReplyData) {
+            // WITH reply data
+            query = `INSERT INTO group_messages
+                (group_id, sender_id, message_content, timestamp, message_type, 
+                 latitude, longitude, reply_to_id, quoted_message, quoted_user_name, 
+                 expires_at, duration)
+                VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`;
+            
+            params = [
+                group_id,
+                sender_id,
+                encrypted,
+                message_type || 'text',
+                latitude || null,
+                longitude || null,
+                reply_to_id,
+                quoted_message,
+                quoted_user_name,
+                expiresAt,
+                duration || 0
+            ];
+        } else {
+            // WITHOUT reply data
+            query = `INSERT INTO group_messages
+                (group_id, sender_id, message_content, timestamp, message_type, 
+                 latitude, longitude, reply_to_id, expires_at, duration)
+                VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`;
+            
+            params = [
+                group_id,
+                sender_id,
+                encrypted,
+                message_type || 'text',
+                latitude || null,
+                longitude || null,
+                reply_to_id || null,
+                expiresAt,
+                duration || 0
+            ];
+        }
+
+        const [result] = await db.execute(query, params);
         console.log(TAG, "Message inserted successfully:", result.insertId);
 
-        // 7. Socket emit - Including expiration data
+        // 8. Socket emit with quoted data
         io.to(`group_${group_id}`).emit('new_group_message', {
             id: result.insertId,
             sender_id: sender_id,
@@ -2572,27 +2622,28 @@ app.post('/group/send', async (req, res) => {
             latitude: latitude || null,
             longitude: longitude || null,
             reply_to_id: reply_to_id || null,
+            quoted_message: quoted_message || null,        // NEW
+            quoted_user_name: quoted_user_name || null,    // NEW
             expires_at: expiresAt,
             duration: duration || 0,
             timestamp: new Date().toISOString()
         });
 
-        // 8. UPDATED: FCM Push Notifications with Active Screen Suppression
+        // 9. FCM Notifications (unchanged)
         try {
-            // Find tokens and IDs of all group members except the sender
             const [members] = await db.query(`
                 SELECT u.id, u.fcm_token 
                 FROM group_members gm 
                 JOIN users u ON gm.user_id = u.id 
-                WHERE gm.group_id = ? AND gm.user_id != ? AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
+                WHERE gm.group_id = ? AND gm.user_id != ? 
+                  AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
             `, [group_id, sender_id]);
 
-            // Filter out members who currently have THIS group open on their screen
             const tokensToNotify = members
                 .filter(member => {
                     const activeSession = activeChatSessions.get(member.id.toString());
                     const isLookingAtThisGroup = activeSession === `group_${group_id}`;
-                    return !isLookingAtThisGroup; // Only include those NOT looking at the chat
+                    return !isLookingAtThisGroup;
                 })
                 .map(m => m.fcm_token);
 
@@ -2621,17 +2672,17 @@ app.post('/group/send', async (req, res) => {
                 };
                 
                 await admin.messaging().sendEachForMulticast(messagePayload);
-                console.log(TAG, `FCM group notification sent to ${tokensToNotify.length} members (Suppressed for active viewers)`);
+                console.log(TAG, `FCM sent to ${tokensToNotify.length} members`);
             }
         } catch (fcmError) {
-            console.error(TAG, "Error sending Group FCM:", fcmError.message);
+            console.error(TAG, "Error sending FCM:", fcmError.message);
         }
 
-        // 9. Return success response to the app
+        // 10. Return success
         res.json({ success: true, messageId: result.insertId });
 
     } catch (error) {
-        console.error(TAG, "DATABASE ERROR:", error.message);
+        console.error(TAG, "ERROR:", error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
