@@ -2593,7 +2593,7 @@ app.post('/group/send', async (req, res) => {
             // WITHOUT reply data
             query = `INSERT INTO group_messages
                 (group_id, sender_id, message_content, timestamp, message_type, 
-                 latitude, longitude, reply_to_id, expires_at, duration)
+                 latitude, longitude, reply_to_id, quoted_message, quoted_user_name, expires_at, duration)
                 VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`;
             
             params = [
