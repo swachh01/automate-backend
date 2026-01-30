@@ -2506,6 +2506,7 @@ app.post('/group/send', async (req, res) => {
         latitude, 
         longitude, 
         reply_to_id, 
+        quoted_sender_id,    // NEW: Added this field
         duration,
         quoted_message,      // NEW
         quoted_user_name     // NEW
@@ -2567,12 +2568,12 @@ app.post('/group/send', async (req, res) => {
         let query, params;
 
         if (hasReplyData) {
-            // Total columns: 12 | Total values: 12
+            // Total columns: 13 | Added quoted_sender_id
             query = `INSERT INTO group_messages
                 (group_id, sender_id, message_content, timestamp, message_type, 
-                 latitude, longitude, reply_to_id, quoted_message, quoted_user_name, 
+                 latitude, longitude, reply_to_id, quoted_sender_id, quoted_message, quoted_user_name, 
                  expires_at, duration)
-                VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`;
+                VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
             
             params = [
                 group_id,
@@ -2582,19 +2583,19 @@ app.post('/group/send', async (req, res) => {
                 latitude || null,
                 longitude || null,
                 reply_to_id,
+                quoted_sender_id || null, // NEW
                 quoted_message,
                 quoted_user_name,
                 expiresAt,
                 duration || 0
             ];
         } else {
-            // Total columns: 12 | Total values: 12
-            // We pass NULL for the 3 reply-related columns to keep count consistent
+            // Total columns: 13 | We pass NULL for the 4 reply-related columns to keep count consistent
             query = `INSERT INTO group_messages
                 (group_id, sender_id, message_content, timestamp, message_type, 
-                 latitude, longitude, reply_to_id, quoted_message, quoted_user_name, 
+                 latitude, longitude, reply_to_id, quoted_sender_id, quoted_message, quoted_user_name, 
                  expires_at, duration)
-                VALUES (?, ?, ?, NOW(), ?, ?, ?, NULL, NULL, NULL, ?, ?)`;
+                VALUES (?, ?, ?, NOW(), ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`;
             
             params = [
                 group_id,
@@ -2621,6 +2622,7 @@ app.post('/group/send', async (req, res) => {
             latitude: latitude || null,
             longitude: longitude || null,
             reply_to_id: reply_to_id || null,
+            quoted_sender_id: quoted_sender_id || null, // NEW: Added to socket emit
             quoted_message: quoted_message || null,
             quoted_user_name: quoted_user_name || null,
             expires_at: expiresAt,
