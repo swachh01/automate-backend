@@ -838,16 +838,93 @@ app.post("/addTravelPlan", async (req, res) => {
 });
 
 //==========================================================================CAB TRAVEL PLAN==========================================================================================
+
+//==========================================================================CAB TRAVEL PLAN==========================================================================================
 app.post("/addCabTravelPlan", async (req, res) => {
-    const { userId, companyName, date, time, pickup, destination, landmark } = req.body;
+    const TAG = "/addCabTravelPlan";
+    let connection;
+
     try {
-        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_date, travel_time, pickup_location, destination, landmark) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?)`;
-        await db.query(query, [userId, companyName, date, time, pickup, destination, landmark]);
-        res.status(201).json({ success: true, message: "Cab plan saved successfully" });
+        const { userId, companyName, date, time, pickup, destination, landmark } = req.body;
+
+        if (!userId || !destination || !date) {
+            return res.status(400).json({ success: false, message: "Missing required fields" });
+        }
+
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        // 1. Insert into Cab Plans table
+        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_date, travel_time, pickup_location, destination, landmark, status) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'Active')`;
+        const [cabResult] = await connection.query(query, [userId, companyName, date, time, pickup, destination, landmark]);
+
+        // 2. Group Logic (Matches your Rickshaw logic)
+        // Ensure a group exists for this destination
+        const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
+        await connection.query(groupQuery, [destination]);
+
+        // Get the group ID
+        const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [destination]);
+        if (groupRows.length > 0) {
+            const groupId = groupRows[0].group_id;
+            // Add user to the group members
+            const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
+            await connection.query(memberQuery, [groupId, userId]);
+        }
+
+        await connection.commit();
+
+        // 3. Optional: Send FCM Notifications to other users going to the same destination
+        try {
+            const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
+            const joinerName = userRows.length > 0 ? userRows[0].name : "A traveler";
+
+            const [matchingUsers] = await connection.query(`
+                SELECT DISTINCT u.fcm_token 
+                FROM travel_plans_cab tp
+                JOIN users u ON tp.user_id = u.id
+                WHERE tp.destination = ? 
+                  AND tp.status = 'Active'
+                  AND tp.user_id != ? 
+                  AND u.fcm_token IS NOT NULL
+                  AND u.trip_alerts_enabled = 1
+            `, [destination, userId]);
+
+            if (matchingUsers.length > 0) {
+                const tokens = matchingUsers.map(u => u.fcm_token).filter(t => t);
+                if (tokens.length > 0) {
+                    const messagePayload = {
+                        tokens: tokens,
+                        notification: {
+                            title: "New Cab Buddy!",
+                            body: `${joinerName} is also taking a cab to ${destination}!`
+                        },
+                        data: {
+                            type: "travel_match",
+                            destinationName: String(destination),
+                            commuteType: "Cab"
+                        }
+                    };
+                    await admin.messaging().sendEachForMulticast(messagePayload);
+                }
+            }
+        } catch (notifyError) {
+            console.error(TAG, "Notification Error:", notifyError.message);
+        }
+
+        res.status(201).json({ 
+            success: true, 
+            message: "Cab plan saved successfully and group joined",
+            id: cabResult.insertId 
+        });
+
     } catch (err) {
-        console.error(err);
+        if (connection) await connection.rollback();
+        console.error(TAG, "Error:", err);
         res.status(500).json({ success: false, message: "Server error" });
+    } finally {
+        if (connection) connection.release();
     }
 });
 
