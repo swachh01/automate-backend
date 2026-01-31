@@ -849,7 +849,6 @@ app.post("/addCabTravelPlan", async (req, res) => {
         }
 
         connection = await db.getConnection();
-        await connection.query("SET time_zone = '+00:00' ");
         await connection.beginTransaction();
 
         // 1. Insert into Cab Plans table
