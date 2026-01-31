@@ -1000,18 +1000,21 @@ app.get('/users/destination', async (req, res) => {
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    let timeCol = 'time';
+    // Default time selection for Rickshaw (travel_plans table)
+    let timeSelection = `DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')`;
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        timeCol = 'travel_time';
+        // Logic fix: Combine travel_date and travel_time into one ISO string for the Android Adapter
+        timeSelection = `DATE_FORMAT(CONCAT(tp.travel_date, ' ', tp.travel_time), '%Y-%m-%dT%H:%i:%s.000Z')`;
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        timeCol = 'travel_time';
+        // Logic fix: Ensure Own vehicle also returns full ISO format
+        timeSelection = `DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')`;
     }
 
     try {
@@ -1024,7 +1027,7 @@ app.get('/users/destination', async (req, res) => {
 
         let finalDestName = destinationName;
         if (!finalDestName && groupId) {
-            const [groupRows] = await db.query("SELECT group_name FROM \`group_table\` WHERE group_id = ?", [groupId]);
+            const [groupRows] = await db.query("SELECT group_name FROM `group_table` WHERE group_id = ?", [groupId]);
             if (groupRows.length > 0) finalDestName = groupRows[0].group_name;
         }
 
@@ -1041,7 +1044,7 @@ app.get('/users/destination', async (req, res) => {
                 u.profile_pic AS profilePic,
                 u.gender,
                 u.profile_visibility,
-                tp.${timeCol} as time,        
+                ${timeSelection} as time,        
                 tp.${fromCol} AS fromPlace, 
                 tp.${toCol} AS toPlace     
             FROM ${tableName} tp
@@ -1051,7 +1054,7 @@ app.get('/users/destination', async (req, res) => {
                 AND tp.status = 'Active' 
                 AND tp.user_id != ?   
             ORDER BY
-                tp.${timeCol} ASC; 
+                tp.created_at DESC; 
         `;
         
         const [users] = await db.execute(query, [finalDestName, currentUserId]);
