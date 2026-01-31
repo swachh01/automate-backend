@@ -1969,10 +1969,29 @@ app.put('/trip/cancel/:tripId', async (req, res) => {
     if (!tripId || isNaN(tripId)) {
       return res.status(400).json({ success: false, message: 'Invalid trip ID' });
     }
-    const [result] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', parseInt(tripId)]);
-    if (result.affectedRows > 0) {
+
+    const tId = parseInt(tripId);
+
+    // 1. Try to update in the Rickshaw table (travel_plans)
+    const [rickshawRes] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', tId]);
+    
+    // 2. If not found, try to update in the Cab table (travel_plans_cab)
+    let cabRes = { affectedRows: 0 };
+    if (rickshawRes.affectedRows === 0) {
+        [cabRes] = await db.query('UPDATE travel_plans_cab SET status = ? WHERE id = ?', ['Cancelled', tId]);
+    }
+
+    // 3. If still not found, try to update in the Own Vehicle table (travel_plans_own)
+    let ownRes = { affectedRows: 0 };
+    if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
+        [ownRes] = await db.query('UPDATE travel_plans_own SET status = ? WHERE id = ?', ['Cancelled', tId]);
+    }
+
+    // Check if any of the three updates were successful
+    if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
       res.json({ success: true, message: 'Trip cancelled successfully' });
     } else {
+      // If the ID wasn't found in any table
       res.status(404).json({ success: false, message: 'Trip not found' });
     }
   } catch (error) {
@@ -2031,10 +2050,29 @@ app.delete('/tripHistory/:tripId', async (req, res) => {
     if (!tripId || isNaN(tripId)) {
       return res.status(400).json({ success: false, message: 'Invalid trip ID' });
     }
-    const [result] = await db.query('DELETE FROM travel_plans WHERE id = ?', [parseInt(tripId)]);
-    if (result.affectedRows > 0) {
+
+    const tId = parseInt(tripId);
+
+    // 1. Try to delete from the Rickshaw table (travel_plans)
+    const [rickshawRes] = await db.query('DELETE FROM travel_plans WHERE id = ?', [tId]);
+    
+    // 2. If not found in Rickshaw, try the Cab table (travel_plans_cab)
+    let cabRes = { affectedRows: 0 };
+    if (rickshawRes.affectedRows === 0) {
+        [cabRes] = await db.query('DELETE FROM travel_plans_cab WHERE id = ?', [tId]);
+    }
+
+    // 3. If still not found, try the Own Vehicle table (travel_plans_own)
+    let ownRes = { affectedRows: 0 };
+    if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
+        [ownRes] = await db.query('DELETE FROM travel_plans_own WHERE id = ?', [tId]);
+    }
+
+    // Check if any of the three delete operations were successful
+    if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
       res.json({ success: true, message: 'Trip deleted successfully' });
     } else {
+      // If the ID wasn't found in any of the three tables
       res.status(404).json({ success: false, message: 'Trip not found' });
     }
   } catch (error) {
