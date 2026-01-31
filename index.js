@@ -333,10 +333,10 @@ socket.on('group_read', async (data) => {
       groupId,
       lat,
       lng,
-      type: type
+      type: type || 'live_update'
     });
     if (type === 'stop_sharing') {
-        console.log(`User ${senderId} stopped sharing with ${receiverId}`);
+        console.log(`User ${senderId} stopped sharing with ${groupId}`);
     }
   });
 }); 
