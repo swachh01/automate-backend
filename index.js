@@ -1009,8 +1009,8 @@ app.get('/users/destination', async (req, res) => {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        // Logic fix: Combine travel_date and travel_time into one ISO string for the Android Adapter
-        timeSelection = `DATE_FORMAT(CONCAT(tp.travel_date, ' ', tp.travel_time), '%Y-%m-%dT%H:%i:%s.000Z')`;
+        timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')`;
+
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
@@ -1890,8 +1890,9 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const uId = parseInt(userId);
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // FIX 1: Update status using the new column name 'travel_datetime'
     await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW()`, [uId]);
-    await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_date < CURDATE()`, [uId]);
+    await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_datetime < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_time < NOW()`, [uId]);
 
     const historyQuery = `
@@ -1905,10 +1906,10 @@ app.get('/tripHistory/:userId', async (req, res) => {
 
         UNION ALL
 
-        -- Cab Plans
+        -- Cab Plans (FIX 2: Select directly from travel_datetime)
         SELECT 
             id, pickup_location as from_place, destination as to_place,
-            DATE_FORMAT(CONCAT(travel_date, ' ', travel_time), '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+            DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
             0 as fare, status, 0 as hasAddedFare, 'Cab' as commute_type
         FROM travel_plans_cab WHERE user_id = ?
 
@@ -1935,7 +1936,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
       fare: trip.fare ? parseFloat(trip.fare) : null,
       status: trip.status,
       hasAddedFare: Boolean(trip.hasAddedFare),
-      commute_type: trip.commute_type // Added this field for your Android UI
+      commute_type: trip.commute_type 
     }));
 
     const [countResult] = await db.query(`
