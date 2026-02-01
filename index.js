@@ -842,37 +842,44 @@ app.post("/addCabTravelPlan", async (req, res) => {
     let connection;
 
     try {
-        const { userId, companyName, date, time, pickup, destination, landmark } = req.body;
+        const { userId, companyName, time, pickup, destination, landmark } = req.body;
 
-        if (!userId || !destination || !date) {
+        if (!userId || !destination || !time || !companyName) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
+        }
+
+        // Validate and format date for MySQL
+        let formattedTime;
+        try {
+            formattedTime = new Date(time);
+            if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date"); }
+        } catch (e) {
+            return res.status(400).json({ success: false, message: "Invalid time format." });
         }
 
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert into Cab Plans table
-        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_date, travel_time, pickup_location, destination, landmark, status) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 'Active')`;
-        const [cabResult] = await connection.query(query, [userId, companyName, date, time, pickup, destination, landmark]);
+        // 1. Insert into Cab Plans table (Using the new single datetime column)
+        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_datetime, pickup_location, destination, landmark, status) 
+                       VALUES (?, ?, ?, ?, ?, ?, 'Active')`;
+        const [cabResult] = await connection.query(query, [userId, companyName, formattedTime, pickup, destination, landmark]);
 
-        // 2. Group Logic (Matches your Rickshaw logic)
-        // Ensure a group exists for this destination
+        // 2. Group Logic
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [destination]);
 
-        // Get the group ID
         const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [destination]);
-        if (groupRows.length > 0) {
-            const groupId = groupRows[0].group_id;
-            // Add user to the group members
+        const groupId = groupRows.length > 0 ? groupRows[0].group_id : null;
+
+        if (groupId) {
             const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
             await connection.query(memberQuery, [groupId, userId]);
         }
 
         await connection.commit();
 
-        // 3. Optional: Send FCM Notifications to other users going to the same destination
+        // 3. Notification Logic
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "A traveler";
@@ -890,29 +897,27 @@ app.post("/addCabTravelPlan", async (req, res) => {
 
             if (matchingUsers.length > 0) {
                 const tokens = matchingUsers.map(u => u.fcm_token).filter(t => t);
-                if (tokens.length > 0) {
-                    const messagePayload = {
-                        tokens: tokens,
-                        notification: {
-                            title: "New Cab Buddy!",
-                            body: `${joinerName} is also taking a cab to ${destination}!`
-                        },
-                        data: {
-                            type: "travel_match",
-                            destinationName: String(destination),
-                            commuteType: "Cab"
-                        }
-                    };
-                    await admin.messaging().sendEachForMulticast(messagePayload);
-                }
+                const messagePayload = {
+                    tokens: tokens,
+                    notification: {
+                        title: "New Cab Buddy!",
+                        body: `${joinerName} is also taking a cab to ${destination}!`
+                    },
+                    data: {
+                        type: "travel_match",
+                        destinationName: String(destination),
+                        commuteType: "Cab"
+                    }
+                };
+                await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
-            console.error(TAG, "Notification Error:", notifyError.message);
+            Log.e(TAG, "Notification Error: " + notifyError.message);
         }
 
         res.status(201).json({ 
             success: true, 
-            message: "Cab plan saved successfully and group joined",
+            message: "Cab plan saved successfully",
             id: cabResult.insertId 
         });
 
