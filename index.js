@@ -954,6 +954,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
+        statusFilter = "status = 'Active' AND travel_datetime > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
@@ -1009,7 +1010,7 @@ app.get('/users/destination', async (req, res) => {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')`;
+        timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as time, tp.travel_datetime as travel_date`;
 
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
@@ -1890,7 +1891,6 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const uId = parseInt(userId);
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // FIX 1: Update status using the new column name 'travel_datetime'
     await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_datetime < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_time < NOW()`, [uId]);
@@ -2107,16 +2107,15 @@ app.get('/checkCompletedTrips/:userId', async (req, res) => {
 
 app.post('/autoUpdateCompletedTrips', async (req, res) => {
   try {
-    const updateQuery = `
-      UPDATE travel_plans
-      SET status = 'Completed'
-      WHERE status = 'Active' AND time < DATE_SUB(NOW(), INTERVAL 2 HOUR)
-    `;
-    const [result] = await db.query(updateQuery);
-    res.json({ success: true, message: `Updated ${result.affectedRows} overdue trips` });
+    // Update Rickshaw
+    await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE status = 'Active' AND time < NOW()`);
+    // Update Cabs using new column
+    await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE status = 'Active' AND travel_datetime < NOW()`);
+    
+    res.json({ success: true, message: "Trips updated" });
   } catch (error) {
     console.error('Error auto-updating trips:', error);
-    res.status(500).json({ success: false, message: 'Error auto-updating trips' });
+    res.status(500).json({ success: false });
   }
 });
 
