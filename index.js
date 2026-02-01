@@ -1010,7 +1010,7 @@ app.get('/users/destination', async (req, res) => {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as \`time\`, tp.travel_datetime as travel_date`;
+        timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')`;
 
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
@@ -1047,7 +1047,7 @@ app.get('/users/destination', async (req, res) => {
                 u.profile_pic AS profilePic,
                 u.gender,
                 u.profile_visibility,
-                ${timeSelection} as time,        
+                ${timeSelection} as \`time\`,
                 tp.${fromCol} AS fromPlace, 
                 tp.${toCol} AS toPlace     
             FROM ${tableName} tp
