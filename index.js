@@ -842,7 +842,8 @@ app.post("/addCabTravelPlan", async (req, res) => {
     let connection;
 
     try {
-        const { userId, companyName, time, pickup, destination, landmark } = req.body;
+        // Included estimatedFare in the destructured request body
+        const { userId, companyName, time, pickup, destination, landmark, estimatedFare } = req.body;
 
         if (!userId || !destination || !time || !companyName) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -860,10 +861,10 @@ app.post("/addCabTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert into Cab Plans table (Using the new single datetime column)
-        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_datetime, pickup_location, destination, landmark, status) 
-                       VALUES (?, ?, ?, ?, ?, ?, 'Active')`;
-        const [cabResult] = await connection.query(query, [userId, companyName, formattedTime, pickup, destination, landmark]);
+        // 1. Insert into Cab Plans table (Added estimated_fare column and value)
+        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_datetime, pickup_location, destination, landmark, status, estimated_fare) 
+                       VALUES (?, ?, ?, ?, ?, ?, 'Active', ?)`;
+        const [cabResult] = await connection.query(query, [userId, companyName, formattedTime, pickup, destination, landmark, estimatedFare || 0.00]);
 
         // 2. Group Logic
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
@@ -912,7 +913,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
                 await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
-            Log.e(TAG, "Notification Error: " + notifyError.message);
+            console.error(TAG, "Notification Error: " + notifyError.message);
         }
 
         res.status(201).json({ 
@@ -1003,22 +1004,22 @@ app.get('/users/destination', async (req, res) => {
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    let extraCols = ", NULL as landmark, NULL as companyName"; // Default for Rickshaw
+    let extraCols = ", NULL as landmark, NULL as companyName, NULL as fare"; // Default for Rickshaw
     let timeSelection = `DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')`;
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        // ADDED: landmark and company_name
-        extraCols = ", tp.landmark, tp.company_name as companyName";
+        // Aliased estimated_fare as 'fare' for the Android Model
+        extraCols = ", tp.landmark, tp.company_name as companyName, tp.estimated_fare as fare";
         timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')`;
 
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        extraCols = ", NULL as landmark, tp.vehicle_type as companyName"; // Use vehicle type as company
+        extraCols = ", NULL as landmark, tp.vehicle_type as companyName, NULL as fare"; 
         timeSelection = `DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')`;
     }
 
@@ -1067,7 +1068,7 @@ app.get('/users/destination', async (req, res) => {
 
         const responseUsers = users.map(user => ({
             ...user,
-            commuteType: commuteType, // Send this so Android knows the type
+            commuteType: commuteType, 
             profilePic: getVisibleProfilePic(
                 { ...user, profile_pic: user.profilePic, user_id: user.id }, 
                 currentUserId, 
