@@ -1003,20 +1003,22 @@ app.get('/users/destination', async (req, res) => {
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    // Default time selection for Rickshaw (travel_plans table)
+    let extraCols = ", NULL as landmark, NULL as companyName"; // Default for Rickshaw
     let timeSelection = `DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')`;
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
+        // ADDED: landmark and company_name
+        extraCols = ", tp.landmark, tp.company_name as companyName";
         timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')`;
 
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        // Logic fix: Ensure Own vehicle also returns full ISO format
+        extraCols = ", NULL as landmark, tp.vehicle_type as companyName"; // Use vehicle type as company
         timeSelection = `DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')`;
     }
 
@@ -1049,7 +1051,8 @@ app.get('/users/destination', async (req, res) => {
                 u.profile_visibility,
                 ${timeSelection} as \`time\`,
                 tp.${fromCol} AS fromPlace, 
-                tp.${toCol} AS toPlace     
+                tp.${toCol} AS toPlace
+                ${extraCols}
             FROM ${tableName} tp
             JOIN users u ON tp.user_id = u.id
             WHERE
@@ -1064,6 +1067,7 @@ app.get('/users/destination', async (req, res) => {
 
         const responseUsers = users.map(user => ({
             ...user,
+            commuteType: commuteType, // Send this so Android knows the type
             profilePic: getVisibleProfilePic(
                 { ...user, profile_pic: user.profilePic, user_id: user.id }, 
                 currentUserId, 
