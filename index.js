@@ -1895,6 +1895,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const uId = parseInt(userId);
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // Auto-update status for expired plans
     await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_datetime < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_time < NOW()`, [uId]);
@@ -1910,20 +1911,20 @@ app.get('/tripHistory/:userId', async (req, res) => {
 
         UNION ALL
 
-        -- Cab Plans (FIX 2: Select directly from travel_datetime)
+        -- Cab Plans (FIX: Selecting actual fare and added_fare from DB)
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            0 as fare, status, 0 as hasAddedFare, 'Cab' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Cab' as commute_type
         FROM travel_plans_cab WHERE user_id = ?
 
         UNION ALL
 
-        -- Own Vehicle Plans
+        -- Own Vehicle Plans (FIX: Selecting actual fare and added_fare from DB)
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            0 as fare, status, 0 as hasAddedFare, 'Own' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Own' as commute_type
         FROM travel_plans_own WHERE user_id = ?
       ) AS combined_history
       ORDER BY travel_time DESC
@@ -1937,9 +1938,9 @@ app.get('/tripHistory/:userId', async (req, res) => {
       from_place: trip.from_place,
       to_place: trip.to_place,
       travel_time: trip.travel_time,
-      fare: trip.fare ? parseFloat(trip.fare) : null,
+      fare: trip.fare ? parseFloat(trip.fare) : 0.00, // Ensuring fare is returned as a float
       status: trip.status,
-      hasAddedFare: Boolean(trip.hasAddedFare),
+      hasAddedFare: Boolean(trip.hasAddedFare), // Converting TINYINT to Boolean for Android
       commute_type: trip.commute_type 
     }));
 
