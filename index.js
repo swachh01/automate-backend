@@ -2024,31 +2024,59 @@ app.get('/socket-status', (req, res) => {
 });
 
 app.put('/trip/complete/:tripId', async (req, res) => {
-  const TAG = "PUT /trip/complete/:tripId";
-  try {
-    const { tripId } = req.params;
-    const { fare, didGo } = req.body;
-    if (!tripId || isNaN(tripId) || didGo === undefined) {
-      return res.status(400).json({ success: false, message: 'Invalid trip ID or missing didGo status' });
+    const TAG = "PUT /trip/complete/:tripId";
+    try {
+        const { tripId } = req.params;
+        const { fare, didGo } = req.body;
+
+        if (!tripId || isNaN(tripId) || didGo === undefined) {
+            return res.status(400).json({ success: false, message: 'Invalid trip ID or missing didGo status' });
+        }
+
+        const tId = parseInt(tripId);
+        const status = didGo === true ? 'Done' : 'Cancelled';
+        const tripFare = didGo === true ? (parseFloat(fare) || 0.00) : 0.00;
+
+        // 1. Try to update in the Rickshaw table (travel_plans)
+        const [rickshawRes] = await db.query(
+            'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
+            [status, tripFare, tId]
+        );
+
+        // 2. If not found in Rickshaw, try the Cab table (travel_plans_cab)
+        let cabRes = { affectedRows: 0 };
+        if (rickshawRes.affectedRows === 0) {
+            [cabRes] = await db.query(
+                'UPDATE travel_plans_cab SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
+                [status, tripFare, tId]
+            );
+        }
+
+        // 3. If still not found, try the Own Vehicle table (travel_plans_own)
+        let ownRes = { affectedRows: 0 };
+        if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
+            [ownRes] = await db.query(
+                'UPDATE travel_plans_own SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
+                [status, tripFare, tId]
+            );
+        }
+
+        // Check if any of the three updates were successful
+        if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
+            res.json({
+                success: true,
+                message: didGo ? 'Fare added successfully' : 'Trip marked as cancelled',
+                newStatus: status
+            });
+        } else {
+            // If the ID wasn't found in any table
+            res.status(404).json({ success: false, message: 'Trip not found' });
+        }
+
+    } catch (error) {
+        console.error(TAG, 'Error completing trip:', error);
+        res.status(500).json({ success: false, message: 'Error completing trip' });
     }
-    let updateQuery, queryParams;
-    if (didGo === true) {
-      updateQuery = 'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?';
-      queryParams = ['Done', parseFloat(fare) || 0.00, parseInt(tripId)];
-    } else {
-      updateQuery = 'UPDATE travel_plans SET status = ?, fare = 0.00, added_fare = TRUE WHERE id = ?';
-      queryParams = ['Cancelled', parseInt(tripId)];
-    }
-    const [result] = await db.query(updateQuery, queryParams);
-    if (result.affectedRows > 0) {
-      res.json({ success: true, message: didGo ? 'Fare added successfully' : 'Trip marked as cancelled', newStatus: didGo ? 'Done' : 'Cancelled' });
-    } else {
-      res.status(404).json({ success: false, message: 'Trip not found' });
-    }
-  } catch (error) {
-    console.error(TAG, 'Error completing trip:', error);
-    res.status(500).json({ success: false, message: 'Error completing trip' });
-  }
 });
 
 app.delete('/tripHistory/:tripId', async (req, res) => {
