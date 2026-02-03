@@ -2034,16 +2034,17 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         }
 
         const tId = parseInt(tripId);
+        // This 'Done' must exist in your DB ENUM list
         const status = didGo === true ? 'Done' : 'Cancelled';
         const tripFare = didGo === true ? (parseFloat(fare) || 0.00) : 0.00;
 
-        // 1. Try to update in the Rickshaw table (travel_plans)
+        // 1. Try Rickshaw table (travel_plans)
         const [rickshawRes] = await db.query(
             'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
             [status, tripFare, tId]
         );
 
-        // 2. If not found in Rickshaw, try the Cab table (travel_plans_cab)
+        // 2. If not found, try Cab table (travel_plans_cab)
         let cabRes = { affectedRows: 0 };
         if (rickshawRes.affectedRows === 0) {
             [cabRes] = await db.query(
@@ -2052,7 +2053,7 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             );
         }
 
-        // 3. If still not found, try the Own Vehicle table (travel_plans_own)
+        // 3. If still not found, try Own Vehicle table (travel_plans_own)
         let ownRes = { affectedRows: 0 };
         if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
             [ownRes] = await db.query(
@@ -2061,7 +2062,7 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             );
         }
 
-        // Check if any of the three updates were successful
+        // Check if any table was updated successfully
         if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
             res.json({
                 success: true,
@@ -2069,11 +2070,12 @@ app.put('/trip/complete/:tripId', async (req, res) => {
                 newStatus: status
             });
         } else {
-            // If the ID wasn't found in any table
+            // This occurs if the ID 210002 is not found in any table
             res.status(404).json({ success: false, message: 'Trip not found' });
         }
 
     } catch (error) {
+        // This is where the 500 error is caught and logged
         console.error(TAG, 'Error completing trip:', error);
         res.status(500).json({ success: false, message: 'Error completing trip' });
     }
