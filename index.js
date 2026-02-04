@@ -950,12 +950,12 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
     let tableName;
     let destinationCol;
-    let statusFilter = "status = 'Active'";
+    let statusFilter = "status = 'Trip Active'";
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
-        statusFilter = "status = 'Active' AND travel_datetime > NOW()";
+        statusFilter = "status = 'Trip Active' AND travel_datetime > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
