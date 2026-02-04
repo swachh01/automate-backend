@@ -1114,7 +1114,7 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
       JOIN users u ON tp.user_id = u.id  
       WHERE tp.user_id = ? 
         AND tp.time > UTC_TIMESTAMP() 
-        AND tp.status = 'Active'
+        AND tp.status = 'Trip Active'
       ORDER BY tp.time ASC`,
       [userId]
     );
@@ -1767,7 +1767,7 @@ app.get("/travel-plans/destinations", async (req, res) => {
       FROM travel_plans tp
       JOIN \`group_table\` g ON tp.to_place = g.group_name
       WHERE
-        tp.status = 'Active'
+        tp.status = 'Trip Active'
         AND tp.time > NOW()
         AND tp.to_place_lat IS NOT NULL
         AND tp.to_place_lng IS NOT NULL
