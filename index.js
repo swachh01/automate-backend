@@ -784,7 +784,7 @@ app.post("/addTravelPlan", async (req, res) => {
                 FROM travel_plans tp
                 JOIN users u ON tp.user_id = u.id
                 WHERE tp.to_place = ? 
-                  AND tp.status = 'Active'
+                  AND tp.status = 'Trip Active'
                   AND tp.user_id != ? 
                   AND u.fcm_token IS NOT NULL
                   AND u.fcm_token != ''
@@ -890,7 +890,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
                 FROM travel_plans_cab tp
                 JOIN users u ON tp.user_id = u.id
                 WHERE tp.destination = ? 
-                  AND tp.status = 'Active'
+                  AND tp.status = 'Trip Active'
                   AND tp.user_id != ? 
                   AND u.fcm_token IS NOT NULL
                   AND u.trip_alerts_enabled = 1
@@ -1058,7 +1058,7 @@ app.get('/users/destination', async (req, res) => {
             JOIN users u ON tp.user_id = u.id
             WHERE
                 tp.${toCol} = ?
-                AND tp.status = 'Active' 
+                AND tp.status = 'Trip Active' 
                 AND tp.user_id != ?   
             ORDER BY
                 tp.created_at DESC; 
@@ -1678,7 +1678,7 @@ app.get("/getUsersGoing", async (req, res) => {
                 DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
             FROM travel_plans tp
             JOIN users u ON tp.user_id = u.id
-            WHERE tp.status = 'Active'
+            WHERE tp.status = 'Trip Active'
             ORDER BY tp.time ASC
         `;
         const [rows] = await db.query(plansQuery);
@@ -1828,7 +1828,7 @@ app.get('/travel-plans/by-destination', async (req, res) => {
                 DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time
             FROM travel_plans tp
             JOIN users u ON tp.user_id = u.id
-            WHERE tp.to_place = ? AND tp.status = 'Active'
+            WHERE tp.to_place = ? AND tp.status = 'Trip Active'
             ORDER BY tp.time ASC
         `;
         const [users] = await db.query(plansQuery, [destination]);
@@ -2130,7 +2130,7 @@ app.get('/checkCompletedTrips/:userId', async (req, res) => {
       SELECT tp.id, tp.from_place, tp.to_place, tp.time, CONCAT(u.first_name, ' ', u.last_name) as user_name
       FROM travel_plans tp
       LEFT JOIN users u ON tp.user_id = u.id
-      WHERE tp.user_id = ? AND tp.status = 'Active' AND tp.time < NOW()
+      WHERE tp.user_id = ? AND tp.status = 'Trip Active' AND tp.time < NOW()
       ORDER BY tp.time DESC
     `;
     const [completedTrips] = await db.query(query, [parseInt(userId)]);
