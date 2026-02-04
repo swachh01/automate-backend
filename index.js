@@ -745,7 +745,7 @@ app.post("/addTravelPlan", async (req, res) => {
             (user_id, from_place, to_place, time, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
              created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'Active', ?, ?, ?, ?, NOW(), NOW());
+          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, NOW(), NOW());
         `;
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
@@ -863,7 +863,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
 
         // 1. Insert into Cab Plans table (Added estimated_fare column and value)
         const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_datetime, pickup_location, destination, landmark, status, estimated_fare) 
-                       VALUES (?, ?, ?, ?, ?, ?, 'Active', ?)`;
+                       VALUES (?, ?, ?, ?, ?, ?, 'Trip Active', ?)`;
         const [cabResult] = await connection.query(query, [userId, companyName, formattedTime, pickup, destination, landmark, estimatedFare || 0.00]);
 
         // 2. Group Logic
@@ -1897,9 +1897,9 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     // Auto-update status for expired plans
-    await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND time < NOW()`, [uId]);
-    await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_datetime < NOW()`, [uId]);
-    await db.query(`UPDATE travel_plans_own SET status = 'Completed' WHERE user_id = ? AND status = 'Active' AND travel_time < NOW()`, [uId]);
+    await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
+    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_datetime < NOW()`, [uId]);
+    await db.query(`UPDATE travel_plans_own SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_time < NOW()`, [uId]);
 
     const historyQuery = `
       SELECT * FROM (
@@ -1982,18 +1982,18 @@ app.put('/trip/cancel/:tripId', async (req, res) => {
     const tId = parseInt(tripId);
 
     // 1. Try to update in the Rickshaw table (travel_plans)
-    const [rickshawRes] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Cancelled', tId]);
+    const [rickshawRes] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
     
     // 2. If not found, try to update in the Cab table (travel_plans_cab)
     let cabRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0) {
-        [cabRes] = await db.query('UPDATE travel_plans_cab SET status = ? WHERE id = ?', ['Cancelled', tId]);
+        [cabRes] = await db.query('UPDATE travel_plans_cab SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
     }
 
     // 3. If still not found, try to update in the Own Vehicle table (travel_plans_own)
     let ownRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
-        [ownRes] = await db.query('UPDATE travel_plans_own SET status = ? WHERE id = ?', ['Cancelled', tId]);
+        [ownRes] = await db.query('UPDATE travel_plans_own SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
     }
 
     // Check if any of the three updates were successful
@@ -2037,7 +2037,7 @@ app.put('/trip/complete/:tripId', async (req, res) => {
 
         const tId = parseInt(tripId);
         // This 'Done' must exist in your DB ENUM list
-        const status = didGo === true ? 'Done' : 'Cancelled';
+        const status = didGo === true ? 'Fare Added' : 'Trip Cancelled';
         const tripFare = didGo === true ? (parseFloat(fare) || 0.00) : 0.00;
 
         // 1. Try Rickshaw table (travel_plans)
