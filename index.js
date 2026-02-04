@@ -2144,9 +2144,9 @@ app.get('/checkCompletedTrips/:userId', async (req, res) => {
 app.post('/autoUpdateCompletedTrips', async (req, res) => {
   try {
     // Update Rickshaw
-    await db.query(`UPDATE travel_plans SET status = 'Completed' WHERE status = 'Active' AND time < NOW()`);
+    await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE status = 'Trip Active' AND time < NOW()`);
     // Update Cabs using new column
-    await db.query(`UPDATE travel_plans_cab SET status = 'Completed' WHERE status = 'Active' AND travel_datetime < NOW()`);
+    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE status = 'Trip Active' AND travel_datetime < NOW()`);
     
     res.json({ success: true, message: "Trips updated" });
   } catch (error) {
