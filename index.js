@@ -1111,7 +1111,7 @@ app.get('/users/destination', async (req, res) => {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        extraCols = ", NULL as landmark, tp.vehicle_type as companyName, NULL as fare"; 
+        extraCols = ", tp.landmark, tp.vehicle_type as companyName, tp.estimated_fare as fare"; 
         timeSelection = `DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')`;
     }
 
