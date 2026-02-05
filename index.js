@@ -1139,6 +1139,7 @@ app.get('/users/destination', async (req, res) => {
                 u.id as userId, 
                 CONCAT(u.first_name, ' ', u.last_name) as name,
                 u.work_category,
+                u.work_detail,
                 u.profile_pic AS profilePic,
                 u.gender,
                 u.profile_visibility,
