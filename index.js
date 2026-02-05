@@ -933,15 +933,95 @@ app.post("/addCabTravelPlan", async (req, res) => {
 
 //==========================================================================OWN VEHICLE PLAN=========================================================================================
 app.post("/addOwnVehiclePlan", async (req, res) => {
-    const { userId, vehicleType, vehicleNumber, pickup, destination, time } = req.body;
+    const TAG = "/addOwnVehiclePlan";
+    let connection;
+
     try {
-        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time) 
-                       VALUES (?, ?, ?, ?, ?, ?)`;
-        await db.query(query, [userId, vehicleType, vehicleNumber, pickup, destination, time]);
-        res.status(201).json({ success: true, message: "Vehicle plan saved successfully" });
+        const { userId, vehicleType, vehicleNumber, pickup, destination, time } = req.body;
+
+        if (!userId || !destination || !time || !vehicleNumber || !vehicleType) {
+            return res.status(400).json({ success: false, message: "Missing required fields" });
+        }
+
+        // Validate and format date
+        let formattedTime;
+        try {
+            formattedTime = new Date(time);
+            if (isNaN(formattedTime.getTime())) throw new Error("Invalid date");
+        } catch (e) {
+            return res.status(400).json({ success: false, message: "Invalid time format." });
+        }
+
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        // 1. Insert into Own Vehicle Plans table
+        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, status) 
+                       VALUES (?, ?, ?, ?, ?, ?, 'Trip Active')`;
+        const [ownResult] = await connection.query(query, [userId, vehicleType, vehicleNumber, pickup, destination, formattedTime]);
+
+        // 2. Group Logic (Auto create/join destination group)
+        const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
+        await connection.query(groupQuery, [destination]);
+
+        const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [destination]);
+        const groupId = groupRows.length > 0 ? groupRows[0].group_id : null;
+
+        if (groupId) {
+            const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
+            await connection.query(memberQuery, [groupId, userId]);
+        }
+
+        await connection.commit();
+
+        // 3. Notification Logic (FCM)
+        try {
+            const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
+            const joinerName = userRows.length > 0 ? userRows[0].name : "A traveler";
+
+            const [matchingUsers] = await connection.query(`
+                SELECT DISTINCT u.fcm_token 
+                FROM travel_plans_own tp
+                JOIN users u ON tp.user_id = u.id
+                WHERE tp.destination = ? 
+                  AND tp.status = 'Trip Active'
+                  AND tp.user_id != ? 
+                  AND u.fcm_token IS NOT NULL
+                  AND u.trip_alerts_enabled = 1
+            `, [destination, userId]);
+
+            if (matchingUsers.length > 0) {
+                const tokens = matchingUsers.map(u => u.fcm_token).filter(t => t);
+                const messagePayload = {
+                    tokens: tokens,
+                    notification: {
+                        title: "New Travel Buddy!",
+                        body: `${joinerName} is driving to ${destination}!`
+                    },
+                    data: {
+                        type: "travel_match",
+                        destinationName: String(destination),
+                        commuteType: "Own"
+                    }
+                };
+                await admin.messaging().sendEachForMulticast(messagePayload);
+            }
+        } catch (notifyError) {
+            console.error(TAG, "Notification Error: " + notifyError.message);
+        }
+
+        res.status(201).json({ 
+            success: true, 
+            message: "Own vehicle plan saved successfully",
+            id: ownResult.insertId 
+        });
+
     } catch (err) {
-        console.error(err);
+        if (connection) await connection.rollback();
+        console.error(TAG, "Error:", err);
         res.status(500).json({ success: false, message: "Server error" });
+    } finally {
+        if (connection) connection.release();
     }
 });
 
@@ -959,6 +1039,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
+        statusFilter = "status = 'Trip Active' AND travel_time > NOW()";
     } else {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
