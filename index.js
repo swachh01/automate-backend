@@ -937,7 +937,8 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
     let connection;
 
     try {
-        const { userId, vehicleType, vehicleNumber, pickup, destination, time } = req.body;
+        // Updated destructuring to include landmark and estimatedFare
+        const { userId, vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare } = req.body;
 
         if (!userId || !destination || !time || !vehicleNumber || !vehicleType) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -955,10 +956,20 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert into Own Vehicle Plans table
-        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, status) 
-                       VALUES (?, ?, ?, ?, ?, ?, 'Trip Active')`;
-        const [ownResult] = await connection.query(query, [userId, vehicleType, vehicleNumber, pickup, destination, formattedTime]);
+        // 1. Insert into Own Vehicle Plans table (Added landmark and estimated_fare)
+        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, estimated_fare, status) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
+        
+        const [ownResult] = await connection.query(query, [
+            userId, 
+            vehicleType, 
+            vehicleNumber, 
+            pickup, 
+            destination, 
+            formattedTime, 
+            landmark || null, 
+            estimatedFare || 0.00
+        ]);
 
         // 2. Group Logic (Auto create/join destination group)
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
