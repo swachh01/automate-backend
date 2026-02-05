@@ -1102,7 +1102,7 @@ app.get('/users/destination', async (req, res) => {
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    let extraCols = ", NULL as landmark, NULL as companyName, NULL as fare"; // Default for Rickshaw
+    let extraCols = ", tp.landmark, NULL as companyName, NULL as fare"; 
     let timeSelection = `DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')`;
 
     if (commuteType === 'Cab') {
