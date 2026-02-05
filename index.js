@@ -719,7 +719,8 @@ app.post("/addTravelPlan", async (req, res) => {
     let connection; 
 
     try {
-        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
+        // Destructure 'landmark' from req.body
+        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, landmark } = req.body;
 
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
@@ -729,6 +730,7 @@ app.post("/addTravelPlan", async (req, res) => {
                 message: "Missing required fields."
             });
         }
+        
         let formattedTime;
         try {
             formattedTime = new Date(time);
@@ -740,16 +742,20 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
+        // Updated Query: Added 'landmark' column and value placeholder
         const planQuery = `
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-             created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, NOW(), NOW());
+             landmark, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, NOW(), NOW());
         `;
+        
+        // Pass 'landmark' (or null) to the query
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
-            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng
+            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
+            landmark || null
         ]);
 
         const newPlanId = planResult.insertId;
@@ -775,6 +781,7 @@ app.post("/addTravelPlan", async (req, res) => {
 
         await connection.commit();
 
+        // Notification logic remains the same...
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
@@ -787,7 +794,6 @@ app.post("/addTravelPlan", async (req, res) => {
                   AND tp.status = 'Trip Active'
                   AND tp.user_id != ? 
                   AND u.fcm_token IS NOT NULL
-                  AND u.fcm_token != ''
                   AND u.trip_alerts_enabled = 1
             `, [toPlace, userId]);
 
