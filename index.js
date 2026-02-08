@@ -605,7 +605,6 @@ app.post("/login", async (req, res) => {
        FROM users WHERE phone = ? AND country_code = ?`;
       queryParams = [finalPhone, normalized.country_code];
   } else {
-      // Standard search if no country code provided
       query = `SELECT 
         id, 
         CONCAT(first_name, ' ', last_name) as name, 
