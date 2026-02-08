@@ -5,6 +5,7 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs'); 
 const admin = require("firebase-admin");
 const axios = require('axios');
+const { parsePhoneNumberFromString } = require('libphonenumber-js');
 
 let serviceAccount;
 
@@ -354,6 +355,28 @@ async function getUserByPhone(phone) {
   }
 }
 
+function normalizePhoneData(phone, countryCode) {
+    // Ensure countryCode starts with + for the library
+    const dialCode = countryCode.startsWith('+') ? country_code : `+${countryCode}`;
+    const fullNumber = dialCode + phone.replace(/\D/g, ''); // Strip non-digits from phone
+    
+    const phoneNumber = parsePhoneNumberFromString(fullNumber);
+    
+    if (phoneNumber && phoneNumber.isValid()) {
+        return {
+            phone: phoneNumber.nationalNumber, // e.g., "8373893838"
+            country_code: `+${phoneNumber.countryCallingCode}`, // e.g., "+91"
+            isValid: true
+        };
+    }
+    // Fallback logic if parsing fails
+    return {
+        phone: phone.replace(/\D/g, ''),
+        country_code: countryCode,
+        isValid: false
+    };
+}
+
 app.get("/health", async (_req, res) => {
   try {
     await db.query('SELECT 1');
@@ -405,11 +428,16 @@ app.post("/create-account", async (req, res) => {
             return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
         }
 
-        console.log(TAG, `Attempting to create account for phone: ${country_code}${phone}`);
+        // Normalize data to ensure clean DB entries
+        const normalized = normalizePhoneData(phone, country_code);
+        const finalPhone = normalized.phone;
+        const finalCountryCode = normalized.country_code;
+
+        console.log(TAG, `Attempting to create account for phone: ${finalCountryCode}${finalPhone}`);
 
         const [existingUser] = await db.query(
             `SELECT id, signup_status FROM users WHERE phone = ? AND country_code = ?`,
-            [phone, country_code]
+            [finalPhone, finalCountryCode]
         );
 
         if (existingUser.length > 0 && existingUser[0].signup_status === 'completed') {
@@ -432,7 +460,8 @@ app.post("/create-account", async (req, res) => {
                 updated_at = NOW();
         `;
         
-        await db.query(query, [first_name, last_name, work_category, work_detail, gender, phone, country_code, hashedPassword]);
+        await db.query(query, [first_name, last_name, work_category, work_detail, gender, finalPhone, finalCountryCode, hashedPassword]);
+        
         const [userRows] = await db.query(
             `SELECT 
                 id, 
@@ -447,7 +476,7 @@ app.post("/create-account", async (req, res) => {
                 COALESCE(home_location, '') as home_location
             FROM users 
             WHERE phone = ? AND country_code = ?`,
-            [phone, country_code]
+            [finalPhone, finalCountryCode]
         );
         
         if (userRows.length === 0) {
@@ -476,22 +505,18 @@ app.get("/check-phone-availability", async (req, res) => {
     const TAG = "/check-phone-availability";
     const { phone, country_code } = req.query;
 
-    console.log(TAG, `Checking: phone=${phone}, country_code=${country_code}`);
-
     if (!phone || !country_code) {
         return res.status(400).json({ success: false, message: "Phone and country code required." });
     }
 
+    // Normalize to ensure we search for the clean version
+    const normalized = normalizePhoneData(phone, country_code);
+
     try {
         const [rows] = await db.query(
-            `SELECT id, phone, country_code, signup_status FROM users WHERE phone = ? AND country_code = ? AND signup_status = 'completed'`,
-            [phone, country_code]
+            `SELECT id FROM users WHERE phone = ? AND country_code = ? AND signup_status = 'completed'`,
+            [normalized.phone, normalized.country_code]
         );
-
-        console.log(TAG, `Query result: found ${rows.length} rows`);
-        if (rows.length > 0) {
-            console.log(TAG, `User exists:`, rows[0]);
-        }
 
         if (rows.length > 0) {
             return res.json({ available: false, message: "This mobile number is already linked with another account." });
@@ -547,13 +572,22 @@ app.get("/debug/check-user", async (req, res) => {
 // ================= LOGIN =================
 
 app.post("/login", async (req, res) => {
-  const { phone, password } = req.body || {};
+  const { phone, password, country_code } = req.body || {}; // Added country_code support for precise login
+  
   if (!phone || !password) {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
-  try {
-    const [rows] = await db.query(
-      `SELECT 
+
+  // Normalize the incoming phone number
+  // If user didn't send country_code (backward compatibility), we just strip non-digits
+  let finalPhone = phone.replace(/\D/g, '');
+  let query = `SELECT * FROM users WHERE phone = ?`;
+  let queryParams = [finalPhone];
+
+  if (country_code) {
+      const normalized = normalizePhoneData(phone, country_code);
+      finalPhone = normalized.phone;
+      query = `SELECT 
         id, 
         CONCAT(first_name, ' ', last_name) as name, 
         work_category, 
@@ -568,9 +602,30 @@ app.post("/login", async (req, res) => {
         COALESCE(home_location, '') as home_location,
         home_lat,
         home_lng
-       FROM users WHERE phone = ?`,
-      [phone]
-    );
+       FROM users WHERE phone = ? AND country_code = ?`;
+      queryParams = [finalPhone, normalized.country_code];
+  } else {
+      // Standard search if no country code provided
+      query = `SELECT 
+        id, 
+        CONCAT(first_name, ' ', last_name) as name, 
+        work_category, 
+        phone, 
+        gender, 
+        dob, 
+        work_detail, 
+        profile_pic, 
+        password, 
+        signup_status,
+        COALESCE(bio, '') as bio,
+        COALESCE(home_location, '') as home_location,
+        home_lat,
+        home_lng
+       FROM users WHERE phone = ?`;
+  }
+
+  try {
+    const [rows] = await db.query(query, queryParams);
 
     if (!rows.length) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
@@ -589,12 +644,15 @@ app.post("/login", async (req, res) => {
 
     let isPasswordValid = false;
 
+    // Check if password is encrypted (bcrypt)
     if (user.password.startsWith('$2') && user.password.length > 50) {
       isPasswordValid = await bcrypt.compare(password, user.password);
     } else {
+      // Legacy plain text check
       if (user.password === password) {
         isPasswordValid = true;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
+        // Auto-upgrade legacy password to bcrypt
         await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
       }
     }
