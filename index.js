@@ -2363,32 +2363,60 @@ app.post('/reset-password', async (req, res) => {
     const TAG = "/reset-password";
     try {
         const { phone, country_code, newPassword } = req.body;
+
+        // 1. Basic Validation
         if (!phone || !country_code || !newPassword) {
             return res.status(400).json({
                 success: false,
                 message: 'Phone, country code, and new password are required'
             });
         }
+
+        // 2. Strength Validation
         if (newPassword.length < 7 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
             return res.status(400).json({ 
                 success: false, 
                 message: "Password must be at least 7 characters and include letters, numbers, and symbols." 
             });
         }
+
+        // 3. Fetch User (Including current password hash)
         const [userRows] = await db.query(
-            'SELECT id FROM users WHERE phone = ? AND country_code = ?',
+            'SELECT id, password FROM users WHERE phone = ? AND country_code = ?',
             [phone, country_code]
         );
+
         if (userRows.length === 0) {
             return res.status(404).json({ 
                 success: false, 
                 message: 'User not found' 
             });
         }
-        const userId = userRows[0].id;
+
+        const user = userRows[0];
+
+        // 4. Check if new password is same as the old one
+        // Note: user.password is the hashed string from DB
+        const isSamePassword = await bcrypt.compare(newPassword, user.password);
+        
+        if (isSamePassword) {
+            return res.status(400).json({
+                success: false,
+                message: "Your new password cannot be the same as your current password. Please choose a different one."
+            });
+        }
+
+        // 5. Hash the new password and Update
+        const userId = user.id;
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
-        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
+        
+        await db.query(
+            'UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', 
+            [newHashedPassword, userId]
+        );
+
         res.json({ success: true, message: 'Password reset successfully' });
+
     } catch (error) {
         console.error(TAG, 'Error resetting password:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
