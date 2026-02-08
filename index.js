@@ -356,20 +356,33 @@ async function getUserByPhone(phone) {
 }
 
 function normalizePhoneData(phone, countryCode) {
-    // Ensure countryCode starts with + for the library
-    const dialCode = countryCode.startsWith('+') ? country_code : `+${countryCode}`;
-    const fullNumber = dialCode + phone.replace(/\D/g, ''); // Strip non-digits from phone
-    
-    const phoneNumber = parsePhoneNumberFromString(fullNumber);
-    
-    if (phoneNumber && phoneNumber.isValid()) {
-        return {
-            phone: phoneNumber.nationalNumber, // e.g., "8373893838"
-            country_code: `+${phoneNumber.countryCallingCode}`, // e.g., "+91"
-            isValid: true
-        };
+    // 1. Check if either is missing to prevent crashes
+    if (!phone || !countryCode) {
+        return { phone: phone || "", country_code: countryCode || "", isValid: false };
     }
-    // Fallback logic if parsing fails
+
+    try {
+        // 2. FIXED: Use countryCode (the parameter name) consistently
+        const dialCode = countryCode.startsWith('+') ? countryCode : `+${countryCode}`;
+        
+        // Strip non-digits from the phone number
+        const cleanPhone = phone.replace(/\D/g, '');
+        const fullNumber = dialCode + cleanPhone;
+        
+        const phoneNumber = parsePhoneNumberFromString(fullNumber);
+        
+        if (phoneNumber && phoneNumber.isValid()) {
+            return {
+                phone: phoneNumber.nationalNumber, // e.g., "8850260443"
+                country_code: `+${phoneNumber.countryCallingCode}`, // e.g., "+91"
+                isValid: true
+            };
+        }
+    } catch (e) {
+        console.error("Normalization error:", e.message);
+    }
+
+    // 3. Fallback: If parsing fails, still return clean digits
     return {
         phone: phone.replace(/\D/g, ''),
         country_code: countryCode,
