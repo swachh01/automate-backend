@@ -1311,43 +1311,35 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
 });
 
 app.get('/getMessages', async (req, res) => {
-  try {
-    const { sender_id, receiver_id } = req.query;
-    if (!sender_id || !receiver_id) {
-      return res.status(400).json({ success: false, message: 'Required fields missing' });
-    }
+try {
+const { sender_id, receiver_id } = req.query;
+if (!sender_id || !receiver_id) {
+return res.status(400).json({ success: false, message: 'Required fields missing' });
+}
 
-    // UPDATED: Added filter to exclude location messages that expired more than 24 hours ago
-    const sql = `
-      SELECT * FROM messages
-      WHERE ((sender_id = ? AND receiver_id = ?)
-           OR (sender_id = ? AND receiver_id = ?))
-           AND (
-             message_type != 'live_location' 
-             OR expires_at IS NULL 
-             OR expires_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
-           )
-      ORDER BY timestamp ASC
-    `;
-    const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
-    
-    const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
-    const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
-    const hiddenIds = hiddenMessages.map(h => h.message_id);
-    const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
-        
-    const decryptedMessages = visibleMessages.map(msg => {
-        return { 
-            ...msg, 
-            message: decrypt(msg.message)
-        };
-    });
-        
-    res.json({ success: true, messages: decryptedMessages });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Database error' });
-  } 
+const sql = `
+SELECT * FROM messages
+WHERE (sender_id = ? AND receiver_id = ?)
+OR (sender_id = ? AND receiver_id = ?)
+ORDER BY timestamp ASC
+`;
+const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
+const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
+const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
+const hiddenIds = hiddenMessages.map(h => h.message_id);
+const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
+const decryptedMessages = visibleMessages.map(msg => {
+return {
+...msg,
+message: decrypt(msg.message)
+};
 });
+
+res.json({ success: true, messages: decryptedMessages });
+} catch (error) {
+res.status(500).json({ success: false, message: 'Database error' });
+}
+}); 
 
 app.post('/messages/delivered', async (req, res) => {
   try {
@@ -2777,64 +2769,52 @@ app.post('/remove-group-icon', async (req, res) => {
 });
 
 app.get('/group/:groupId/messages', async (req, res) => {
-    const { groupId } = req.params;
-    const { userId } = req.query;
-
-    if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
-
-    try {
-        // Ensure user is a member
-        await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
-
-        // UPDATED: Added filter in WHERE clause to exclude old expired live locations
-        const query = `
-            SELECT
-                gm.message_id as id, 
-                gm.sender_id,
-                gm.message_content as message,
-                gm.timestamp,
-                gm.message_type,
-                gm.latitude,
-                gm.longitude,
-                gm.reply_to_id,
-                gm.quoted_message,
-                gm.quoted_user_name,
-                DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
-                gm.duration,
-                CONCAT(u.first_name, ' ', u.last_name) as sender_name,
-                u.profile_pic as sender_profile_pic,
-                ((SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
-                (SELECT COUNT(DISTINCT user_id) 
-                 FROM group_message_read_status 
-                 WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
-                (SELECT GROUP_CONCAT(DISTINCT u2.first_name SEPARATOR ', ')
-                 FROM group_message_read_status gmrs
-                 JOIN users u2 ON gmrs.user_id = u2.id
-                 WHERE gmrs.message_id = gm.message_id 
-                   AND gmrs.user_id != gm.sender_id) as readByNames
-            FROM group_messages gm
-            JOIN users u ON gm.sender_id = u.id
-            WHERE gm.group_id = ?
-              AND (
-                gm.message_type != 'live_location' 
-                OR gm.expires_at IS NULL 
-                OR gm.expires_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
-              )
-            ORDER BY gm.timestamp ASC
-            LIMIT 300`;
-
-        const [messages] = await db.execute(query, [groupId, groupId]);
-
-        const decrypted = messages.map(msg => ({
-            ...msg,
-            message: decrypt(msg.message)
-        }));
-
-        res.json({ success: true, messages: decrypted });
-    } catch (error) {
-        console.error("Error fetching group messages:", error);
-        res.status(500).json({ success: false });
-    }
+const { groupId } = req.params;
+const { userId } = req.query;
+if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
+try {
+// Ensure user is a member
+await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
+const query = `
+SELECT
+gm.message_id as id,
+gm.sender_id,
+gm.message_content as message,
+gm.timestamp,
+gm.message_type,
+gm.latitude,
+gm.longitude,
+gm.reply_to_id,
+gm.quoted_message, -- NEW
+gm.quoted_user_name, -- NEW
+DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
+gm.duration,
+CONCAT(u.first_name, ' ', u.last_name) as sender_name,
+u.profile_pic as sender_profile_pic,
+((SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
+(SELECT COUNT(DISTINCT user_id)
+FROM group_message_read_status
+WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
+(SELECT GROUP_CONCAT(DISTINCT u2.first_name SEPARATOR ', ')
+FROM group_message_read_status gmrs
+JOIN users u2 ON gmrs.user_id = u2.id
+WHERE gmrs.message_id = gm.message_id
+AND gmrs.user_id != gm.sender_id) as readByNames
+FROM group_messages gm
+JOIN users u ON gm.sender_id = u.id
+WHERE gm.group_id = ?
+ORDER BY gm.timestamp ASC
+LIMIT 300`;
+const [messages] = await db.execute(query, [groupId, groupId]);
+const decrypted = messages.map(msg => ({
+...msg,
+message: decrypt(msg.message)
+}));
+res.json({ success: true, messages: decrypted });
+} catch (error) {
+console.error("Error fetching group messages:", error);
+res.status(500).json({ success: false });
+}
 });
 
 app.get('/group/by-name', async (req, res) => {
