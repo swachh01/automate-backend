@@ -1317,10 +1317,16 @@ app.get('/getMessages', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
+    // UPDATED: Added filter to exclude location messages that expired more than 24 hours ago
     const sql = `
       SELECT * FROM messages
-      WHERE (sender_id = ? AND receiver_id = ?)
-           OR (sender_id = ? AND receiver_id = ?)
+      WHERE ((sender_id = ? AND receiver_id = ?)
+           OR (sender_id = ? AND receiver_id = ?))
+           AND (
+             message_type != 'live_location' 
+             OR expires_at IS NULL 
+             OR expires_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+           )
       ORDER BY timestamp ASC
     `;
     const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
@@ -2770,8 +2776,6 @@ app.post('/remove-group-icon', async (req, res) => {
     }
 });
 
-// ALSO UPDATE your GET /group/:groupId/messages endpoint to include the new fields:
-
 app.get('/group/:groupId/messages', async (req, res) => {
     const { groupId } = req.params;
     const { userId } = req.query;
@@ -2782,6 +2786,7 @@ app.get('/group/:groupId/messages', async (req, res) => {
         // Ensure user is a member
         await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
 
+        // UPDATED: Added filter in WHERE clause to exclude old expired live locations
         const query = `
             SELECT
                 gm.message_id as id, 
@@ -2792,8 +2797,8 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.latitude,
                 gm.longitude,
                 gm.reply_to_id,
-                gm.quoted_message,          -- NEW
-                gm.quoted_user_name,        -- NEW
+                gm.quoted_message,
+                gm.quoted_user_name,
                 DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
                 gm.duration,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name,
@@ -2810,6 +2815,11 @@ app.get('/group/:groupId/messages', async (req, res) => {
             FROM group_messages gm
             JOIN users u ON gm.sender_id = u.id
             WHERE gm.group_id = ?
+              AND (
+                gm.message_type != 'live_location' 
+                OR gm.expires_at IS NULL 
+                OR gm.expires_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+              )
             ORDER BY gm.timestamp ASC
             LIMIT 300`;
 
