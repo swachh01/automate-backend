@@ -329,6 +329,8 @@ socket.on('group_read', async (data) => {
 
   socket.on('update_group_live_location', (data) => {
     const { senderId, groupId, lat, lng, type } = data;
+    
+    // Relay to the group room
     socket.to(`group_${groupId}`).emit('group_live_location_update', {
       senderId,
       groupId,
@@ -336,10 +338,23 @@ socket.on('group_read', async (data) => {
       lng,
       type: type || 'live_update'
     });
+
     if (type === 'stop_sharing') {
-        console.log(`User ${senderId} stopped sharing with ${groupId}`);
+        console.log(`[GROUP] User ${senderId} stopped sharing in Group ${groupId}`);
     }
-  });
+});
+
+// ADD THIS: Backup listener in case your Java code uses the other name
+socket.on('update_live_location_group', (data) => {
+    const { senderId, groupId, lat, lng, type } = data;
+    socket.to(`group_${groupId}`).emit('group_live_location_update', {
+        senderId,
+        groupId,
+        lat,
+        lng,
+        type: type || 'live_update'
+    });
+});
 }); 
 
 async function getUserByPhone(phone) {
