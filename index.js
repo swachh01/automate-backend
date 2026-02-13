@@ -2914,10 +2914,20 @@ app.post('/group/send', async (req, res) => {
         // 6. Calculate expiration for live location
         let expiresAt = null;
         if (message_type === 'live_location') {
-            const durationInt = parseInt(duration) || 60;
-            const expiryDate = new Date(Date.now() + durationInt * 60000);
-            expiresAt = expiryDate.toISOString().slice(0, 19).replace('T', ' ');
-            console.log(TAG, "Setting live location expiry to:", expiresAt);
+            const durationInt = parseInt(duration);
+            
+            if (durationInt === -1) {
+                // "Till I stop sharing" - Set to 100 years in the future to prevent instant expiry
+                const farFuture = new Date();
+                farFuture.setFullYear(farFuture.getFullYear() + 100);
+                expiresAt = farFuture.toISOString().slice(0, 19).replace('T', ' ');
+            } else {
+                // Standard duration - Default to 60 minutes if duration is 0 or invalid
+                const finalDuration = (durationInt > 0) ? durationInt : 60;
+                const expiryDate = new Date(Date.now() + finalDuration * 60000);
+                expiresAt = expiryDate.toISOString().slice(0, 19).replace('T', ' ');
+            }
+            console.log(TAG, "Setting Group live location expiry to:", expiresAt);
         }
 
         // 7. Prepare query with quoted message support
