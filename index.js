@@ -1405,13 +1405,17 @@ app.post('/sendMessage', async (req, res) => {
     let expiresAt = null;
 
     // Calculate expires_at for location messages with duration
-    if ((type === 'location' || type === 'live_location') && duration && duration > 0) {
+    if ((type === 'location' || type === 'live_location') && duration) {
+    if (parseInt(duration) === -1) {
+        // Use a far future date for "Until Stopped"
+        expiresAt = '2099-12-31 23:59:59';
+    } else if (parseInt(duration) > 0) {
         const date = new Date();
-        date.setMinutes(date.getMinutes() + duration);
+        date.setMinutes(date.getMinutes() + parseInt(duration));
         expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
-        console.log(TAG, 'Set expires_at to:', expiresAt);
     }
-
+    console.log(TAG, 'Set expires_at to:', expiresAt);
+}
     const hasReplyData = reply_to_id && 
                          reply_to_id !== 0 && 
                          quoted_message && 
