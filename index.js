@@ -2867,10 +2867,10 @@ app.post('/group/send', async (req, res) => {
         latitude, 
         longitude, 
         reply_to_id, 
-        quoted_sender_id,    // NEW: Added this field
+        quoted_sender_id,
         duration,
-        quoted_message,      // NEW
-        quoted_user_name     // NEW
+        quoted_message,
+        quoted_user_name
     } = req.body;
 
     try {
@@ -2916,18 +2916,18 @@ app.post('/group/send', async (req, res) => {
         if (message_type === 'live_location') {
             const durationInt = parseInt(duration);
             
+            // FIX: Explicitly handle "Till I stop sharing" (-1)
             if (durationInt === -1) {
-                // "Till I stop sharing" - Set to 100 years in the future to prevent instant expiry
                 const farFuture = new Date();
-                farFuture.setFullYear(farFuture.getFullYear() + 100);
+                farFuture.setFullYear(farFuture.getFullYear() + 50); // 50 years in future
                 expiresAt = farFuture.toISOString().slice(0, 19).replace('T', ' ');
             } else {
-                // Standard duration - Default to 60 minutes if duration is 0 or invalid
+                // Standard duration: use provided value or default to 60 if 0/NaN
                 const finalDuration = (durationInt > 0) ? durationInt : 60;
                 const expiryDate = new Date(Date.now() + finalDuration * 60000);
                 expiresAt = expiryDate.toISOString().slice(0, 19).replace('T', ' ');
             }
-            console.log(TAG, "Setting Group live location expiry to:", expiresAt);
+            console.log(TAG, "Calculated Group Expiry:", expiresAt);
         }
 
         // 7. Prepare query with quoted message support
@@ -2939,7 +2939,6 @@ app.post('/group/send', async (req, res) => {
         let query, params;
 
         if (hasReplyData) {
-            // Total columns: 13 | Added quoted_sender_id
             query = `INSERT INTO group_messages
                 (group_id, sender_id, message_content, timestamp, message_type, 
                  latitude, longitude, reply_to_id, quoted_sender_id, quoted_message, quoted_user_name, 
@@ -2954,14 +2953,13 @@ app.post('/group/send', async (req, res) => {
                 latitude || null,
                 longitude || null,
                 reply_to_id,
-                quoted_sender_id || null, // NEW
+                quoted_sender_id || null,
                 quoted_message,
                 quoted_user_name,
                 expiresAt,
                 duration || 0
             ];
         } else {
-            // Total columns: 13 | We pass NULL for the 4 reply-related columns to keep count consistent
             query = `INSERT INTO group_messages
                 (group_id, sender_id, message_content, timestamp, message_type, 
                  latitude, longitude, reply_to_id, quoted_sender_id, quoted_message, quoted_user_name, 
@@ -2981,9 +2979,8 @@ app.post('/group/send', async (req, res) => {
         }
 
         const [result] = await db.execute(query, params);
-        console.log(TAG, "Message inserted successfully:", result.insertId);
-
-        // 8. Socket emit with quoted data
+        
+        // 8. Socket emit with the same calculated expiresAt
         io.to(`group_${group_id}`).emit('new_group_message', {
             id: result.insertId,
             sender_id: sender_id,
@@ -2993,7 +2990,7 @@ app.post('/group/send', async (req, res) => {
             latitude: latitude || null,
             longitude: longitude || null,
             reply_to_id: reply_to_id || null,
-            quoted_sender_id: quoted_sender_id || null, // NEW: Added to socket emit
+            quoted_sender_id: quoted_sender_id || null,
             quoted_message: quoted_message || null,
             quoted_user_name: quoted_user_name || null,
             expires_at: expiresAt,
@@ -3001,7 +2998,7 @@ app.post('/group/send', async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
-        // 9. FCM Notifications (unchanged)
+        // 9. FCM Notifications
         try {
             const [members] = await db.query(`
                 SELECT u.id, u.fcm_token 
@@ -3014,8 +3011,7 @@ app.post('/group/send', async (req, res) => {
             const tokensToNotify = members
                 .filter(member => {
                     const activeSession = activeChatSessions.get(member.id.toString());
-                    const isLookingAtThisGroup = activeSession === `group_${group_id}`;
-                    return !isLookingAtThisGroup;
+                    return activeSession !== `group_${group_id}`;
                 })
                 .map(m => m.fcm_token);
 
@@ -3030,27 +3026,22 @@ app.post('/group/send', async (req, res) => {
                         priority: "high",
                         notification: {
                             channelId: "chat_channel_id",
-                            sound: "default",
-                            clickAction: "TOP_LEVEL_NOTIFICATION_ACTION"
+                            sound: "default"
                         }
                     },
                     data: {
                         type: "group_chat",
                         groupId: String(group_id),
                         groupName: groupName,
-                        groupIcon: groupCheck[0].group_icon || "",
                         senderId: String(sender_id)
                     }
                 };
-                
                 await admin.messaging().sendEachForMulticast(messagePayload);
-                console.log(TAG, `FCM sent to ${tokensToNotify.length} members`);
             }
         } catch (fcmError) {
-            console.error(TAG, "Error sending FCM:", fcmError.message);
+            console.error(TAG, "FCM Error:", fcmError.message);
         }
 
-        // 10. Return success
         res.json({ success: true, messageId: result.insertId });
 
     } catch (error) {
