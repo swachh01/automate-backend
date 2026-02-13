@@ -2918,9 +2918,7 @@ app.post('/group/send', async (req, res) => {
             
             // FIX: Explicitly handle "Till I stop sharing" (-1)
             if (durationInt === -1) {
-                const farFuture = new Date();
-                farFuture.setFullYear(farFuture.getFullYear() + 50); // 50 years in future
-                expiresAt = farFuture.toISOString().slice(0, 19).replace('T', ' ');
+                expiresAt = '2099-12-31 23:59:59';
             } else {
                 // Standard duration: use provided value or default to 60 if 0/NaN
                 const finalDuration = (durationInt > 0) ? durationInt : 60;
