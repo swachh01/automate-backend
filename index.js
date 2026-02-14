@@ -287,21 +287,28 @@ socket.on('group_typing_stop', async (data) => {
 
 socket.on('group_read', async (data) => {
     try {
+        const { groupId, userId } = data;
+        
+        // Fetch updated stats for ALL recent messages in this group
         const [recentMessages] = await db.query(`
             SELECT 
                 gm.message_id,
-                COUNT(gmrs.user_id) as readByCount,
-                (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalParticipants
+                COUNT(DISTINCT gmrs.user_id) as readByCount,
+                ((SELECT COUNT(*) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
+                (SELECT GROUP_CONCAT(DISTINCT u.first_name SEPARATOR ', ')
+                 FROM group_message_read_status gmrs2
+                 JOIN users u ON gmrs2.user_id = u.id
+                 WHERE gmrs2.message_id = gm.message_id AND gmrs2.user_id != gm.sender_id) as readByNames
             FROM group_messages gm
-            LEFT JOIN group_message_read_status gmrs ON gm.message_id = gmrs.message_id
+            LEFT JOIN group_message_read_status gmrs ON gm.message_id = gmrs.message_id AND gmrs.user_id != gm.sender_id
             WHERE gm.group_id = ?
             AND gm.timestamp > DATE_SUB(NOW(), INTERVAL 1 HOUR)
             GROUP BY gm.message_id
-        `, [data.groupId, data.groupId]);
+        `, [groupId, groupId]);
         
-        socket.to(`group_${data.groupId}`).emit('group_messages_read', {
-            userId: data.userId,
-            groupId: data.groupId,
+        // Broadcast the update with names and counts to everyone in the group
+        io.to(`group_${groupId}`).emit('group_messages_read', {
+            groupId: groupId,
             updatedCounts: recentMessages
         });
         
