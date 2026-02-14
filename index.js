@@ -2536,21 +2536,58 @@ EXISTS (SELECT 1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.
 app.post("/hideChat", async (req, res) => {
     const TAG = "/hideChat"; 
     try {
-        const { userId, otherUserId } = req.body;
+        const { userId, otherUserId, isGroup } = req.body; 
         if (!userId || !otherUserId) return res.status(400).json({ success: false });
-        const [messages] = await db.query(`SELECT id FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, [userId, otherUserId, otherUserId, userId]);
-        if (messages.length === 0) return res.json({ success: true });
-        const valuesToHide = messages.map(msg => [msg.id, userId, new Date()]);
-        await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES ?`, [valuesToHide]);
-        const messageIds = messages.map(m => m.id);
-        const [fullyHidden] = await db.query(`SELECT message_id FROM hidden_messages WHERE message_id IN (?) GROUP BY message_id HAVING COUNT(DISTINCT user_id) >= 2`, [messageIds]);
-        if (fullyHidden.length > 0) {
-            const idsToDelete = fullyHidden.map(x => x.message_id);
-            await db.query(`DELETE FROM messages WHERE id IN (?)`, [idsToDelete]);
-            await db.query(`DELETE FROM hidden_messages WHERE message_id IN (?)`, [idsToDelete]);
+
+        if (isGroup) {
+            // 1. Get all current messages in this group
+            const [messages] = await db.query(`SELECT message_id FROM group_messages WHERE group_id = ?`, [otherUserId]);
+            if (messages.length === 0) return res.json({ success: true });
+
+            // 2. Mark these messages as hidden for THIS user
+            const valuesToHide = messages.map(msg => [msg.message_id, userId, new Date()]);
+            await db.query(`INSERT IGNORE INTO group_hidden_messages (message_id, user_id, hidden_at) VALUES ?`, [valuesToHide]);
+
+            // 3. Collective Deletion Logic:
+            // Check which messages have now been hidden by EVERYONE in the group
+            const messageIds = messages.map(m => m.message_id);
+            const [fullyHidden] = await db.query(`
+                SELECT ghm.message_id 
+                FROM group_hidden_messages ghm
+                JOIN group_messages gm ON ghm.message_id = gm.message_id
+                WHERE ghm.message_id IN (?)
+                GROUP BY ghm.message_id
+                HAVING COUNT(DISTINCT ghm.user_id) >= (SELECT COUNT(*) FROM group_members WHERE group_id = ?)
+            `, [messageIds, otherUserId]);
+
+            // 4. Permanently delete from DB if everyone hid it
+            if (fullyHidden.length > 0) {
+                const idsToDelete = fullyHidden.map(x => x.message_id);
+                await db.query(`DELETE FROM group_messages WHERE message_id IN (?)`, [idsToDelete]);
+                await db.query(`DELETE FROM group_hidden_messages WHERE message_id IN (?)`, [idsToDelete]);
+                // Also clean up read status for these messages
+                await db.query(`DELETE FROM group_message_read_status WHERE message_id IN (?)`, [idsToDelete]);
+                console.log(TAG, `Permanently deleted ${idsToDelete.length} messages as all group members cleared history.`);
+            }
+        } else {
+            // INDIVIDUAL CHAT LOGIC (Remains exactly as you had it)
+            const [messages] = await db.query(`SELECT id FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, [userId, otherUserId, otherUserId, userId]);
+            if (messages.length === 0) return res.json({ success: true });
+
+            const valuesToHide = messages.map(msg => [msg.id, userId, new Date()]);
+            await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES ?`, [valuesToHide]);
+            
+            const messageIds = messages.map(m => m.id);
+            const [fullyHidden] = await db.query(`SELECT message_id FROM hidden_messages WHERE message_id IN (?) GROUP BY message_id HAVING COUNT(DISTINCT user_id) >= 2`, [messageIds]);
+            if (fullyHidden.length > 0) {
+                const idsToDelete = fullyHidden.map(x => x.message_id);
+                await db.query(`DELETE FROM messages WHERE id IN (?)`, [idsToDelete]);
+                await db.query(`DELETE FROM hidden_messages WHERE message_id IN (?)`, [idsToDelete]);
+            }
         }
         res.json({ success: true });
     } catch (error) {
+        console.error(TAG, error);
         res.status(500).json({ success: false });
     }
 });
