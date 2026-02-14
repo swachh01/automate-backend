@@ -2773,52 +2773,65 @@ app.post('/remove-group-icon', async (req, res) => {
 });
 
 app.get('/group/:groupId/messages', async (req, res) => {
-const { groupId } = req.params;
-const { userId } = req.query;
-if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
-try {
-// Ensure user is a member
-await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
-const query = `
-SELECT
-gm.message_id as id,
-gm.sender_id,
-gm.message_content as message,
-gm.timestamp,
-gm.message_type,
-gm.latitude,
-gm.longitude,
-gm.reply_to_id,
-gm.quoted_message, -- NEW
-gm.quoted_user_name, -- NEW
-DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
-gm.duration,
-CONCAT(u.first_name, ' ', u.last_name) as sender_name,
-u.profile_pic as sender_profile_pic,
-((SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
-(SELECT COUNT(DISTINCT user_id)
-FROM group_message_read_status
-WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
-(SELECT GROUP_CONCAT(DISTINCT u2.first_name SEPARATOR ', ')
-FROM group_message_read_status gmrs
-JOIN users u2 ON gmrs.user_id = u2.id
-WHERE gmrs.message_id = gm.message_id
-AND gmrs.user_id != gm.sender_id) as readByNames
-FROM group_messages gm
-JOIN users u ON gm.sender_id = u.id
-WHERE gm.group_id = ?
-ORDER BY gm.timestamp ASC
-LIMIT 300`;
-const [messages] = await db.execute(query, [groupId, groupId]);
-const decrypted = messages.map(msg => ({
-...msg,
-message: decrypt(msg.message)
-}));
-res.json({ success: true, messages: decrypted });
-} catch (error) {
-console.error("Error fetching group messages:", error);
-res.status(500).json({ success: false });
-}
+    const { groupId } = req.params;
+    const { userId } = req.query;
+
+    if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
+
+    try {
+        // Ensure user is a member
+        await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
+
+        const query = `
+            SELECT
+                gm.message_id as id,
+                gm.sender_id,
+                gm.message_content as message,
+                gm.timestamp,
+                gm.message_type, 
+                gm.latitude,
+                gm.longitude,
+                gm.reply_to_id,
+                gm.quoted_message, -- NEW
+                gm.quoted_user_name, -- NEW
+                DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
+                gm.duration,
+                CONCAT(u.first_name, ' ', u.last_name) as sender_name,
+                u.profile_pic as sender_profile_pic,
+                ((SELECT COUNT(DISTINCT user_id) FROM group_members WHERE group_id = ?) - 1) as totalParticipants,
+                (SELECT COUNT(DISTINCT user_id)
+                 FROM group_message_read_status
+                 WHERE message_id = gm.message_id AND user_id != gm.sender_id) as readByCount,
+                (SELECT GROUP_CONCAT(DISTINCT u2.first_name SEPARATOR ', ')
+                 FROM group_message_read_status gmrs
+                 JOIN users u2 ON gmrs.user_id = u2.id
+                 WHERE gmrs.message_id = gm.message_id
+                 AND gmrs.user_id != gm.sender_id) as readByNames
+            FROM group_messages gm
+            JOIN users u ON gm.sender_id = u.id
+            WHERE gm.group_id = ?
+              -- FILTER: Exclude messages hidden by this specific user
+              AND NOT EXISTS (
+                  SELECT 1 FROM group_hidden_messages ghm 
+                  WHERE ghm.message_id = gm.message_id 
+                  AND ghm.user_id = ?
+              )
+            ORDER BY gm.timestamp ASC
+            LIMIT 300`;
+
+        // Note: added userId to the parameter array to match the 3rd '?' in the query
+        const [messages] = await db.execute(query, [groupId, groupId, userId]);
+
+        const decrypted = messages.map(msg => ({
+            ...msg,
+            message: decrypt(msg.message)
+        }));
+
+        res.json({ success: true, messages: decrypted });
+    } catch (error) { 
+        console.error("Error fetching group messages:", error);
+        res.status(500).json({ success: false });   
+    }
 });
 
 app.get('/group/by-name', async (req, res) => {
@@ -3051,6 +3064,55 @@ app.post('/group/send', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// 1. DELETE FOR ME (Group) - Just hides it for the caller
+app.post("/group/deleteMessageForMe", async (req, res) => {
+  try {
+    const { messageId, userId } = req.body;
+    if (!messageId || !userId) {
+      return res.status(400).json({ success: false, message: "Missing fields" });
+    }
+
+    // We use a table called 'group_hidden_messages' to track who hid what
+    // Ensure you have created this table in MySQL first!
+    await db.query(
+      `INSERT IGNORE INTO group_hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, 
+      [messageId, userId]
+    );
+
+    res.json({ success: true, message: "Message hidden for you" });
+  } catch (error) {
+    console.error('Error in /group/deleteMessageForMe:', error);
+    res.status(500).json({ success: false });
+  }
+});
+
+// 2. DELETE FOR EVERYONE (Group) - Permanently removes from group_messages
+app.delete('/group/deleteMessageForEveryone/:messageId', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { userId } = req.body;
+
+    const [msgRows] = await db.execute('SELECT sender_id, group_id FROM group_messages WHERE message_id = ?', [messageId]);
+    if (msgRows.length === 0) return res.status(404).json({ success: false });
+
+    const msg = msgRows[0];
+    if (msg.sender_id != userId) return res.status(403).json({ success: false, message: "Only sender can delete for everyone" });
+
+    // Delete the actual message
+    await db.execute('DELETE FROM group_messages WHERE message_id = ?', [messageId]);
+    // Also clean up any 'hidden' entries for this message
+    await db.execute('DELETE FROM group_hidden_messages WHERE message_id = ?', [messageId]);
+
+    // Notify the group via socket
+    io.to(`group_${msg.group_id}`).emit('message_deleted', { messageId: parseInt(messageId) });
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false });
+  }
+});
+
 
 app.get('/group/:groupId/members', async (req, res) => {
     const { groupId } = req.params;
