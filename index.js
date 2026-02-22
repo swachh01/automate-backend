@@ -1198,49 +1198,46 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
 app.get('/users/destination', async (req, res) => {
     const TAG = "/users/destination";
-    const { groupId, userId, commuteType, destinationName } = req.query; 
+    const { groupId, userId, commuteType, destinationName } = req.query;
 
     if (!userId || (!groupId && !destinationName)) {
         return res.status(400).json({ success: false, message: 'Missing required parameters' });
     }
 
     const currentUserId = parseInt(userId);
-
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    let extraCols = ", tp.landmark, NULL as companyName, NULL as fare"; 
-    let timeSelection = `DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')`;
-    let timeFilter = `AND tp.time > NOW()`;  // ADD: Rickshaw time filter
+    let extraCols = ", tp.landmark, NULL as companyName, NULL as fare";
+    let timeSelection = "DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')";
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
+        // Aliased estimated_fare as 'fare' for the Android Model
         extraCols = ", tp.landmark, tp.company_name as companyName, tp.estimated_fare as fare";
-        timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')`;
-        timeFilter = `AND tp.travel_datetime > NOW()`;  // ADD: Cab time filter
-
+        timeSelection = "DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        extraCols = ", tp.landmark, tp.vehicle_type as companyName, tp.estimated_fare as fare"; 
-        timeSelection = `DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')`;
-        timeFilter = `AND tp.travel_time > NOW()`;  // ADD: Own time filter
+        extraCols = ", tp.landmark, tp.vehicle_type as companyName, tp.estimated_fare as fare";
+        timeSelection = "DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')";
     }
 
     try {
+        // Fetch friends to determine profile visibility
         const [friendRows] = await db.query(
             `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
-             FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
+             FROM messages WHERE sender_id = ? OR receiver_id = ?`,
             [currentUserId, currentUserId, currentUserId]
         );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
         let finalDestName = destinationName;
         if (!finalDestName && groupId) {
-            const [groupRows] = await db.query("SELECT group_name FROM `group_table` WHERE group_id = ?", [groupId]);
+            const [groupRows] = await db.query("SELECT group_name FROM group_table WHERE group_id = ?", [groupId]);
             if (groupRows.length > 0) finalDestName = groupRows[0].group_name;
         }
 
@@ -1258,7 +1255,7 @@ app.get('/users/destination', async (req, res) => {
                 u.profile_pic AS profilePic,
                 u.gender,
                 u.profile_visibility,
-                ${timeSelection} as \`time\`,
+                ${timeSelection} as time,
                 tp.${fromCol} AS fromPlace, 
                 tp.${toCol} AS toPlace
                 ${extraCols}
@@ -1266,29 +1263,28 @@ app.get('/users/destination', async (req, res) => {
             JOIN users u ON tp.user_id = u.id
             WHERE
                 tp.${toCol} = ?
-                AND tp.status = 'Trip Active'
-                ${timeFilter}
+                AND tp.status = 'Trip Active' 
+                AND tp.user_id != ?   
             ORDER BY
-                tp.created_at DESC; 
+                tp.created_at DESC
         `;
-        
-        // CHANGED: Removed currentUserId from params since we removed AND tp.user_id != ?
-        const [users] = await db.execute(query, [finalDestName]);
+
+        const [users] = await db.execute(query, [finalDestName, currentUserId]);
 
         const responseUsers = users.map(user => ({
             ...user,
-            commuteType: commuteType, 
+            commuteType: commuteType,
             profilePic: getVisibleProfilePic(
-                { ...user, profile_pic: user.profilePic, user_id: user.id }, 
-                currentUserId, 
+                { ...user, profile_pic: user.profilePic, user_id: user.id },
+                currentUserId,
                 friendIds
             )
         }));
 
-        res.json({ success: true, users: responseUsers }); 
+        res.json({ success: true, users: responseUsers });
 
     } catch (error) {
-        console.error(TAG, `Error fetching users:`, error);
+        console.error(TAG, "Error fetching users:", error);
         res.status(500).json({ success: false, message: 'Server error fetching users' });
     }
 });
