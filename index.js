@@ -2797,8 +2797,30 @@ WHERE gm.group_id = ? ORDER BY u.first_name ASC`, [groupId]);
 app.post('/leaveGroup', async (req, res) => {
     const { userId, groupId } = req.body;
     try {
+        const [userRows] = await db.query(
+            "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", 
+            [userId]
+        );
+        const userName = userRows.length > 0 ? userRows[0].name : "Someone";
+
         await db.query("DELETE FROM group_members WHERE user_id = ? AND group_id = ?", [userId, groupId]);
-        io.to(`group_${groupId}`).emit('group_notification', { message: `A user has left the group` });
+        const systemMessage = `${userName} left the group`;
+        const encrypted = encrypt(systemMessage);
+        const [result] = await db.query(
+            `INSERT INTO group_messages (group_id, sender_id, message_content, timestamp, message_type) 
+             VALUES (?, ?, ?, NOW(), 'system')`,
+            [groupId, userId, encrypted]
+        );
+        io.to(`group_${groupId}`).emit('new_group_message', {
+            id: result.insertId,
+            group_id: groupId,
+            sender_id: userId,
+            sender_name: userName,
+            message: systemMessage,
+            message_type: 'system',
+            timestamp: new Date().toISOString()
+        });
+
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ success: false });
