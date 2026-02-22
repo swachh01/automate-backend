@@ -911,7 +911,7 @@ app.post("/addTravelPlan", async (req, res) => {
                     android: {
                         priority: "high",
                         notification: {
-                            channelId: "channel_custom_sound_v2",
+                            channelId: "channel_custom_sound_v3",
                             sound: "custom_notification",
                             priority: "high",
                             defaultSound: false
@@ -1544,7 +1544,7 @@ try {
         android: {
           priority: "high",
           notification: {
-            channelId: "channel_custom_sound_v2",
+            channelId: "channel_custom_sound_v3",
             sound: "custom_notification",
             priority: "high",
             defaultSound: false
