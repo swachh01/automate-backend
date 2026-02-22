@@ -1517,53 +1517,58 @@ app.post('/sendMessage', async (req, res) => {
     // --- UPDATE THIS BLOCK IN /sendMessage ---
 try {
   const receiverIdStr = receiver_id.toString();
-  
-  // 1. Check if the receiver is actually online right now
-  const isOnline = onlineUsers.has(receiverIdStr);
-  
-  // 2. Check if they have THIS specific chat open
+
+  // 1. Check if they are actively looking at THIS specific chat session
   const activeSession = activeChatSessions.get(receiverIdStr);
   const isLookingAtThisChat = activeSession === `user_${sender_id}`;
 
-  // 3. LOGIC: Send FCM ONLY if they aren't looking at the screen 
-  // or if they aren't online at all.
-  if (!isOnline || !isLookingAtThisChat) {
+  // 2. LOGIC: We ONLY skip the notification if they are looking at the chat screen.
+  // If they are on Home screen, Chat List, or app is minimized (even if socket is still alive), 
+  // we must send the FCM.
+  if (!isLookingAtThisChat) {
     const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
     const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
-    
+
     if (userRows.length > 0 && userRows[0].fcm_token) {
       const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
       const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
+      const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
 
       const messagePayload = {
         token: userRows[0].fcm_token,
-        notification: { 
-          title: senderName, 
-          body: type === 'location' || type === 'live_location' ? 'Shared a location' : message 
+        // We include notification for system tray AND data for your custom Java logic
+        notification: {
+          title: senderName,
+          body: notificationBody
         },
         android: {
           priority: "high",
-          notification: { 
-            channelId: "channel_custom_sound_v2", 
-            sound: "custom_notification", 
-            priority: "high", 
-            defaultSound: false 
+          notification: {
+            channelId: "channel_custom_sound_v2",
+            sound: "custom_notification",
+            priority: "high",
+            defaultSound: false
           }
         },
         data: {
           type: "chat",
+          title: senderName, // Added to match your Java helper
+          body: notificationBody, // Added to match your Java helper
           senderId: sender_id.toString(),
           senderName: senderName,
           senderProfilePic: senderPic || "",
           chatPartnerId: sender_id.toString()
         }
       };
+
       await admin.messaging().send(messagePayload);
-      console.log(`FCM Sent to ${receiverIdStr} because isChatOpen: ${isLookingAtThisChat}`);
+      console.log(`FCM Sent to ${receiverIdStr}. User was not in chat (Active session: ${activeSession})`);
     }
+  } else {
+    console.log(`FCM Skipped: User ${receiverIdStr} is currently viewing this chat.`);
   }
 } catch (fcmError) {
-  console.error(TAG, " Error sending FCM:", fcmError.message);
+  console.error("Error sending FCM:", fcmError.message);
 }
     res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
