@@ -1514,7 +1514,7 @@ app.post('/sendMessage', async (req, res) => {
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
-    // --- UPDATE THIS BLOCK IN /sendMessage ---
+// --- REPLACE THIS BLOCK IN /sendMessage ---
 try {
   const receiverIdStr = receiver_id.toString();
 
@@ -1522,9 +1522,7 @@ try {
   const activeSession = activeChatSessions.get(receiverIdStr);
   const isLookingAtThisChat = activeSession === `user_${sender_id}`;
 
-  // 2. LOGIC: We ONLY skip the notification if they are looking at the chat screen.
-  // If they are on Home screen, Chat List, or app is minimized (even if socket is still alive), 
-  // we must send the FCM.
+  // 2. Only send FCM if they aren't looking at the screen
   if (!isLookingAtThisChat) {
     const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
     const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
@@ -1535,32 +1533,31 @@ try {
       const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
 
       const messagePayload = {
-  token: userRows[0].fcm_token,
-  // REMOVE THE 'notification' BLOCK
-  // When 'notification' is present, the OS silences it in the foreground.
-  // Using 'data' only forces MyFirebaseMessagingService to handle it.
-  data: {
-    type: "chat",
-    title: senderName,
-    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message,
-    senderId: sender_id.toString(),
-    senderName: senderName,
-    senderProfilePic: senderPic || "",
-    chatPartnerId: sender_id.toString()
-  },
-  android: {
-    priority: "high"
-  }
-};
+        token: userRows[0].fcm_token,
+        // We REMOVE the 'notification' block to ensure 'onMessageReceived' triggers in foreground
+        data: {
+          type: "chat",
+          title: senderName,
+          body: notificationBody,
+          senderId: sender_id.toString(),
+          senderName: senderName,
+          senderProfilePic: senderPic || "",
+          chatPartnerId: sender_id.toString()
+        },
+        // Modern FCM syntax for high priority
+        android: {
+          priority: "high"
+        }
+      };
 
       await admin.messaging().send(messagePayload);
-      console.log(`FCM Sent to ${receiverIdStr}. User was not in chat (Active session: ${activeSession})`);
+      console.log(`DATA-ONLY FCM Sent to ${receiverIdStr} (Partner was not in chat)`);
     }
   } else {
     console.log(`FCM Skipped: User ${receiverIdStr} is currently viewing this chat.`);
   }
 } catch (fcmError) {
-  console.error("Error sending FCM:", fcmError.message);
+  console.error("CRITICAL FCM ERROR:", fcmError.message);
 }
     res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
