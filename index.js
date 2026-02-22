@@ -243,6 +243,17 @@ socket.on('join_group', (groupId) => {
     }
 });
 
+socket.on('leave_group', (groupId) => {
+    try {
+        if (!groupId) return;
+        const roomName = `group_${groupId}`;
+        socket.leave(roomName);
+        console.log(`Socket ${socket.id} left room: ${roomName}`);
+    } catch (err) {
+        console.error("Error in leave_group socket:", err);
+    }
+});
+
   socket.on('new_group_message_sent', (data) => {
     socket.to(`group_${data.groupId}`).emit('new_group_message', data.messageObject);
 });
