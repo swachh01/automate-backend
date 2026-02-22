@@ -2806,7 +2806,10 @@ app.post('/leaveGroup', async (req, res) => {
         );
         const userName = userRows.length > 0 ? userRows[0].name : "Someone";
 
+        // 1. Remove from DB
         await db.query("DELETE FROM group_members WHERE user_id = ? AND group_id = ?", [userId, groupId]);
+        
+        // 2. Insert system message
         const systemMessage = `${userName} left the group`;
         const encrypted = encrypt(systemMessage);
         const [result] = await db.query(
@@ -2814,6 +2817,8 @@ app.post('/leaveGroup', async (req, res) => {
              VALUES (?, ?, ?, NOW(), 'system')`,
             [groupId, userId, encrypted]
         );
+
+        // 3. Notify remaining members via Socket
         io.to(`group_${groupId}`).emit('new_group_message', {
             id: result.insertId,
             group_id: groupId,
@@ -2824,8 +2829,19 @@ app.post('/leaveGroup', async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
+        // 4. Force the specific user's socket to leave the room if they are online
+        const userSocketId = onlineUsers.get(userId.toString())?.socketId;
+        if (userSocketId) {
+            const socket = io.sockets.sockets.get(userSocketId);
+            if (socket) {
+                socket.leave(`group_${groupId}`);
+                console.log(`Forced Socket ${userSocketId} to leave group_${groupId}`);
+            }
+        }
+
         res.json({ success: true });
     } catch (e) {
+        console.error("Leave group error:", e);
         res.status(500).json({ success: false });
     }
 });
