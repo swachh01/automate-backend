@@ -1211,14 +1211,15 @@ app.get('/users/destination', async (req, res) => {
     let toCol = 'to_place';
     let extraCols = ", tp.landmark, NULL as companyName, NULL as fare"; 
     let timeSelection = `DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')`;
+    let timeFilter = `AND tp.time > NOW()`;  // ADD: Rickshaw time filter
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        // Aliased estimated_fare as 'fare' for the Android Model
         extraCols = ", tp.landmark, tp.company_name as companyName, tp.estimated_fare as fare";
         timeSelection = `DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')`;
+        timeFilter = `AND tp.travel_datetime > NOW()`;  // ADD: Cab time filter
 
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
@@ -1226,6 +1227,7 @@ app.get('/users/destination', async (req, res) => {
         toCol = 'destination';
         extraCols = ", tp.landmark, tp.vehicle_type as companyName, tp.estimated_fare as fare"; 
         timeSelection = `DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')`;
+        timeFilter = `AND tp.travel_time > NOW()`;  // ADD: Own time filter
     }
 
     try {
@@ -1264,13 +1266,14 @@ app.get('/users/destination', async (req, res) => {
             JOIN users u ON tp.user_id = u.id
             WHERE
                 tp.${toCol} = ?
-                AND tp.status = 'Trip Active' 
-                AND tp.user_id != ?   
+                AND tp.status = 'Trip Active'
+                ${timeFilter}
             ORDER BY
                 tp.created_at DESC; 
         `;
         
-        const [users] = await db.execute(query, [finalDestName, currentUserId]);
+        // CHANGED: Removed currentUserId from params since we removed AND tp.user_id != ?
+        const [users] = await db.execute(query, [finalDestName]);
 
         const responseUsers = users.map(user => ({
             ...user,
