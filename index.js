@@ -2823,9 +2823,18 @@ app.get('/group/:groupId/messages', async (req, res) => {
     if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
 
     try {
-        // Ensure user is a member
-        await db.query(`INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, userId]);
-
+        
+        const [memberCheck] = await db.query(
+            `SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`,
+            [groupId, userId]
+        );
+        
+        if (memberCheck.length === 0) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "You are not a member of this group." 
+            });
+        }
         const query = `
             SELECT
                 gm.message_id as id,
@@ -2967,8 +2976,17 @@ app.post('/group/send', async (req, res) => {
         const groupName = groupCheck[0].group_name;
 
         // 4. Ensure user is a member
-        await db.execute(`INSERT IGNORE INTO group_members (user_id, group_id) VALUES (?, ?)`, [sender_id, group_id]);
+        const [memberCheck] = await db.query(
+    `SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`,
+    [group_id, sender_id]
+);
 
+if (memberCheck.length === 0) {
+    return res.status(403).json({ 
+        success: false, 
+        error: "You are not a member of this group. Rejoin to send messages." 
+    });
+}
         // 5. Encrypt message content
         const encrypted = encrypt(message_content);
 
