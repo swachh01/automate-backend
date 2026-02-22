@@ -3042,6 +3042,7 @@ app.post('/group/send', async (req, res) => {
         // 8. Socket emit with the same calculated expiresAt
         io.to(`group_${group_id}`).emit('new_group_message', {
             id: result.insertId,
+            group_id: group_id,
             sender_id: sender_id,
             sender_name: senderName,
             message: message_content,
