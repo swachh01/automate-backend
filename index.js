@@ -1163,6 +1163,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     } else {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
+        statusFilter = "status = 'Trip Active' AND time > NOW()";
     }
     
     try {
