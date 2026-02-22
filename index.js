@@ -1535,31 +1535,23 @@ try {
       const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
 
       const messagePayload = {
-        token: userRows[0].fcm_token,
-        // We include notification for system tray AND data for your custom Java logic
-        notification: {
-          title: senderName,
-          body: notificationBody
-        },
-        android: {
-          priority: "high",
-          notification: {
-            channelId: "channel_custom_sound_v3",
-            sound: "custom_notification",
-            priority: "high",
-            defaultSound: false
-          }
-        },
-        data: {
-          type: "chat",
-          title: senderName, // Added to match your Java helper
-          body: notificationBody, // Added to match your Java helper
-          senderId: sender_id.toString(),
-          senderName: senderName,
-          senderProfilePic: senderPic || "",
-          chatPartnerId: sender_id.toString()
-        }
-      };
+  token: userRows[0].fcm_token,
+  // REMOVE THE 'notification' BLOCK
+  // When 'notification' is present, the OS silences it in the foreground.
+  // Using 'data' only forces MyFirebaseMessagingService to handle it.
+  data: {
+    type: "chat",
+    title: senderName,
+    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message,
+    senderId: sender_id.toString(),
+    senderName: senderName,
+    senderProfilePic: senderPic || "",
+    chatPartnerId: sender_id.toString()
+  },
+  android: {
+    priority: "high"
+  }
+};
 
       await admin.messaging().send(messagePayload);
       console.log(`FCM Sent to ${receiverIdStr}. User was not in chat (Active session: ${activeSession})`);
