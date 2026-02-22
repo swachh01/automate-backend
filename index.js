@@ -1164,22 +1164,24 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
     }
-
+    
     try {
         const query = `
             SELECT 
                 ${destinationCol} as destination, 
                 COUNT(*) as userCount,
-                SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing
-            FROM ${tableName}
+                SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
+                g.group_id  -- ← Get the REAL group_id from group_table
+            FROM ${tableName} tp
+            LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
-            GROUP BY ${destinationCol}
+            GROUP BY tp.${destinationCol}, g.group_id
             ORDER BY userCount DESC
         `;
 
         const [destinations] = await db.query(query, [userId]);
-        const formattedDestinations = destinations.map((d, index) => ({
-            groupId: index + 100, 
+        const formattedDestinations = destinations.map(d => ({
+            groupId: d.group_id,  // ← Use real group_id, not index+100
             destination: d.destination,
             userCount: d.userCount,
             isCurrentUserGoing: d.isCurrentUserGoing
@@ -1190,6 +1192,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         console.error("Error fetching filtered destinations:", err);
         res.status(500).json({ success: false, message: "Database error" });
     }
+
 });
 
 app.get('/users/destination', async (req, res) => {
