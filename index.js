@@ -2866,10 +2866,27 @@ app.get('/group/:groupId/messages', async (req, res) => {
         );
         
         if (memberCheck.length === 0) {
-            return res.status(403).json({ 
-                success: false, 
-                message: "You are not a member of this group." 
-            });
+                if (memberCheck.length === 0) {
+    // Auto-join the group instead of blocking
+    await db.query(
+        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
+        [groupId, userId]
+    );
+    // Optional: send a system message that user joined
+    const [userRows] = await db.query(
+        "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", 
+        [userId]
+    );
+    if (userRows.length > 0) {
+        const { encrypt } = require('./cryptoHelper');
+        const systemMsg = encrypt(`${userRows[0].name} joined the group`);
+        await db.query(
+            `INSERT INTO group_messages (group_id, sender_id, message_content, timestamp, message_type) 
+             VALUES (?, ?, ?, NOW(), 'system')`,
+            [groupId, userId, systemMsg]
+        );
+    }
+}
         }
         const query = `
             SELECT
@@ -3018,10 +3035,10 @@ app.post('/group/send', async (req, res) => {
 );
 
 if (memberCheck.length === 0) {
-    return res.status(403).json({ 
-        success: false, 
-        error: "You are not a member of this group. Rejoin to send messages." 
-    });
+await db.query(
+        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
+        [group_id, sender_id]
+    );
 }
         // 5. Encrypt message content
         const encrypted = encrypt(message_content);
