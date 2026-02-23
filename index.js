@@ -1008,17 +1008,25 @@ app.post("/addCabTravelPlan", async (req, res) => {
             if (matchingUsers.length > 0) {
                 const tokens = matchingUsers.map(u => u.fcm_token).filter(t => t);
                 const messagePayload = {
-                    tokens: tokens,
-                    notification: {
-                        title: "New Cab Buddy!",
-                        body: `${joinerName} is also taking a cab to ${destination}!`
-                    },
-                    data: {
-                        type: "travel_match",
-                        destinationName: String(destination),
-                        commuteType: "Cab"
-                    }
-                };
+    tokens: tokens,
+    notification: {
+        title: "New Cab Buddy!",
+        body: `${joinerName} is also taking a cab to ${destination}!`
+    },
+    android: {
+        priority: "high",
+        notification: {
+            channelId: "channel_custom_sound_v3", // REQUIRED for Android 8+
+            priority: "high",
+            defaultSound: true
+        }
+    },
+    data: {
+        type: "travel_match",
+        destinationName: String(destination),
+        commuteType: "Cab"
+    }
+};
                 await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
@@ -1113,17 +1121,25 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
             if (matchingUsers.length > 0) {
                 const tokens = matchingUsers.map(u => u.fcm_token).filter(t => t);
                 const messagePayload = {
-                    tokens: tokens,
-                    notification: {
-                        title: "New Travel Buddy!",
-                        body: `${joinerName} is driving to ${destination}!`
-                    },
-                    data: {
-                        type: "travel_match",
-                        destinationName: String(destination),
-                        commuteType: "Own"
-                    }
-                };
+    tokens: tokens,
+    notification: {
+        title: "New Travel Buddy!",
+        body: `${joinerName} is driving to ${destination}!`
+    },
+    android: {
+        priority: "high",
+        notification: {
+            channelId: "channel_custom_sound_v3",
+            priority: "high",
+            defaultSound: true
+        }
+    },
+    data: {
+        type: "travel_match",
+        destinationName: String(destination),
+        commuteType: "Own"
+    }
+};
                 await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
@@ -1533,23 +1549,25 @@ try {
       const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
 
       const messagePayload = {
-        token: userRows[0].fcm_token,
-        // We REMOVE the 'notification' block to ensure 'onMessageReceived' triggers in foreground
-        data: {
-          type: "chat",
-          title: senderName,
-          body: notificationBody,
-          senderId: sender_id.toString(),
-          senderName: senderName,
-          senderProfilePic: senderPic || "",
-          chatPartnerId: sender_id.toString()
-        },
-        // Modern FCM syntax for high priority
-        android: {
-          priority: "high"
-        }
-      };
-
+  token: userRows[0].fcm_token,
+  data: {
+    type: "chat",
+    title: senderName,
+    body: notificationBody,
+    senderId: sender_id.toString(),
+    senderName: senderName, // Ensure this key is consistent
+    senderProfilePic: senderPic || "",
+    chatPartnerId: sender_id.toString()
+  },
+  android: {
+    priority: "high",
+    // This part is crucial for Android 10+
+    notification: {
+      channelId: "channel_custom_sound_v3",
+      priority: "high"
+    }
+  }
+};
       await admin.messaging().send(messagePayload);
       console.log(`DATA-ONLY FCM Sent to ${receiverIdStr} (Partner was not in chat)`);
     }
