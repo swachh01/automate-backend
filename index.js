@@ -1548,23 +1548,29 @@ try {
       const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
       const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
 
-      const messagePayload = {
+      // REPLACE the existing messagePayload block with this:
+const messagePayload = {
   token: userRows[0].fcm_token,
+  notification: { // Add this back for background reliability
+    title: senderName,
+    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
+  },
   data: {
     type: "chat",
-    title: senderName,
-    body: notificationBody,
     senderId: sender_id.toString(),
-    senderName: senderName, // Ensure this key is consistent
+    senderName: senderName,
     senderProfilePic: senderPic || "",
-    chatPartnerId: sender_id.toString()
+    chatPartnerId: sender_id.toString(),
+    // Fallbacks for your manual notification builder
+    title: senderName,
+    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
   },
   android: {
     priority: "high",
-    // This part is crucial for Android 10+
     notification: {
-      channelId: "channel_custom_sound_v3",
-      priority: "high"
+      channelId: "channel_custom_sound_v3", // MATCHES YOUR MANIFEST
+      priority: "high",
+      sound: "custom_notification"
     }
   }
 };
