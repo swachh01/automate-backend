@@ -2775,14 +2775,32 @@ app.put('/settings/visibility', async (req, res) => {
 app.post('/change-password', async (req, res) => {
     try {
         const { userId, currentPassword, newPassword } = req.body;
+
+        // 1. Validation check for password length
+        if (!newPassword || newPassword.length < 7) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Password doesn’t contain 7 characters' 
+            });
+        }
+
         const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
         if (rows.length === 0) return res.status(404).json({ success: false });
+
         const isMatch = await bcrypt.compare(currentPassword, rows[0].password);
-        if (!isMatch) return res.status(400).json({ success: false, message: 'Current password is incorrect' });
+        if (!isMatch) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Current password is incorrect' 
+            });
+        }
+
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
         await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
+        
         res.json({ success: true });
     } catch (error) {
+        console.error(error);
         res.status(500).json({ success: false });
     }
 });
