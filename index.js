@@ -776,7 +776,8 @@ app.post("/login", authLimiter, async (req, res) => {
   }
 });
 
-app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
+// Add authenticateToken between the path and the logic
+app.post("/updateProfile", authenticateToken, upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request ===");
     const { userId, dob, bio, home_location, home_lat, home_lng } = req.body || {};
