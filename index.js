@@ -14,24 +14,32 @@ const { parsePhoneNumberFromString } = require('libphonenumber-js');
 let serviceAccount;
 
 try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  } else {
-    // Only try to require if the file exists, or wrap in try-catch
-    serviceAccount = require("./firebase-service-account.json");
-  }
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        // Use environment variable if available
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    } else {
+        // Fallback to local file for development
+        serviceAccount = require("./firebase-service-account.json");
+    }
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
+    // Check if Firebase is already initialized to prevent the "Already Exists" crash
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log("Firebase Admin initialized successfully.");
+    } else {
+        admin.app(); // Reuse the existing app instance
+        console.log("Firebase Admin already initialized, reusing existing app.");
+    }
 } catch (e) {
-  console.error("Firebase Admin failed to initialize. Check your ENV variables:", e.message);
-  // Do not let this crash the whole server if it's not strictly required for boot
+    console.error("CRITICAL: Firebase Admin failed to initialize:", e.message);
+    // On Cloud Run, we log the error but don't want to crash the whole server 
+    // unless Firebase is absolutely mandatory for the server to even start.
 }
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+// NOTE: DO NOT add another admin.initializeApp call here! 
+// The logic above handles everything.
 
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
