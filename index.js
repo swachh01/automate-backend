@@ -510,7 +510,6 @@ app.get('/debug/routes', (req, res) => {
 
 // ================= CREATE ACCOUNT =================
 
-// Apply authLimiter to prevent bot account creation
 app.post("/create-account", authLimiter, async (req, res) => {
     const TAG = "/create-account";
     try {
@@ -583,9 +582,17 @@ app.post("/create-account", authLimiter, async (req, res) => {
         
         const newUser = userRows[0];
 
+        // NEW: Generate a short-lived token specifically for completing registration
+        const token = jwt.sign(
+            { userId: newUser.id }, 
+            process.env.JWT_SECRET, 
+            { expiresIn: '1h' }
+        );
+
         res.status(201).json({
             success: true,
             message: "Account created successfully. Please complete your profile.",
+            token: token, // Added token to response
             user: newUser
         });
 
