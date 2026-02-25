@@ -13,10 +13,20 @@ const { parsePhoneNumberFromString } = require('libphonenumber-js');
 
 let serviceAccount;
 
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
-  serviceAccount = require("./firebase-service-account.json");
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    // Only try to require if the file exists, or wrap in try-catch
+    serviceAccount = require("./firebase-service-account.json");
+  }
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+} catch (e) {
+  console.error("Firebase Admin failed to initialize. Check your ENV variables:", e.message);
+  // Do not let this crash the whole server if it's not strictly required for boot
 }
 
 admin.initializeApp({
