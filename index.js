@@ -1,4 +1,8 @@
 require("dotenv").config();
+const express = require("express");
+const app = express();
+const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const activeChatSessions = new Map();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
@@ -24,10 +28,6 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = new twilio(accountSid, authToken);
 
-// 1. Import the package
-const rateLimit = require('express-rate-limit');
-
-// 2. Define the limiter variable
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 5, // Limit each IP to 5 requests per 15 minutes
@@ -39,7 +39,6 @@ const authLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-const jwt = require('jsonwebtoken');
 const authenticateToken = (req, res, next) => {
     // Look for token in the 'Authorization' header
     const authHeader = req.headers['authorization'];
@@ -58,7 +57,6 @@ const authenticateToken = (req, res, next) => {
     }
 };
 
-const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const { encrypt, decrypt } = require('./cryptoHelper');
@@ -69,7 +67,6 @@ const mysql = require("mysql2");
 const http = require('http');
 const { Server } = require('socket.io');
 
-const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
