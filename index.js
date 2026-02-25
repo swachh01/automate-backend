@@ -24,6 +24,40 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = new twilio(accountSid, authToken);
 
+// 1. Import the package
+const rateLimit = require('express-rate-limit');
+
+// 2. Define the limiter variable
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5, // Limit each IP to 5 requests per 15 minutes
+    message: { 
+        success: false, 
+        message: "Too many attempts from this IP, please try again after 15 minutes" 
+    },
+    standardHeaders: true, 
+    legacyHeaders: false,
+});
+
+const jwt = require('jsonwebtoken');
+const authenticateToken = (req, res, next) => {
+    // Look for token in the 'Authorization' header
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Format: "Bearer TOKEN"
+
+    if (!token) {
+        return res.status(401).json({ success: false, message: "Access Denied: No Token Provided" });
+    }
+
+    try {
+        const verified = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = verified; // This contains the userId from the token
+        next(); // Proceed to the actual route logic
+    } catch (err) {
+        res.status(403).json({ success: false, message: "Invalid or Expired Token" });
+    }
+};
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -461,7 +495,8 @@ app.get('/debug/routes', (req, res) => {
 
 // ================= CREATE ACCOUNT =================
 
-app.post("/create-account", async (req, res) => {
+// Apply authLimiter to prevent bot account creation
+app.post("/create-account", authLimiter, async (req, res) => {
     const TAG = "/create-account";
     try {
         const { first_name, last_name, work_category, work_detail, gender, phone, country_code, password } = req.body;
@@ -481,6 +516,7 @@ app.post("/create-account", async (req, res) => {
 
         console.log(TAG, `Attempting to create account for phone: ${finalCountryCode}${finalPhone}`);
 
+        // Check if user exists using parameterized query
         const [existingUser] = await db.query(
             `SELECT id, signup_status FROM users WHERE phone = ? AND country_code = ?`,
             [finalPhone, finalCountryCode]
@@ -490,6 +526,7 @@ app.post("/create-account", async (req, res) => {
             return res.status(409).json({ success: false, message: "A user with this phone number already exists." });
         }
         
+        // Hash password before saving
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
         const query = `
@@ -617,18 +654,18 @@ app.get("/debug/check-user", async (req, res) => {
 
 // ================= LOGIN =================
 
-app.post("/login", async (req, res) => {
-  const { phone, password, country_code } = req.body || {}; // Added country_code support for precise login
+// Apply authLimiter to prevent brute force
+app.post("/login", authLimiter, async (req, res) => {
+  const { phone, password, country_code } = req.body || {}; 
   
   if (!phone || !password) {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
 
   // Normalize the incoming phone number
-  // If user didn't send country_code (backward compatibility), we just strip non-digits
   let finalPhone = phone.replace(/\D/g, '');
-  let query = `SELECT * FROM users WHERE phone = ?`;
-  let queryParams = [finalPhone];
+  let query = "";
+  let queryParams = [];
 
   if (country_code) {
       const normalized = normalizePhoneData(phone, country_code);
@@ -667,6 +704,7 @@ app.post("/login", async (req, res) => {
         home_lat,
         home_lng
        FROM users WHERE phone = ?`;
+      queryParams = [finalPhone];
   }
 
   try {
@@ -689,15 +727,15 @@ app.post("/login", async (req, res) => {
 
     let isPasswordValid = false;
 
-    // Check if password is encrypted (bcrypt)
-    if (user.password.startsWith('$2') && user.password.length > 50) {
+    // SECURED: Check if password is encrypted (bcrypt)
+    if (user.password && user.password.startsWith('$2')) {
       isPasswordValid = await bcrypt.compare(password, user.password);
     } else {
-      // Legacy plain text check
+      // If the password in DB is plain text (Legacy), we compare and then immediately hash it
       if (user.password === password) {
         isPasswordValid = true;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
-        // Auto-upgrade legacy password to bcrypt
+        // Auto-upgrade legacy password to bcrypt for future security
         await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
       }
     }
@@ -705,10 +743,17 @@ app.post("/login", async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
+    
+
+    const token = jwt.sign(
+    { userId: user.id }, 
+    process.env.JWT_SECRET, 
+    { expiresIn: '30d' } // Token lasts for 30 days
+);
 
     delete user.password;
     
-    res.json({ success: true, message: "Login successful", user: user });
+    res.json({ success: true, message: "Login successful", token: token,user: user }); 
 
   } catch (err) {
     console.error("/login error:", err);
@@ -719,45 +764,44 @@ app.post("/login", async (req, res) => {
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request ===");
-    const { 
-      userId, 
-      dob, 
-      bio, 
-      home_location, 
-      home_lat, 
-      home_lng 
-    } = req.body || {};
+    const { userId, dob, bio, home_location, home_lat, home_lng } = req.body || {};
 
     if (!userId) {
       return res.status(400).json({ success: false, message: "Missing userId" });
     }
 
+    if (parseInt(userId) !== req.user.userId) {
+        return res.status(403).json({ 
+            success: false, 
+            message: "Unauthorized: You can only update your own profile." 
+        });
+    }
+
     const sets = [];
     const params = [];
 
-    if (dob) {
-      sets.push("dob = ?");
-      params.push(dob);
-    }
-    if (bio) {
-      sets.push("bio = ?");
-      params.push(bio);
-    }
-    if (home_location) {
-      sets.push("home_location = ?");
-      params.push(home_location);
-    }
-    if (home_lat) {
-      sets.push("home_lat = ?");
-      params.push(home_lat);
-    }
-    if (home_lng) {
-      sets.push("home_lng = ?");
-      params.push(home_lng);
+    // 1. Define a strict whitelist of updateable fields
+    // This ensures that even if more data is sent in req.body, 
+    // only these specific columns can ever be touched.
+    const updates = {
+      dob: dob,
+      bio: bio,
+      home_location: home_location,
+      home_lat: home_lat,
+      home_lng: home_lng
+    };
+
+    // 2. Safely build the query parts
+    for (const [column, value] of Object.entries(updates)) {
+      if (value !== undefined && value !== null) {
+        sets.push(`\`${column}\` = ?`); // Use backticks for column names
+        params.push(value);
+      }
     }
     
+    // 3. Handle the file upload separately (also safe)
     if (req.file && req.file.path) {
-      sets.push("profile_pic = ?");
+      sets.push("`profile_pic` = ?");
       params.push(req.file.path);
     }
 
@@ -765,6 +809,8 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       return res.status(400).json({ success: false, message: "Nothing to update" });
     }
 
+    // 4. Construct the final SQL. 
+    // Since 'sets' only contains values we explicitly pushed, it's now secure.
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
     params.push(userId);
 
@@ -774,44 +820,27 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
+    // Mark signup as completed
     await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
 
+    // Fetch updated user data
     const [rows] = await db.query(
-      `SELECT
-        id,
-        CONCAT(first_name, ' ', last_name) as name,
-        work_category,
-        work_detail,
-        phone,
-        gender,
-        dob,
-        bio,
-        home_location,
-        home_lat,
-        home_lng,
-        profile_pic,
-        signup_status
-      FROM users WHERE id = ?`,
+      `SELECT id, CONCAT(first_name, ' ', last_name) as name, work_category, 
+              work_detail, phone, gender, dob, bio, home_location, 
+              home_lat, home_lng, profile_pic, signup_status
+       FROM users WHERE id = ?`,
       [userId]
     );
-
-    const updatedUser = rows[0];
-    console.log("Profile Updated for User:", updatedUser.id);
 
     res.json({
       success: true,
       message: "Profile updated and signup complete!",
-      user: updatedUser
+      user: rows[0]
     });
 
   } catch (err) {
-    console.error("=== /updateProfile ERROR ===");
-    console.error(err);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-      error: err.message
-    });
+    console.error("=== /updateProfile ERROR ===", err);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 });
 
@@ -1422,6 +1451,14 @@ app.post('/sendMessage', async (req, res) => {
       has_quoted: !!quoted_message
     });
 
+
+    if (parseInt(sender_id) !== req.user.userId) {
+        return res.status(403).json({ 
+            success: false, 
+            message: 'Unauthorized: You cannot send messages as another user.' 
+        });
+    }
+
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'Missing fields' });
     }
@@ -1843,17 +1880,33 @@ app.get('/checkBlockStatus', async (req, res) => {
 
 app.post('/updateNotificationSettings', async (req, res) => {
     const { userId, type, enabled } = req.body;
+
     if (!userId || !type) {
         return res.status(400).json({ success: false, message: 'Missing fields' });
     }
+
     try {
-        let column = "";
-        if (type === "trip_alerts") column = "trip_alerts_enabled";
-        if (column) {
-            await db.query(`UPDATE users SET ${column} = ? WHERE id = ?`, [enabled, userId]);
+        // 1. Whitelist Map: Maps valid 'type' keys to their actual DB columns.
+        // This ensures NO user-provided string ever enters the SQL query structure.
+        const allowedSettings = {
+            "trip_alerts": "trip_alerts_enabled"
+            // You can easily add more features here later:
+            // "chat_notifications": "chat_notif_enabled"
+        };
+
+        const targetColumn = allowedSettings[type];
+
+        if (targetColumn) {
+            // 2. Use a strictly hardcoded query structure. 
+            // We use the whitelisted column name.
+            const query = `UPDATE users SET ${targetColumn} = ? WHERE id = ?`;
+            
+            await db.query(query, [enabled, userId]);
+            
             res.json({ success: true, message: 'Settings updated' });
         } else {
-            res.json({ success: true, message: 'No valid setting type found' });
+            // This handles cases where 'type' doesn't match our whitelist
+            res.status(400).json({ success: false, message: 'No valid setting type found' });
         }
     } catch (error) {
         console.error('Error updating settings:', error);
@@ -2660,10 +2713,20 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
     const { userId } = req.body;
+
+    if (parseInt(userId) !== req.user.userId) {
+        return res.status(403).json({ success: false, message: "Unauthorized action." });
+    }
+
     if (!userId) return res.status(400).json({ success: false });
     const [messages] = await db.execute('SELECT * FROM messages WHERE id = ?', [messageId]);
     if (messages.length === 0) return res.status(404).json({ success: false });
     const msg = messages[0];
+    
+    if (msg.sender_id !== req.user.userId) {
+        return res.status(403).json({ success: false, message: "You can only delete your own messages." });
+    }
+
     if (msg.sender_id != userId) return res.status(403).json({ success: false });
     const [result] = await db.execute('DELETE FROM messages WHERE id = ?', [messageId]);
     if (result.affectedRows > 0) {
