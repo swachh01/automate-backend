@@ -1,8 +1,4 @@
-require("dotenv").config();
-const express = require("express");
-const app = express();
-const jwt = require('jsonwebtoken');
-const rateLimit = require('express-rate-limit');
+krequire("dotenv").config();
 const activeChatSessions = new Map();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
@@ -13,68 +9,22 @@ const { parsePhoneNumberFromString } = require('libphonenumber-js');
 
 let serviceAccount;
 
-try {
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        // Use environment variable if available
-        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    } else {
-        // Fallback to local file for development
-        serviceAccount = require("./firebase-service-account.json");
-    }
-
-    // Check if Firebase is already initialized to prevent the "Already Exists" crash
-    if (!admin.apps.length) {
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
-        console.log("Firebase Admin initialized successfully.");
-    } else {
-        admin.app(); // Reuse the existing app instance
-        console.log("Firebase Admin already initialized, reusing existing app.");
-    }
-} catch (e) {
-    console.error("CRITICAL: Firebase Admin failed to initialize:", e.message);
-    // On Cloud Run, we log the error but don't want to crash the whole server 
-    // unless Firebase is absolutely mandatory for the server to even start.
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
+  serviceAccount = require("./firebase-service-account.json");
 }
 
-// NOTE: DO NOT add another admin.initializeApp call here! 
-// The logic above handles everything.
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 const twilio = require("twilio");
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = new twilio(accountSid, authToken);
 
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 15, // Limit each IP to 5 requests per 15 minutes
-    message: { 
-        success: false, 
-        message: "Too many attempts from this IP, please try again after 15 minutes" 
-    },
-    standardHeaders: true, 
-    legacyHeaders: false,
-});
-
-const authenticateToken = (req, res, next) => {
-    // Look for token in the 'Authorization' header
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Format: "Bearer TOKEN"
-
-    if (!token) {
-        return res.status(401).json({ success: false, message: "Access Denied: No Token Provided" });
-    }
-
-    try {
-        const verified = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = verified; // This contains the userId from the token
-        next(); // Proceed to the actual route logic
-    } catch (err) {
-        res.status(403).json({ success: false, message: "Invalid or Expired Token" });
-    }
-};
-
+const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const { encrypt, decrypt } = require('./cryptoHelper');
@@ -85,6 +35,7 @@ const mysql = require("mysql2");
 const http = require('http');
 const { Server } = require('socket.io');
 
+const app = express();
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -188,10 +139,10 @@ io.on('connection', (socket) => {
             isOnline: true
         });
         await updateUserPresence(userId, true);
-        
+
         socket.join(`chat_${userId}`);
         console.log(`User ${userId} joined private chat room: chat_${userId}`);
-        
+
         socket.broadcast.emit('user_status_changed', {
             userId: userId.toString(),
             isOnline: true,
@@ -201,7 +152,7 @@ io.on('connection', (socket) => {
         console.error('Error handling user_online:', error);
     }
   });
-  
+
   socket.on('user_offline', async (userId) => {
     try {
       onlineUsers.delete(userId.toString());
@@ -311,7 +262,7 @@ socket.on('group_typing_start', async (data) => {
   try {
     const { userId, groupId } = data;
     const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
-    
+
     if (userRows.length > 0) {
       const userName = userRows[0].name;
       socket.to(`group_${groupId}`).emit('group_user_typing', {
@@ -330,7 +281,7 @@ socket.on('group_typing_stop', async (data) => {
   try {
     const { userId, groupId } = data;
     const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
-    
+
     if (userRows.length > 0) {
       const userName = userRows[0].name;
       socket.to(`group_${groupId}`).emit('group_user_typing', {
@@ -348,7 +299,7 @@ socket.on('group_typing_stop', async (data) => {
 socket.on('group_read', async (data) => {
     try {
         const { groupId, userId } = data;
-        
+
         // Fetch updated stats for ALL recent messages in this group
         const [recentMessages] = await db.query(`
             SELECT 
@@ -365,13 +316,13 @@ socket.on('group_read', async (data) => {
             AND gm.timestamp > DATE_SUB(NOW(), INTERVAL 1 HOUR)
             GROUP BY gm.message_id
         `, [groupId, groupId]);
-        
+
         // Broadcast the update with names and counts to everyone in the group
         io.to(`group_${groupId}`).emit('group_messages_read', {
             groupId: groupId,
             updatedCounts: recentMessages
         });
-        
+
     } catch (error) {
         console.error('Error handling group_read:', error);
     }
@@ -379,7 +330,7 @@ socket.on('group_read', async (data) => {
 
   socket.on('update_live_location', (data) => {
   const { senderId, receiverId, lat, lng, type } = data;
-  
+
   // Relay the update (location OR stop signal) to the receiver
   socket.to(`chat_${receiverId}`).emit('update_live_location', {
     senderId,
@@ -396,7 +347,7 @@ socket.on('group_read', async (data) => {
 
   socket.on('update_group_live_location', (data) => {
     const { senderId, groupId, lat, lng, type } = data;
-    
+
     // Relay to the group room
     socket.to(`group_${groupId}`).emit('group_live_location_update', {
       senderId,
@@ -446,13 +397,13 @@ function normalizePhoneData(phone, countryCode) {
     try {
         // 2. FIXED: Use countryCode (the parameter name) consistently
         const dialCode = countryCode.startsWith('+') ? countryCode : `+${countryCode}`;
-        
+
         // Strip non-digits from the phone number
         const cleanPhone = phone.replace(/\D/g, '');
         const fullNumber = dialCode + cleanPhone;
-        
+
         const phoneNumber = parsePhoneNumberFromString(fullNumber);
-        
+
         if (phoneNumber && phoneNumber.isValid()) {
             return {
                 phone: phoneNumber.nationalNumber, // e.g., "8850260443"
@@ -510,7 +461,7 @@ app.get('/debug/routes', (req, res) => {
 
 // ================= CREATE ACCOUNT =================
 
-app.post("/create-account", authLimiter, async (req, res) => {
+app.post("/create-account", async (req, res) => {
     const TAG = "/create-account";
     try {
         const { first_name, last_name, work_category, work_detail, gender, phone, country_code, password } = req.body;
@@ -530,7 +481,6 @@ app.post("/create-account", authLimiter, async (req, res) => {
 
         console.log(TAG, `Attempting to create account for phone: ${finalCountryCode}${finalPhone}`);
 
-        // Check if user exists using parameterized query
         const [existingUser] = await db.query(
             `SELECT id, signup_status FROM users WHERE phone = ? AND country_code = ?`,
             [finalPhone, finalCountryCode]
@@ -539,8 +489,7 @@ app.post("/create-account", authLimiter, async (req, res) => {
         if (existingUser.length > 0 && existingUser[0].signup_status === 'completed') {
             return res.status(409).json({ success: false, message: "A user with this phone number already exists." });
         }
-        
-        // Hash password before saving
+
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
         const query = `
@@ -556,9 +505,9 @@ app.post("/create-account", authLimiter, async (req, res) => {
                 signup_status = 'pending',
                 updated_at = NOW();
         `;
-        
+
         await db.query(query, [first_name, last_name, work_category, work_detail, gender, finalPhone, finalCountryCode, hashedPassword]);
-        
+
         const [userRows] = await db.query(
             `SELECT 
                 id, 
@@ -575,24 +524,16 @@ app.post("/create-account", authLimiter, async (req, res) => {
             WHERE phone = ? AND country_code = ?`,
             [finalPhone, finalCountryCode]
         );
-        
+
         if (userRows.length === 0) {
              return res.status(500).json({ success: false, message: "Failed to create account." });
         }
-        
-        const newUser = userRows[0];
 
-        // NEW: Generate a short-lived token specifically for completing registration
-        const token = jwt.sign(
-            { userId: newUser.id }, 
-            process.env.JWT_SECRET, 
-            { expiresIn: '1h' }
-        );
+        const newUser = userRows[0];
 
         res.status(201).json({
             success: true,
             message: "Account created successfully. Please complete your profile.",
-            token: token, // Added token to response
             user: newUser
         });
 
@@ -636,7 +577,7 @@ app.get("/check-phone-availability", async (req, res) => {
 
 app.get("/debug/check-user", async (req, res) => {
     const { phone, country_code } = req.query;
-    
+
     try {
         const [exact] = await db.query(
             `SELECT id, phone, country_code, signup_status, 
@@ -648,21 +589,21 @@ app.get("/debug/check-user", async (req, res) => {
              WHERE phone = ? AND country_code = ?`,
             [phone, country_code]
         );
-        
+
         const [withStatus] = await db.query(
             `SELECT id, phone, country_code, signup_status 
              FROM users 
              WHERE phone = ? AND country_code = ? AND signup_status = 'completed'`,
             [phone, country_code]
         );
-        
+
         const [allWithPhone] = await db.query(
             `SELECT id, phone, country_code, signup_status 
              FROM users 
              WHERE phone = ?`,
             [phone]
         );
-        
+
         res.json({
             searchedFor: { phone, country_code },
             exactMatch: exact,
@@ -676,18 +617,18 @@ app.get("/debug/check-user", async (req, res) => {
 
 // ================= LOGIN =================
 
-// Apply authLimiter to prevent brute force
-app.post("/login", authLimiter, async (req, res) => {
-  const { phone, password, country_code } = req.body || {}; 
-  
+app.post("/login", async (req, res) => {
+  const { phone, password, country_code } = req.body || {}; // Added country_code support for precise login
+
   if (!phone || !password) {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
 
   // Normalize the incoming phone number
+  // If user didn't send country_code (backward compatibility), we just strip non-digits
   let finalPhone = phone.replace(/\D/g, '');
-  let query = "";
-  let queryParams = [];
+  let query = `SELECT * FROM users WHERE phone = ?`;
+  let queryParams = [finalPhone];
 
   if (country_code) {
       const normalized = normalizePhoneData(phone, country_code);
@@ -726,7 +667,6 @@ app.post("/login", authLimiter, async (req, res) => {
         home_lat,
         home_lng
        FROM users WHERE phone = ?`;
-      queryParams = [finalPhone];
   }
 
   try {
@@ -735,7 +675,7 @@ app.post("/login", authLimiter, async (req, res) => {
     if (!rows.length) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
-    
+
     const user = rows[0];
 
     if (user.signup_status === 'pending') {
@@ -749,15 +689,15 @@ app.post("/login", authLimiter, async (req, res) => {
 
     let isPasswordValid = false;
 
-    // SECURED: Check if password is encrypted (bcrypt)
-    if (user.password && user.password.startsWith('$2')) {
+    // Check if password is encrypted (bcrypt)
+    if (user.password.startsWith('$2') && user.password.length > 50) {
       isPasswordValid = await bcrypt.compare(password, user.password);
     } else {
-      // If the password in DB is plain text (Legacy), we compare and then immediately hash it
+      // Legacy plain text check
       if (user.password === password) {
         isPasswordValid = true;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
-        // Auto-upgrade legacy password to bcrypt for future security
+        // Auto-upgrade legacy password to bcrypt
         await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
       }
     }
@@ -765,17 +705,10 @@ app.post("/login", authLimiter, async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({ success: false, message: `Invalid credentials` });
     }
-    
-
-    const token = jwt.sign(
-    { userId: user.id }, 
-    process.env.JWT_SECRET, 
-    { expiresIn: '30d' } // Token lasts for 30 days
-);
 
     delete user.password;
-    
-    res.json({ success: true, message: "Login successful", token: token,user: user }); 
+
+    res.json({ success: true, message: "Login successful", user: user });
 
   } catch (err) {
     console.error("/login error:", err);
@@ -783,48 +716,48 @@ app.post("/login", authLimiter, async (req, res) => {
   }
 });
 
-// Add authenticateToken between the path and the logic
-app.post("/updateProfile", authenticateToken, upload.single("profile_pic"), async (req, res) => {
+app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request ===");
-    const { userId, dob, bio, home_location, home_lat, home_lng } = req.body || {};
+    const { 
+      userId, 
+      dob, 
+      bio, 
+      home_location, 
+      home_lat, 
+      home_lng 
+    } = req.body || {};
 
     if (!userId) {
       return res.status(400).json({ success: false, message: "Missing userId" });
     }
 
-    if (parseInt(userId) !== req.user.userId) {
-        return res.status(403).json({ 
-            success: false, 
-            message: "Unauthorized: You can only update your own profile." 
-        });
-    }
-
     const sets = [];
     const params = [];
 
-    // 1. Define a strict whitelist of updateable fields
-    // This ensures that even if more data is sent in req.body, 
-    // only these specific columns can ever be touched.
-    const updates = {
-      dob: dob,
-      bio: bio,
-      home_location: home_location,
-      home_lat: home_lat,
-      home_lng: home_lng
-    };
-
-    // 2. Safely build the query parts
-    for (const [column, value] of Object.entries(updates)) {
-      if (value !== undefined && value !== null) {
-        sets.push(`\`${column}\` = ?`); // Use backticks for column names
-        params.push(value);
-      }
+    if (dob) {
+      sets.push("dob = ?");
+      params.push(dob);
     }
-    
-    // 3. Handle the file upload separately (also safe)
+    if (bio) {
+      sets.push("bio = ?");
+      params.push(bio);
+    }
+    if (home_location) {
+      sets.push("home_location = ?");
+      params.push(home_location);
+    }
+    if (home_lat) {
+      sets.push("home_lat = ?");
+      params.push(home_lat);
+    }
+    if (home_lng) {
+      sets.push("home_lng = ?");
+      params.push(home_lng);
+    }
+
     if (req.file && req.file.path) {
-      sets.push("`profile_pic` = ?");
+      sets.push("profile_pic = ?");
       params.push(req.file.path);
     }
 
@@ -832,8 +765,6 @@ app.post("/updateProfile", authenticateToken, upload.single("profile_pic"), asyn
       return res.status(400).json({ success: false, message: "Nothing to update" });
     }
 
-    // 4. Construct the final SQL. 
-    // Since 'sets' only contains values we explicitly pushed, it's now secure.
     const sql = `UPDATE users SET ${sets.join(", ")} WHERE id = ?`;
     params.push(userId);
 
@@ -843,27 +774,44 @@ app.post("/updateProfile", authenticateToken, upload.single("profile_pic"), asyn
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Mark signup as completed
     await db.query("UPDATE users SET signup_status = 'completed' WHERE id = ?", [userId]);
 
-    // Fetch updated user data
     const [rows] = await db.query(
-      `SELECT id, CONCAT(first_name, ' ', last_name) as name, work_category, 
-              work_detail, phone, gender, dob, bio, home_location, 
-              home_lat, home_lng, profile_pic, signup_status
-       FROM users WHERE id = ?`,
+      `SELECT
+        id,
+        CONCAT(first_name, ' ', last_name) as name,
+        work_category,
+        work_detail,
+        phone,
+        gender,
+        dob,
+        bio,
+        home_location,
+        home_lat,
+        home_lng,
+        profile_pic,
+        signup_status
+      FROM users WHERE id = ?`,
       [userId]
     );
+
+    const updatedUser = rows[0];
+    console.log("Profile Updated for User:", updatedUser.id);
 
     res.json({
       success: true,
       message: "Profile updated and signup complete!",
-      user: rows[0]
+      user: updatedUser
     });
 
   } catch (err) {
-    console.error("=== /updateProfile ERROR ===", err);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
+    console.error("=== /updateProfile ERROR ===");
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: err.message
+    });
   }
 });
 
@@ -885,7 +833,7 @@ app.post("/addTravelPlan", async (req, res) => {
                 message: "Missing required fields."
             });
         }
-        
+
         let formattedTime;
         try {
             formattedTime = new Date(time);
@@ -905,7 +853,7 @@ app.post("/addTravelPlan", async (req, res) => {
              landmark, created_at, updated_at)
           VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, NOW(), NOW());
         `;
-        
+
         // Pass 'landmark' (or null) to the query
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
@@ -1128,7 +1076,7 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
         // 1. Insert into Own Vehicle Plans table (Added landmark and estimated_fare)
         const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, estimated_fare, status) 
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
-        
+
         const [ownResult] = await connection.query(query, [
             userId, 
             vehicleType, 
@@ -1233,7 +1181,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         destinationCol = 'to_place'; 
         statusFilter = "status = 'Trip Active' AND time > NOW()";
     }
-    
+
     try {
         const query = `
             SELECT 
@@ -1391,7 +1339,7 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
       ORDER BY tp.time ASC`,
       [userId]
     );
-      
+
     res.json({ success: true, users: results || [] });
   } catch (err) {
     console.error(`Error fetching travel plan:`, err);
@@ -1474,14 +1422,6 @@ app.post('/sendMessage', async (req, res) => {
       has_quoted: !!quoted_message
     });
 
-
-    if (parseInt(sender_id) !== req.user.userId) {
-        return res.status(403).json({ 
-            success: false, 
-            message: 'Unauthorized: You cannot send messages as another user.' 
-        });
-    }
-
     if (!sender_id || !receiver_id || !message) {
       return res.status(400).json({ success: false, message: 'Missing fields' });
     }
@@ -1497,7 +1437,7 @@ app.post('/sendMessage', async (req, res) => {
     }
 
     const encryptedMessage = encrypt(message);
-    
+
     const type = message_type || 'text';
     let expiresAt = null;
 
@@ -1519,7 +1459,7 @@ app.post('/sendMessage', async (req, res) => {
                          quoted_user_name;
 
     let query, params;
-    
+
     if (hasReplyData) {
       console.log(TAG, 'Inserting WITH reply data');
       query = `
@@ -1556,7 +1496,7 @@ app.post('/sendMessage', async (req, res) => {
         expiresAt
       ];
     }
-    
+
     console.log(TAG, 'Executing query with params:', params);
     const [result] = await db.query(query, params);
 
@@ -1660,7 +1600,7 @@ app.get('/getChatUsers', async (req, res) => {
             return res.status(400).json({ success: false, message: 'userId required' });
         }
         const currentUserId = parseInt(userId);
-        
+
         const friendsQuery = `
             SELECT DISTINCT
                 CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id
@@ -1669,7 +1609,7 @@ app.get('/getChatUsers', async (req, res) => {
         `;
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
-        
+
         const combinedQuery = `
             WITH LatestChats AS (
                 SELECT
@@ -1772,7 +1712,7 @@ app.get('/getChatUsers', async (req, res) => {
             const isGroup = row.chat_type === 'group';
             const chatId = row.chat_id; 
             const chatName = isGroup ? row.group_name : row.username;
-            
+
             let profilePicUrl = isGroup ? 'default_group_icon' : row.profile_pic;
             if (!isGroup) {
                 profilePicUrl = getVisibleProfilePic(
@@ -1786,7 +1726,7 @@ app.get('/getChatUsers', async (req, res) => {
                     friendIds
                 );
             }
-            
+
             const unreadCount = isGroup ? row.group_unread_count : row.individual_unread_count;
 
             return {
@@ -1845,7 +1785,7 @@ app.post('/block', async (req, res) => {
     await db.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)', [blocker_id, blocked_id]);
 
     const eventData = { blockerId: parseInt(blocker_id), blockedId: parseInt(blocked_id) };
-    
+
     io.to(`chat_${blocked_id}`).emit('user_blocked', eventData);
     io.to(`chat_${blocker_id}`).emit('user_blocked', eventData);
 
@@ -1903,33 +1843,17 @@ app.get('/checkBlockStatus', async (req, res) => {
 
 app.post('/updateNotificationSettings', async (req, res) => {
     const { userId, type, enabled } = req.body;
-
     if (!userId || !type) {
         return res.status(400).json({ success: false, message: 'Missing fields' });
     }
-
     try {
-        // 1. Whitelist Map: Maps valid 'type' keys to their actual DB columns.
-        // This ensures NO user-provided string ever enters the SQL query structure.
-        const allowedSettings = {
-            "trip_alerts": "trip_alerts_enabled"
-            // You can easily add more features here later:
-            // "chat_notifications": "chat_notif_enabled"
-        };
-
-        const targetColumn = allowedSettings[type];
-
-        if (targetColumn) {
-            // 2. Use a strictly hardcoded query structure. 
-            // We use the whitelisted column name.
-            const query = `UPDATE users SET ${targetColumn} = ? WHERE id = ?`;
-            
-            await db.query(query, [enabled, userId]);
-            
+        let column = "";
+        if (type === "trip_alerts") column = "trip_alerts_enabled";
+        if (column) {
+            await db.query(`UPDATE users SET ${column} = ? WHERE id = ?`, [enabled, userId]);
             res.json({ success: true, message: 'Settings updated' });
         } else {
-            // This handles cases where 'type' doesn't match our whitelist
-            res.status(400).json({ success: false, message: 'No valid setting type found' });
+            res.json({ success: true, message: 'No valid setting type found' });
         }
     } catch (error) {
         console.error('Error updating settings:', error);
@@ -1943,7 +1867,7 @@ app.post('/stopLiveLocation', async (req, res) => {
     // Set expires_at to current time so isExpired() will return true on reload
     const query = `UPDATE messages SET expires_at = UTC_TIMESTAMP() WHERE id = ? AND sender_id = ?`;
     const [result] = await db.execute(query, [messageId, userId]);
-    
+
     res.json({ success: true, message: 'Live location ended in database' });
   } catch (error) {
     console.error('Error stopping live location in DB:', error);
@@ -1994,7 +1918,7 @@ app.get("/getUsersGoing", async (req, res) => {
             gender: user.gender,
             profile_pic: getVisibleProfilePic(user, parseInt(currentUserId), friendIds)
         }));
-        
+
         res.json({ success: true, users: usersGoing });
     } catch (err) {
         console.error("Error fetching users going:", err);
@@ -2005,7 +1929,7 @@ app.get("/getUsersGoing", async (req, res) => {
 async function getAddressFromCoordinates(lat, lng) {
   try {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-    
+
     if (!apiKey) {
       console.warn('Google Maps API key not configured');
       return null;
@@ -2016,11 +1940,11 @@ async function getAddressFromCoordinates(lat, lng) {
 
     if (response.data.status === 'OK' && response.data.results.length > 0) {
       const result = response.data.results[0];
-      
+
       let city = '';
       let state = '';
       let country = '';
-      
+
       result.address_components.forEach(component => {
         if (component.types.includes('locality')) {
           city = component.long_name;
@@ -2032,14 +1956,14 @@ async function getAddressFromCoordinates(lat, lng) {
           country = component.long_name;
         }
       });
-      
+
       if (city && state && country) {
         return `${city}, ${state}, ${country}`;
       }
-      
+
       return result.formatted_address;
     }
-    
+
     return null;
   } catch (error) {
     console.error('Geocoding error:', error.message);
@@ -2056,7 +1980,7 @@ app.get("/travel-plans/destinations", async (req, res) => {
         message: 'Current user ID (userId) is required as a query parameter.' 
       });
     }
-    
+
     const query = `
       SELECT
         ANY_VALUE(tp.to_place) as destination,
@@ -2078,9 +2002,9 @@ app.get("/travel-plans/destinations", async (req, res) => {
       ORDER BY
         userCount DESC;
     `;
-    
+
     const [destinations] = await db.query(query, [userId]);
-    
+
     const destinationsWithAddress = await Promise.all(
       destinations.map(async (dest) => {
         const address = await getAddressFromCoordinates(dest.latitude, dest.longitude);
@@ -2090,9 +2014,9 @@ app.get("/travel-plans/destinations", async (req, res) => {
         };
       })
     );
-    
+
     res.json({ success: true, destinations: destinationsWithAddress || [] });
-    
+
   } catch (err) {
     console.error("Error fetching travel plan destinations:", err);
     res.status(500).json({ success: false, message: "Database error" });
@@ -2138,7 +2062,7 @@ app.get('/travel-plans/by-destination', async (req, res) => {
             ...user,
             profile_pic: getVisibleProfilePic(user, parseInt(currentUserId), friendIds)
         }));
-        
+
         res.json({ success: true, users: filteredUsers });
     } catch (error) {
         console.error('Error fetching users by destination:', error);
@@ -2153,11 +2077,11 @@ function getVisibleProfilePic(user, viewerId, friendIds) {
     }
 
     const visibility = user.profile_visibility || 'everyone';
-    
+
     if (visibility === 'none') {
         return user.gender === 'Female' ? 'default_female' : 'default_male';
     }
-    
+
     if (visibility === 'friends') {
         const userId = user.id || user.user_id;
         if (friendIds && friendIds.has(userId)) {
@@ -2165,7 +2089,7 @@ function getVisibleProfilePic(user, viewerId, friendIds) {
         }
         return user.gender === 'Female' ? 'default_female' : 'default_male';
     }
-    
+
     return user.profile_pic;
 }
 
@@ -2284,7 +2208,7 @@ app.put('/trip/cancel/:tripId', async (req, res) => {
 
     // 1. Try to update in the Rickshaw table (travel_plans)
     const [rickshawRes] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
-    
+
     // 2. If not found, try to update in the Cab table (travel_plans_cab)
     let cabRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0) {
@@ -2395,7 +2319,7 @@ app.delete('/tripHistory/:tripId', async (req, res) => {
 
     // 1. Try to delete from the Rickshaw table (travel_plans)
     const [rickshawRes] = await db.query('DELETE FROM travel_plans WHERE id = ?', [tId]);
-    
+
     // 2. If not found in Rickshaw, try the Cab table (travel_plans_cab)
     let cabRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0) {
@@ -2448,7 +2372,7 @@ app.post('/autoUpdateCompletedTrips', async (req, res) => {
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE status = 'Trip Active' AND time < NOW()`);
     // Update Cabs using new column
     await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE status = 'Trip Active' AND travel_datetime < NOW()`);
-    
+
     res.json({ success: true, message: "Trips updated" });
   } catch (error) {
     console.error('Error auto-updating trips:', error);
@@ -2530,7 +2454,7 @@ app.post('/reset-password', async (req, res) => {
         // 4. Check if new password is same as the old one
         // Note: user.password is the hashed string from DB
         const isSamePassword = await bcrypt.compare(newPassword, user.password);
-        
+
         if (isSamePassword) {
             return res.status(400).json({
                 success: false,
@@ -2541,7 +2465,7 @@ app.post('/reset-password', async (req, res) => {
         // 5. Hash the new password and Update
         const userId = user.id;
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
-        
+
         await db.query(
             'UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', 
             [newHashedPassword, userId]
@@ -2632,7 +2556,7 @@ app.get('/getTotalUnreadCount', async (req, res) => {
     try {
         const individualQuery = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND status < 2`;
         const [individualRows] = await db.execute(individualQuery, [currentUserId]);
-        
+
         const groupQuery = `SELECT COUNT(*) as totalUnreadCount FROM group_messages gm WHERE gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?) AND gm.sender_id != ? AND NOT 
 EXISTS (SELECT 1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.message_id AND gmrs.user_id = ?)`;
         const [groupRows] = await db.execute(groupQuery, [currentUserId, currentUserId, currentUserId]);
@@ -2641,7 +2565,7 @@ EXISTS (SELECT 1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.
         const [requestRows] = await db.execute(requestQuery, [currentUserId]);
 
         const total = individualRows[0].totalUnreadCount + groupRows[0].totalUnreadCount + requestRows[0].totalRequests;
-        
+
         res.json({ success: true, unreadCount: total });
     } catch (error) {
         res.status(500).json({ success: false });
@@ -2691,7 +2615,7 @@ app.post("/hideChat", async (req, res) => {
 
             const valuesToHide = messages.map(msg => [msg.id, userId, new Date()]);
             await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES ?`, [valuesToHide]);
-            
+
             const messageIds = messages.map(m => m.id);
             const [fullyHidden] = await db.query(`SELECT message_id FROM hidden_messages WHERE message_id IN (?) GROUP BY message_id HAVING COUNT(DISTINCT user_id) >= 2`, [messageIds]);
             if (fullyHidden.length > 0) {
@@ -2736,20 +2660,10 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
     const { userId } = req.body;
-
-    if (parseInt(userId) !== req.user.userId) {
-        return res.status(403).json({ success: false, message: "Unauthorized action." });
-    }
-
     if (!userId) return res.status(400).json({ success: false });
     const [messages] = await db.execute('SELECT * FROM messages WHERE id = ?', [messageId]);
     if (messages.length === 0) return res.status(404).json({ success: false });
     const msg = messages[0];
-    
-    if (msg.sender_id !== req.user.userId) {
-        return res.status(403).json({ success: false, message: "You can only delete your own messages." });
-    }
-
     if (msg.sender_id != userId) return res.status(403).json({ success: false });
     const [result] = await db.execute('DELETE FROM messages WHERE id = ?', [messageId]);
     if (result.affectedRows > 0) {
@@ -2793,7 +2707,7 @@ app.get("/user/:userId", async (req, res) => {
     try {
         const { userId } = req.params; 
         const { viewerId } = req.query; 
-        
+
         if (!userId || isNaN(userId)) return res.status(400).json({ success: false });
 
         const [friendRows] = await db.query(
@@ -2823,13 +2737,13 @@ app.get("/user/:userId", async (req, res) => {
             FROM users WHERE id = ?`;
 
         const [rows] = await db.query(query, [viewerId, viewerId, parseInt(userId)]);
-        
+
         if (rows.length === 0) return res.status(404).json({ success: false });
-        
+
         const user = rows[0]; 
         user.hasChat = Boolean(user.hasChat);
         user.profile_pic = getVisibleProfilePic(user, parseInt(viewerId), friendIds);
-        
+
         res.json({ success: true, user: user }); 
     } catch (err) {
         console.error(TAG, err);
@@ -2874,6 +2788,7 @@ app.post('/change-password', async (req, res) => {
         if (rows.length === 0) return res.status(404).json({ success: false });
 
         const isMatch = await bcrypt.compare(currentPassword, rows[0].password);
+        if (!isMatch) return res.status(400).json({ success: false, message: 'Current password is incorrect' });
         if (!isMatch) {
             return res.status(400).json({ 
                 success: false, 
@@ -2930,7 +2845,7 @@ app.post('/leaveGroup', async (req, res) => {
 
         // 1. Remove from DB
         await db.query("DELETE FROM group_members WHERE user_id = ? AND group_id = ?", [userId, groupId]);
-        
+
         // 2. Insert system message
         const systemMessage = `${userName} left the group`;
         const encrypted = encrypt(systemMessage);
@@ -2997,12 +2912,12 @@ app.get('/group/:groupId/messages', async (req, res) => {
     if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
 
     try {
-        
+
         const [memberCheck] = await db.query(
             `SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`,
             [groupId, userId]
         );
-        
+
         if (memberCheck.length === 0) {
                 if (memberCheck.length === 0) {
     // Auto-join the group instead of blocking
@@ -3082,7 +2997,7 @@ app.get('/group/by-name', async (req, res) => {
     const TAG = "/group/by-name";
     try {
         const { groupName } = req.query;
-        
+
         if (!groupName) {
             return res.status(400).json({ 
                 success: false, 
@@ -3185,7 +3100,7 @@ await db.query(
         let expiresAt = null;
         if (message_type === 'live_location') {
             const durationInt = parseInt(duration);
-            
+
             // FIX: Explicitly handle "Till I stop sharing" (-1)
             if (durationInt === -1) {
                 expiresAt = '2099-12-31 23:59:59';
@@ -3212,7 +3127,7 @@ await db.query(
                  latitude, longitude, reply_to_id, quoted_sender_id, quoted_message, quoted_user_name, 
                  expires_at, duration)
                 VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-            
+
             params = [
                 group_id,
                 sender_id,
@@ -3233,7 +3148,7 @@ await db.query(
                  latitude, longitude, reply_to_id, quoted_sender_id, quoted_message, quoted_user_name, 
                  expires_at, duration)
                 VALUES (?, ?, ?, NOW(), ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`;
-            
+
             params = [
                 group_id,
                 sender_id,
@@ -3247,7 +3162,7 @@ await db.query(
         }
 
         const [result] = await db.execute(query, params);
-        
+
         // 8. Socket emit with the same calculated expiresAt
         io.to(`group_${group_id}`).emit('new_group_message', {
             id: result.insertId,
@@ -3385,7 +3300,7 @@ app.get('/group/:groupId/members', async (req, res) => {
                 WHERE group_id = ?
             )
             ORDER BY u.first_name ASC`;
-            
+
         const [members] = await db.execute(query, [groupId]);
         res.json({ success: true, members: members });
     } catch (error) {
