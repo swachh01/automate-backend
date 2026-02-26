@@ -1,4 +1,4 @@
-krequire("dotenv").config();
+require("dotenv").config();
 const activeChatSessions = new Map();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
