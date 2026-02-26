@@ -3366,17 +3366,63 @@ app.post('/group/stop-location', async (req, res) => {
 app.get('/searchUsers', async (req, res) => {
     const { query, currentUserId } = req.query;
     const searchTerm = query ? query.trim().toLowerCase() : "";
+    
     if (!searchTerm) return res.json({ success: true, users: [] });
+
     try {
-        const [friendRows] = await db.query(`SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
-[currentUserId, currentUserId, currentUserId]);
+        // Fetch friends for visibility check
+        const [friendRows] = await db.query(
+            `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
+             FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
+            [currentUserId, currentUserId, currentUserId]
+        );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
-        const sql = `SELECT u.id, CONCAT(u.first_name, ' ', u.last_name) as name, u.work_category, u.profile_pic, u.gender, u.profile_visibility FROM users u WHERE LOWER(CONCAT(u.first_name, ' ', 
-u.last_name)) LIKE ? AND u.id != ? LIMIT 50`;
-        const [users] = await db.execute(sql, [`%${searchTerm}%`, currentUserId]);
-        const response = users.map(u => ({ ...u, profile_pic: getVisibleProfilePic(u, parseInt(currentUserId), friendIds) }));
+
+        // Priority Logic: 
+        // 1. Starts with First Name
+        // 2. Starts with Last Name (Surname)
+        // 3. Contains the string anywhere
+        const sql = `
+            SELECT u.id, u.first_name, u.last_name, 
+                   CONCAT(u.first_name, ' ', u.last_name) as name, 
+                   u.work_category, u.work_detail, u.profile_pic, u.gender, u.profile_visibility,
+                   EXISTS (
+                        SELECT 1 FROM messages m 
+                        WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
+                           OR (m.sender_id = u.id AND m.receiver_id = ?)
+                    ) as hasChat,
+                   CASE 
+                        WHEN LOWER(u.first_name) LIKE ? THEN 1
+                        WHEN LOWER(u.last_name) LIKE ? THEN 2
+                        ELSE 3
+                   END as search_priority
+            FROM users u 
+            WHERE (LOWER(u.first_name) LIKE ? OR LOWER(u.last_name) LIKE ? OR LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ?)
+              AND u.id != ? 
+            ORDER BY search_priority ASC, u.first_name ASC 
+            LIMIT 50`;
+
+        // We use %searchTerm% for contains, and searchTerm% for "starts with"
+        const searchLike = `%${searchTerm}%`;
+        const startLike = `${searchTerm}%`;
+
+        const [users] = await db.execute(sql, [
+            currentUserId, currentUserId, // For hasChat
+            startLike, // Priority 1: First name starts with
+            startLike, // Priority 2: Last name starts with
+            searchLike, searchLike, searchLike, // WHERE clause filters
+            currentUserId // Exclude self
+        ]);
+
+        const response = users.map(u => ({ 
+            ...u, 
+            hasChat: Boolean(u.hasChat),
+            profile_pic: getVisibleProfilePic(u, parseInt(currentUserId), friendIds) 
+        }));
+
         res.json({ success: true, users: response });
     } catch (err) {
+        console.error("Search Error:", err);
         res.status(500).json({ success: false });
     }
 });
