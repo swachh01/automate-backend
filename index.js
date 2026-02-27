@@ -231,11 +231,10 @@ socket.on('i_read_messages', (data) => {
     });
 });  
 
-// --- REPLACE THIS BLOCK ---
 socket.on('join_group', (groupId) => {
     try {
         if (!groupId) return;
-        const roomName = `group_${groupId}`; // Define the variable here
+        const roomName = `group_${groupId}`; 
         socket.join(roomName);
         console.log(`Socket ${socket.id} joined room: ${roomName}`);
     } catch (err) {
@@ -300,7 +299,6 @@ socket.on('group_read', async (data) => {
     try {
         const { groupId, userId } = data;
 
-        // Fetch updated stats for ALL recent messages in this group
         const [recentMessages] = await db.query(`
             SELECT 
                 gm.message_id,
@@ -317,7 +315,6 @@ socket.on('group_read', async (data) => {
             GROUP BY gm.message_id
         `, [groupId, groupId]);
 
-        // Broadcast the update with names and counts to everyone in the group
         io.to(`group_${groupId}`).emit('group_messages_read', {
             groupId: groupId,
             updatedCounts: recentMessages
@@ -331,7 +328,6 @@ socket.on('group_read', async (data) => {
   socket.on('update_live_location', (data) => {
   const { senderId, receiverId, lat, lng, type } = data;
 
-  // Relay the update (location OR stop signal) to the receiver
   socket.to(`chat_${receiverId}`).emit('update_live_location', {
     senderId,
     lat,
@@ -348,7 +344,6 @@ socket.on('group_read', async (data) => {
   socket.on('update_group_live_location', (data) => {
     const { senderId, groupId, lat, lng, type } = data;
 
-    // Relay to the group room
     socket.to(`group_${groupId}`).emit('group_live_location_update', {
       senderId,
       groupId,
@@ -362,7 +357,6 @@ socket.on('group_read', async (data) => {
     }
 });
 
-// ADD THIS: Backup listener in case your Java code uses the other name
 socket.on('update_live_location_group', (data) => {
     const { senderId, groupId, lat, lng, type } = data;
     socket.to(`group_${groupId}`).emit('group_live_location_update', {
@@ -389,25 +383,20 @@ async function getUserByPhone(phone) {
 }
 
 function normalizePhoneData(phone, countryCode) {
-    // 1. Check if either is missing to prevent crashes
     if (!phone || !countryCode) {
         return { phone: phone || "", country_code: countryCode || "", isValid: false };
     }
 
     try {
-        // 2. FIXED: Use countryCode (the parameter name) consistently
         const dialCode = countryCode.startsWith('+') ? countryCode : `+${countryCode}`;
-
-        // Strip non-digits from the phone number
         const cleanPhone = phone.replace(/\D/g, '');
         const fullNumber = dialCode + cleanPhone;
-
         const phoneNumber = parsePhoneNumberFromString(fullNumber);
 
         if (phoneNumber && phoneNumber.isValid()) {
             return {
-                phone: phoneNumber.nationalNumber, // e.g., "8850260443"
-                country_code: `+${phoneNumber.countryCallingCode}`, // e.g., "+91"
+                phone: phoneNumber.nationalNumber, 
+                country_code: `+${phoneNumber.countryCallingCode}`, 
                 isValid: true
             };
         }
@@ -415,7 +404,6 @@ function normalizePhoneData(phone, countryCode) {
         console.error("Normalization error:", e.message);
     }
 
-    // 3. Fallback: If parsing fails, still return clean digits
     return {
         phone: phone.replace(/\D/g, ''),
         country_code: countryCode,
@@ -474,7 +462,6 @@ app.post("/create-account", async (req, res) => {
             return res.status(400).json({ success: false, message: "Password must be at least 7 characters and include letters, numbers, and symbols." });
         }
 
-        // Normalize data to ensure clean DB entries
         const normalized = normalizePhoneData(phone, country_code);
         const finalPhone = normalized.phone;
         const finalCountryCode = normalized.country_code;
@@ -555,7 +542,6 @@ app.get("/check-phone-availability", async (req, res) => {
         return res.status(400).json({ success: false, message: "Phone and country code required." });
     }
 
-    // Normalize to ensure we search for the clean version
     const normalized = normalizePhoneData(phone, country_code);
 
     try {
@@ -618,14 +604,12 @@ app.get("/debug/check-user", async (req, res) => {
 // ================= LOGIN =================
 
 app.post("/login", async (req, res) => {
-  const { phone, password, country_code } = req.body || {}; // Added country_code support for precise login
+  const { phone, password, country_code } = req.body || {};
 
   if (!phone || !password) {
     return res.status(400).json({ success: false, message: `Missing phone or password` });
   }
 
-  // Normalize the incoming phone number
-  // If user didn't send country_code (backward compatibility), we just strip non-digits
   let finalPhone = phone.replace(/\D/g, '');
   let query = `SELECT * FROM users WHERE phone = ?`;
   let queryParams = [finalPhone];
@@ -689,15 +673,12 @@ app.post("/login", async (req, res) => {
 
     let isPasswordValid = false;
 
-    // Check if password is encrypted (bcrypt)
     if (user.password.startsWith('$2') && user.password.length > 50) {
       isPasswordValid = await bcrypt.compare(password, user.password);
     } else {
-      // Legacy plain text check
       if (user.password === password) {
         isPasswordValid = true;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
-        // Auto-upgrade legacy password to bcrypt
         await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, user.id]);
       }
     }
@@ -845,7 +826,6 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // Updated Query: Added 'landmark' column and value placeholder
         const planQuery = `
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
@@ -854,7 +834,6 @@ app.post("/addTravelPlan", async (req, res) => {
           VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, NOW(), NOW());
         `;
 
-        // Pass 'landmark' (or null) to the query
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
@@ -884,7 +863,6 @@ app.post("/addTravelPlan", async (req, res) => {
 
         await connection.commit();
 
-        // Notification logic remains the same...
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
@@ -951,14 +929,12 @@ app.post("/addCabTravelPlan", async (req, res) => {
     let connection;
 
     try {
-        // Included estimatedFare in the destructured request body
         const { userId, companyName, time, pickup, destination, landmark, estimatedFare } = req.body;
 
         if (!userId || !destination || !time || !companyName) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
         }
 
-        // Validate and format date for MySQL
         let formattedTime;
         try {
             formattedTime = new Date(time);
@@ -970,12 +946,10 @@ app.post("/addCabTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert into Cab Plans table (Added estimated_fare column and value)
         const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_datetime, pickup_location, destination, landmark, status, estimated_fare) 
                        VALUES (?, ?, ?, ?, ?, ?, 'Trip Active', ?)`;
         const [cabResult] = await connection.query(query, [userId, companyName, formattedTime, pickup, destination, landmark, estimatedFare || 0.00]);
 
-        // 2. Group Logic
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [destination]);
 
@@ -989,7 +963,6 @@ app.post("/addCabTravelPlan", async (req, res) => {
 
         await connection.commit();
 
-        // 3. Notification Logic
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "A traveler";
@@ -1016,7 +989,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
     android: {
         priority: "high",
         notification: {
-            channelId: "channel_custom_sound_v3", // REQUIRED for Android 8+
+            channelId: "channel_custom_sound_v3", 
             priority: "high",
             defaultSound: true
         }
@@ -1049,19 +1022,18 @@ app.post("/addCabTravelPlan", async (req, res) => {
 });
 
 //==========================================================================OWN VEHICLE PLAN=========================================================================================
+
 app.post("/addOwnVehiclePlan", async (req, res) => {
     const TAG = "/addOwnVehiclePlan";
     let connection;
 
     try {
-        // Updated destructuring to include landmark and estimatedFare
         const { userId, vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare } = req.body;
 
         if (!userId || !destination || !time || !vehicleNumber || !vehicleType) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
         }
 
-        // Validate and format date
         let formattedTime;
         try {
             formattedTime = new Date(time);
@@ -1073,7 +1045,6 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert into Own Vehicle Plans table (Added landmark and estimated_fare)
         const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, estimated_fare, status) 
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
 
@@ -1088,7 +1059,6 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
             estimatedFare || 0.00
         ]);
 
-        // 2. Group Logic (Auto create/join destination group)
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [destination]);
 
@@ -1102,7 +1072,6 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
 
         await connection.commit();
 
-        // 3. Notification Logic (FCM)
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "A traveler";
@@ -1188,7 +1157,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
                 ${destinationCol} as destination, 
                 COUNT(*) as userCount,
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
-                g.group_id  -- ← Get the REAL group_id from group_table
+                g.group_id  
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
@@ -1198,7 +1167,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
         const [destinations] = await db.query(query, [userId]);
         const formattedDestinations = destinations.map(d => ({
-            groupId: d.group_id,  // ← Use real group_id, not index+100
+            groupId: d.group_id, 
             destination: d.destination,
             userCount: d.userCount,
             isCurrentUserGoing: d.isCurrentUserGoing
@@ -1231,7 +1200,6 @@ app.get('/users/destination', async (req, res) => {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        // Aliased estimated_fare as 'fare' for the Android Model
         extraCols = ", tp.landmark, tp.company_name as companyName, tp.estimated_fare as fare";
         timeSelection = "DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')";
     } else if (commuteType === 'Own') {
@@ -1243,7 +1211,6 @@ app.get('/users/destination', async (req, res) => {
     }
 
     try {
-        // Fetch friends to determine profile visibility
         const [friendRows] = await db.query(
             `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
              FROM messages WHERE sender_id = ? OR receiver_id = ?`,
@@ -1410,7 +1377,6 @@ app.post('/sendMessage', async (req, res) => {
       quoted_user_name
     } = req.body;
 
-    // ENHANCED LOGGING
     console.log(TAG, 'Received message:', {
       sender_id,
       receiver_id,
@@ -1441,7 +1407,6 @@ app.post('/sendMessage', async (req, res) => {
     const type = message_type || 'text';
     let expiresAt = null;
 
-    // Calculate expires_at for location messages with duration
     if ((type === 'location' || type === 'live_location') && duration) {
     if (parseInt(duration) === -1) {
         // Use a far future date for "Until Stopped"
@@ -1530,15 +1495,12 @@ app.post('/sendMessage', async (req, res) => {
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
-// --- REPLACE THIS BLOCK IN /sendMessage ---
 try {
   const receiverIdStr = receiver_id.toString();
 
-  // 1. Check if they are actively looking at THIS specific chat session
   const activeSession = activeChatSessions.get(receiverIdStr);
   const isLookingAtThisChat = activeSession === `user_${sender_id}`;
 
-  // 2. Only send FCM if they aren't looking at the screen
   if (!isLookingAtThisChat) {
     const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
     const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
@@ -1548,7 +1510,6 @@ try {
       const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
       const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
 
-      // REPLACE the existing messagePayload block with this:
 const messagePayload = {
   token: userRows[0].fcm_token,
   notification: { // Add this back for background reliability
@@ -1561,14 +1522,13 @@ const messagePayload = {
     senderName: senderName,
     senderProfilePic: senderPic || "",
     chatPartnerId: sender_id.toString(),
-    // Fallbacks for your manual notification builder
     title: senderName,
     body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
   },
   android: {
     priority: "high",
     notification: {
-      channelId: "channel_custom_sound_v3", // MATCHES YOUR MANIFEST
+      channelId: "channel_custom_sound_v3", 
       priority: "high",
       sound: "custom_notification"
     }
@@ -1864,7 +1824,6 @@ app.post('/updateNotificationSettings', async (req, res) => {
 app.post('/stopLiveLocation', async (req, res) => {
   const { messageId, userId } = req.body;
   try {
-    // Set expires_at to current time so isExpired() will return true on reload
     const query = `UPDATE messages SET expires_at = UTC_TIMESTAMP() WHERE id = ? AND sender_id = ?`;
     const [result] = await db.execute(query, [messageId, userId]);
 
@@ -2121,14 +2080,12 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const uId = parseInt(userId);
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Auto-update status for expired plans
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_datetime < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_time < NOW()`, [uId]);
 
     const historyQuery = `
       SELECT * FROM (
-        -- Rickshaw Plans
         SELECT 
             id, from_place, to_place, 
             DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
@@ -2137,7 +2094,6 @@ app.get('/tripHistory/:userId', async (req, res) => {
 
         UNION ALL
 
-        -- Cab Plans (FIX: Selecting actual fare and added_fare from DB)
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
@@ -2146,7 +2102,6 @@ app.get('/tripHistory/:userId', async (req, res) => {
 
         UNION ALL
 
-        -- Own Vehicle Plans (FIX: Selecting actual fare and added_fare from DB)
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
@@ -2164,9 +2119,9 @@ app.get('/tripHistory/:userId', async (req, res) => {
       from_place: trip.from_place,
       to_place: trip.to_place,
       travel_time: trip.travel_time,
-      fare: trip.fare ? parseFloat(trip.fare) : 0.00, // Ensuring fare is returned as a float
+      fare: trip.fare ? parseFloat(trip.fare) : 0.00, 
       status: trip.status,
-      hasAddedFare: Boolean(trip.hasAddedFare), // Converting TINYINT to Boolean for Android
+      hasAddedFare: Boolean(trip.hasAddedFare), 
       commute_type: trip.commute_type 
     }));
 
@@ -2206,22 +2161,18 @@ app.put('/trip/cancel/:tripId', async (req, res) => {
 
     const tId = parseInt(tripId);
 
-    // 1. Try to update in the Rickshaw table (travel_plans)
     const [rickshawRes] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
 
-    // 2. If not found, try to update in the Cab table (travel_plans_cab)
     let cabRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0) {
         [cabRes] = await db.query('UPDATE travel_plans_cab SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
     }
 
-    // 3. If still not found, try to update in the Own Vehicle table (travel_plans_own)
     let ownRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
         [ownRes] = await db.query('UPDATE travel_plans_own SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
     }
 
-    // Check if any of the three updates were successful
     if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
       res.json({ success: true, message: 'Trip cancelled successfully' });
     } else {
@@ -2261,17 +2212,14 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         }
 
         const tId = parseInt(tripId);
-        // This 'Done' must exist in your DB ENUM list
         const status = didGo === true ? 'Fare Added' : 'Trip Cancelled';
         const tripFare = didGo === true ? (parseFloat(fare) || 0.00) : 0.00;
 
-        // 1. Try Rickshaw table (travel_plans)
         const [rickshawRes] = await db.query(
             'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
             [status, tripFare, tId]
         );
 
-        // 2. If not found, try Cab table (travel_plans_cab)
         let cabRes = { affectedRows: 0 };
         if (rickshawRes.affectedRows === 0) {
             [cabRes] = await db.query(
@@ -2280,7 +2228,6 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             );
         }
 
-        // 3. If still not found, try Own Vehicle table (travel_plans_own)
         let ownRes = { affectedRows: 0 };
         if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
             [ownRes] = await db.query(
@@ -2289,7 +2236,6 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             );
         }
 
-        // Check if any table was updated successfully
         if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
             res.json({
                 success: true,
@@ -2297,12 +2243,10 @@ app.put('/trip/complete/:tripId', async (req, res) => {
                 newStatus: status
             });
         } else {
-            // This occurs if the ID 210002 is not found in any table
             res.status(404).json({ success: false, message: 'Trip not found' });
         }
 
     } catch (error) {
-        // This is where the 500 error is caught and logged
         console.error(TAG, 'Error completing trip:', error);
         res.status(500).json({ success: false, message: 'Error completing trip' });
     }
@@ -2317,22 +2261,18 @@ app.delete('/tripHistory/:tripId', async (req, res) => {
 
     const tId = parseInt(tripId);
 
-    // 1. Try to delete from the Rickshaw table (travel_plans)
     const [rickshawRes] = await db.query('DELETE FROM travel_plans WHERE id = ?', [tId]);
 
-    // 2. If not found in Rickshaw, try the Cab table (travel_plans_cab)
     let cabRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0) {
         [cabRes] = await db.query('DELETE FROM travel_plans_cab WHERE id = ?', [tId]);
     }
 
-    // 3. If still not found, try the Own Vehicle table (travel_plans_own)
     let ownRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
         [ownRes] = await db.query('DELETE FROM travel_plans_own WHERE id = ?', [tId]);
     }
 
-    // Check if any of the three delete operations were successful
     if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
       res.json({ success: true, message: 'Trip deleted successfully' });
     } else {
@@ -2368,11 +2308,8 @@ app.get('/checkCompletedTrips/:userId', async (req, res) => {
 
 app.post('/autoUpdateCompletedTrips', async (req, res) => {
   try {
-    // Update Rickshaw
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE status = 'Trip Active' AND time < NOW()`);
-    // Update Cabs using new column
     await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE status = 'Trip Active' AND travel_datetime < NOW()`);
-
     res.json({ success: true, message: "Trips updated" });
   } catch (error) {
     console.error('Error auto-updating trips:', error);
@@ -2420,7 +2357,6 @@ app.post('/reset-password', async (req, res) => {
     try {
         const { phone, country_code, newPassword } = req.body;
 
-        // 1. Basic Validation
         if (!phone || !country_code || !newPassword) {
             return res.status(400).json({
                 success: false,
@@ -2428,7 +2364,6 @@ app.post('/reset-password', async (req, res) => {
             });
         }
 
-        // 2. Strength Validation
         if (newPassword.length < 7 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
             return res.status(400).json({ 
                 success: false, 
@@ -2436,7 +2371,6 @@ app.post('/reset-password', async (req, res) => {
             });
         }
 
-        // 3. Fetch User (Including current password hash)
         const [userRows] = await db.query(
             'SELECT id, password FROM users WHERE phone = ? AND country_code = ?',
             [phone, country_code]
@@ -2451,8 +2385,6 @@ app.post('/reset-password', async (req, res) => {
 
         const user = userRows[0];
 
-        // 4. Check if new password is same as the old one
-        // Note: user.password is the hashed string from DB
         const isSamePassword = await bcrypt.compare(newPassword, user.password);
 
         if (isSamePassword) {
@@ -2462,7 +2394,6 @@ app.post('/reset-password', async (req, res) => {
             });
         }
 
-        // 5. Hash the new password and Update
         const userId = user.id;
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
@@ -2579,16 +2510,12 @@ app.post("/hideChat", async (req, res) => {
         if (!userId || !otherUserId) return res.status(400).json({ success: false });
 
         if (isGroup) {
-            // 1. Get all current messages in this group
             const [messages] = await db.query(`SELECT message_id FROM group_messages WHERE group_id = ?`, [otherUserId]);
             if (messages.length === 0) return res.json({ success: true });
 
-            // 2. Mark these messages as hidden for THIS user
             const valuesToHide = messages.map(msg => [msg.message_id, userId, new Date()]);
             await db.query(`INSERT IGNORE INTO group_hidden_messages (message_id, user_id, hidden_at) VALUES ?`, [valuesToHide]);
 
-            // 3. Collective Deletion Logic:
-            // Check which messages have now been hidden by EVERYONE in the group
             const messageIds = messages.map(m => m.message_id);
             const [fullyHidden] = await db.query(`
                 SELECT ghm.message_id 
@@ -2599,17 +2526,14 @@ app.post("/hideChat", async (req, res) => {
                 HAVING COUNT(DISTINCT ghm.user_id) >= (SELECT COUNT(*) FROM group_members WHERE group_id = ?)
             `, [messageIds, otherUserId]);
 
-            // 4. Permanently delete from DB if everyone hid it
             if (fullyHidden.length > 0) {
                 const idsToDelete = fullyHidden.map(x => x.message_id);
                 await db.query(`DELETE FROM group_messages WHERE message_id IN (?)`, [idsToDelete]);
                 await db.query(`DELETE FROM group_hidden_messages WHERE message_id IN (?)`, [idsToDelete]);
-                // Also clean up read status for these messages
                 await db.query(`DELETE FROM group_message_read_status WHERE message_id IN (?)`, [idsToDelete]);
                 console.log(TAG, `Permanently deleted ${idsToDelete.length} messages as all group members cleared history.`);
             }
         } else {
-            // INDIVIDUAL CHAT LOGIC (Remains exactly as you had it)
             const [messages] = await db.query(`SELECT id FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, [userId, otherUserId, otherUserId, userId]);
             if (messages.length === 0) return res.json({ success: true });
 
@@ -2776,7 +2700,6 @@ app.post('/change-password', async (req, res) => {
     try {
         const { userId, currentPassword, newPassword } = req.body;
 
-        // 1. Validation check for password length
         if (!newPassword || newPassword.length < 7) {
             return res.status(400).json({ 
                 success: false, 
@@ -2843,10 +2766,8 @@ app.post('/leaveGroup', async (req, res) => {
         );
         const userName = userRows.length > 0 ? userRows[0].name : "Someone";
 
-        // 1. Remove from DB
         await db.query("DELETE FROM group_members WHERE user_id = ? AND group_id = ?", [userId, groupId]);
 
-        // 2. Insert system message
         const systemMessage = `${userName} left the group`;
         const encrypted = encrypt(systemMessage);
         const [result] = await db.query(
@@ -2855,7 +2776,6 @@ app.post('/leaveGroup', async (req, res) => {
             [groupId, userId, encrypted]
         );
 
-        // 3. Notify remaining members via Socket
         io.to(`group_${groupId}`).emit('new_group_message', {
             id: result.insertId,
             group_id: groupId,
@@ -2866,7 +2786,6 @@ app.post('/leaveGroup', async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
-        // 4. Force the specific user's socket to leave the room if they are online
         const userSocketId = onlineUsers.get(userId.toString())?.socketId;
         if (userSocketId) {
             const socket = io.sockets.sockets.get(userSocketId);
@@ -2920,12 +2839,10 @@ app.get('/group/:groupId/messages', async (req, res) => {
 
         if (memberCheck.length === 0) {
                 if (memberCheck.length === 0) {
-    // Auto-join the group instead of blocking
     await db.query(
         `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
         [groupId, userId]
     );
-    // Optional: send a system message that user joined
     const [userRows] = await db.query(
         "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", 
         [userId]
@@ -2969,7 +2886,6 @@ app.get('/group/:groupId/messages', async (req, res) => {
             FROM group_messages gm
             JOIN users u ON gm.sender_id = u.id
             WHERE gm.group_id = ?
-              -- FILTER: Exclude messages hidden by this specific user
               AND NOT EXISTS (
                   SELECT 1 FROM group_hidden_messages ghm 
                   WHERE ghm.message_id = gm.message_id 
@@ -2978,7 +2894,6 @@ app.get('/group/:groupId/messages', async (req, res) => {
             ORDER BY gm.timestamp ASC
             LIMIT 300`;
 
-        // Note: added userId to the parameter array to match the 3rd '?' in the query
         const [messages] = await db.execute(query, [groupId, groupId, userId]);
 
         const decrypted = messages.map(msg => ({
@@ -3052,7 +2967,6 @@ app.post('/group/send', async (req, res) => {
     try {
         console.log(TAG, "Received request:", { sender_id, group_id, message_content, message_type, has_reply: !!reply_to_id });
 
-        // 1. Validate group_id
         if (!group_id || group_id === 0) {
             return res.status(400).json({
                 success: false,
@@ -3060,7 +2974,6 @@ app.post('/group/send', async (req, res) => {
             });
         }
 
-        // 2. Fetch sender name
         const [userRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [sender_id]);
 
         if (userRows.length === 0) {
@@ -3068,7 +2981,6 @@ app.post('/group/send', async (req, res) => {
         }
         const senderName = userRows[0].name;
 
-        // 3. Check if group exists
         const [groupCheck] = await db.query('SELECT group_id, group_name, group_icon FROM `group_table` WHERE group_id = ?', [group_id]);
 
         if (groupCheck.length === 0) {
@@ -3081,7 +2993,6 @@ app.post('/group/send', async (req, res) => {
 
         const groupName = groupCheck[0].group_name;
 
-        // 4. Ensure user is a member
         const [memberCheck] = await db.query(
     `SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`,
     [group_id, sender_id]
@@ -3093,19 +3004,15 @@ await db.query(
         [group_id, sender_id]
     );
 }
-        // 5. Encrypt message content
         const encrypted = encrypt(message_content);
 
-        // 6. Calculate expiration for live location
         let expiresAt = null;
         if (message_type === 'live_location') {
             const durationInt = parseInt(duration);
 
-            // FIX: Explicitly handle "Till I stop sharing" (-1)
             if (durationInt === -1) {
                 expiresAt = '2099-12-31 23:59:59';
             } else {
-                // Standard duration: use provided value or default to 60 if 0/NaN
                 const finalDuration = (durationInt > 0) ? durationInt : 60;
                 const expiryDate = new Date(Date.now() + finalDuration * 60000);
                 expiresAt = expiryDate.toISOString().slice(0, 19).replace('T', ' ');
@@ -3113,7 +3020,6 @@ await db.query(
             console.log(TAG, "Calculated Group Expiry:", expiresAt);
         }
 
-        // 7. Prepare query with quoted message support
         const hasReplyData = reply_to_id && 
                              reply_to_id !== 0 && 
                              quoted_message && 
@@ -3163,7 +3069,6 @@ await db.query(
 
         const [result] = await db.execute(query, params);
 
-        // 8. Socket emit with the same calculated expiresAt
         io.to(`group_${group_id}`).emit('new_group_message', {
             id: result.insertId,
             group_id: group_id,
@@ -3182,7 +3087,6 @@ await db.query(
             timestamp: new Date().toISOString()
         });
 
-        // 9. FCM Notifications
         try {
             const [members] = await db.query(`
                 SELECT u.id, u.fcm_token 
@@ -3234,7 +3138,6 @@ await db.query(
     }
 });
 
-// 1. DELETE FOR ME (Group) - Just hides it for the caller
 app.post("/group/deleteMessageForMe", async (req, res) => {
   try {
     const { messageId, userId } = req.body;
@@ -3242,8 +3145,6 @@ app.post("/group/deleteMessageForMe", async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing fields" });
     }
 
-    // We use a table called 'group_hidden_messages' to track who hid what
-    // Ensure you have created this table in MySQL first!
     await db.query(
       `INSERT IGNORE INTO group_hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, 
       [messageId, userId]
@@ -3256,7 +3157,6 @@ app.post("/group/deleteMessageForMe", async (req, res) => {
   }
 });
 
-// 2. DELETE FOR EVERYONE (Group) - Permanently removes from group_messages
 app.delete('/group/deleteMessageForEveryone/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
@@ -3268,12 +3168,9 @@ app.delete('/group/deleteMessageForEveryone/:messageId', async (req, res) => {
     const msg = msgRows[0];
     if (msg.sender_id != userId) return res.status(403).json({ success: false, message: "Only sender can delete for everyone" });
 
-    // Delete the actual message
     await db.execute('DELETE FROM group_messages WHERE message_id = ?', [messageId]);
-    // Also clean up any 'hidden' entries for this message
     await db.execute('DELETE FROM group_hidden_messages WHERE message_id = ?', [messageId]);
 
-    // Notify the group via socket
     io.to(`group_${msg.group_id}`).emit('message_deleted', { messageId: parseInt(messageId) });
 
     res.json({ success: true });
@@ -3286,7 +3183,6 @@ app.delete('/group/deleteMessageForEveryone/:messageId', async (req, res) => {
 app.get('/group/:groupId/members', async (req, res) => {
     const { groupId } = req.params;
     try {
-        // Using a more robust query to ensure distinct user IDs
         const query = `
             SELECT 
                 u.id, 
@@ -3339,7 +3235,6 @@ app.post('/group/stop-location', async (req, res) => {
     try {
         console.log(TAG, `Stopping live location for user ${userId} in group ${groupId}`);
 
-        // Update the most recent live location message for this user in this group to EXPIRED
         const query = `
             UPDATE group_messages 
             SET expires_at = UTC_TIMESTAMP() 
@@ -3370,7 +3265,6 @@ app.get('/searchUsers', async (req, res) => {
     if (!searchTerm) return res.json({ success: true, users: [] });
 
     try {
-        // Fetch friends for visibility check
         const [friendRows] = await db.query(
             `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
              FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
@@ -3378,10 +3272,6 @@ app.get('/searchUsers', async (req, res) => {
         );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-        // Priority Logic: 
-        // 1. Starts with First Name
-        // 2. Starts with Last Name (Surname)
-        // 3. Contains the string anywhere
         const sql = `
             SELECT u.id, u.first_name, u.last_name, 
                    CONCAT(u.first_name, ' ', u.last_name) as name, 
@@ -3400,18 +3290,17 @@ app.get('/searchUsers', async (req, res) => {
             WHERE (LOWER(u.first_name) LIKE ? OR LOWER(u.last_name) LIKE ? OR LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ?)
               AND u.id != ? 
             ORDER BY search_priority ASC, u.first_name ASC 
-            LIMIT 50`;
+            LIMIT 100`;
 
-        // We use %searchTerm% for contains, and searchTerm% for "starts with"
         const searchLike = `%${searchTerm}%`;
         const startLike = `${searchTerm}%`;
 
         const [users] = await db.execute(sql, [
-            currentUserId, currentUserId, // For hasChat
-            startLike, // Priority 1: First name starts with
-            startLike, // Priority 2: Last name starts with
-            searchLike, searchLike, searchLike, // WHERE clause filters
-            currentUserId // Exclude self
+            currentUserId, currentUserId, 
+            startLike, 
+            startLike, 
+            searchLike, searchLike, searchLike, 
+            currentUserId 
         ]);
 
         const response = users.map(u => ({ 
