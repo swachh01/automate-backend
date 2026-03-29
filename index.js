@@ -1586,14 +1586,17 @@ app.get('/getChatUsers', async (req, res) => {
                 FROM messages m
                 LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
                 WHERE
-                    (m.sender_id = ? OR m.receiver_id = ?)
-                    AND hm.message_id IS NULL
-                    AND NOT EXISTS (
-                        SELECT 1 FROM chat_requests cr 
-                        WHERE cr.sender_id = m.sender_id 
-                          AND cr.receiver_id = ? 
-                          AND cr.status = 'pending'
-                    )
+    (m.sender_id = ? OR m.receiver_id = ?)
+    AND hm.message_id IS NULL
+    AND NOT EXISTS (
+        SELECT 1 FROM chat_requests cr 
+        WHERE (
+            (cr.sender_id = m.sender_id AND cr.receiver_id = m.receiver_id)
+            OR 
+            (cr.sender_id = m.receiver_id AND cr.receiver_id = m.sender_id)
+        )
+        AND cr.status = 'pending'
+    )
                 UNION ALL
                 SELECT
                     'group' AS chat_type,
