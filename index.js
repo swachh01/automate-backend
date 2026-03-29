@@ -3316,6 +3316,31 @@ app.get('/searchUsers', async (req, res) => {
     }
 });
 
+app.get('/chatRequests/sent', async (req, res) => {
+    const { userId } = req.query;
+    try {
+        const sql = `
+            SELECT cr.id as requestId, cr.initial_message, u.id as userId, 
+                   CONCAT(u.first_name, ' ', u.last_name) as name, u.profile_pic, u.gender, u.work_category 
+            FROM chat_requests cr 
+            JOIN users u ON cr.receiver_id = u.id 
+            WHERE cr.sender_id = ? AND cr.status = 'pending' 
+            ORDER BY cr.id DESC`;
+        const [requests] = await db.execute(sql, [userId]);
+        
+        res.json({ 
+            success: true, 
+            requests: requests.map(r => ({ 
+                ...r, 
+                lastMessage: r.initial_message || "You sent a request",
+                statusText: "Sent" 
+            })) 
+        });
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
 app.post('/sendChatRequest', async (req, res) => {
     const { senderId, receiverId, message } = req.body;
     try {
