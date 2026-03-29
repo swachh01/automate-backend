@@ -1402,22 +1402,42 @@ app.post('/sendMessage', async (req, res) => {
       return res.status(403).json({ success: false, message: 'User cannot be messaged.' });
     }
 
+    // NEW LOGIC: Ensure a chat request entry exists.
+    // If no request exists (accepted or pending), create a 'pending' one.
+    // This allows the receiver to see this conversation in their "Received Requests" tab.
+    const [requestRows] = await db.query(
+      `SELECT status FROM chat_requests 
+       WHERE (sender_id = ? AND receiver_id = ?) 
+          OR (sender_id = ? AND receiver_id = ?)`,
+      [sender_id, receiver_id, receiver_id, sender_id]
+    );
+
+    if (requestRows.length === 0) {
+      await db.execute(
+        `INSERT INTO chat_requests (sender_id, receiver_id, status, initial_message) 
+         VALUES (?, ?, 'pending', ?)`,
+        [sender_id, receiver_id, message]
+      );
+      console.log(TAG, "Ensured pending request exists for this message.");
+    }
+
     const encryptedMessage = encrypt(message);
 
     const type = message_type || 'text';
     let expiresAt = null;
 
     if ((type === 'location' || type === 'live_location') && duration) {
-    if (parseInt(duration) === -1) {
-        // Use a far future date for "Until Stopped"
-        expiresAt = '2099-12-31 23:59:59';
-    } else if (parseInt(duration) > 0) {
-        const date = new Date();
-        date.setMinutes(date.getMinutes() + parseInt(duration));
-        expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
+      if (parseInt(duration) === -1) {
+          // Use a far future date for "Until Stopped"
+          expiresAt = '2099-12-31 23:59:59';
+      } else if (parseInt(duration) > 0) {
+          const date = new Date();
+          date.setMinutes(date.getMinutes() + parseInt(duration));
+          expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
+      }
+      console.log(TAG, 'Set expires_at to:', expiresAt);
     }
-    console.log(TAG, 'Set expires_at to:', expiresAt);
-}
+
     const hasReplyData = reply_to_id && 
                          reply_to_id !== 0 && 
                          quoted_message && 
@@ -1495,54 +1515,55 @@ app.post('/sendMessage', async (req, res) => {
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
     io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
-try {
-  const receiverIdStr = receiver_id.toString();
+    try {
+      const receiverIdStr = receiver_id.toString();
 
-  const activeSession = activeChatSessions.get(receiverIdStr);
-  const isLookingAtThisChat = activeSession === `user_${sender_id}`;
+      const activeSession = activeChatSessions.get(receiverIdStr);
+      const isLookingAtThisChat = activeSession === `user_${sender_id}`;
 
-  if (!isLookingAtThisChat) {
-    const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
-    const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
+      if (!isLookingAtThisChat) {
+        const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
+        const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
 
-    if (userRows.length > 0 && userRows[0].fcm_token) {
-      const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
-      const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
-      const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
+        if (userRows.length > 0 && userRows[0].fcm_token) {
+          const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
+          const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
+          const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
 
-const messagePayload = {
-  token: userRows[0].fcm_token,
-  notification: { // Add this back for background reliability
-    title: senderName,
-    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
-  },
-  data: {
-    type: "chat",
-    senderId: sender_id.toString(),
-    senderName: senderName,
-    senderProfilePic: senderPic || "",
-    chatPartnerId: sender_id.toString(),
-    title: senderName,
-    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
-  },
-  android: {
-    priority: "high",
-    notification: {
-      channelId: "channel_custom_sound_v3", 
-      priority: "high",
-      sound: "custom_notification"
+          const messagePayload = {
+            token: userRows[0].fcm_token,
+            notification: { 
+              title: senderName,
+              body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
+            },
+            data: {
+              type: "chat",
+              senderId: sender_id.toString(),
+              senderName: senderName,
+              senderProfilePic: senderPic || "",
+              chatPartnerId: sender_id.toString(),
+              title: senderName,
+              body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
+            },
+            android: {
+              priority: "high",
+              notification: {
+                channelId: "channel_custom_sound_v3", 
+                priority: "high",
+                sound: "custom_notification"
+              }
+            }
+          };
+          await admin.messaging().send(messagePayload);
+          console.log(`DATA-ONLY FCM Sent to ${receiverIdStr} (Partner was not in chat)`);
+        }
+      } else {
+        console.log(`FCM Skipped: User ${receiverIdStr} is currently viewing this chat.`);
+      }
+    } catch (fcmError) {
+      console.error("CRITICAL FCM ERROR:", fcmError.message);
     }
-  }
-};
-      await admin.messaging().send(messagePayload);
-      console.log(`DATA-ONLY FCM Sent to ${receiverIdStr} (Partner was not in chat)`);
-    }
-  } else {
-    console.log(`FCM Skipped: User ${receiverIdStr} is currently viewing this chat.`);
-  }
-} catch (fcmError) {
-  console.error("CRITICAL FCM ERROR:", fcmError.message);
-}
+    
     res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
   } catch (error) {
