@@ -3370,8 +3370,17 @@ app.get('/chatRequests/sent', async (req, res) => {
 app.post('/sendChatRequest', async (req, res) => {
     const { senderId, receiverId, message } = req.body;
     try {
-        await db.execute(`INSERT INTO chat_requests (sender_id, receiver_id, status, initial_message) VALUES (?, ?, 'pending', ?) ON DUPLICATE KEY UPDATE status = 'pending', initial_message = ?`, 
-[senderId, receiverId, message, message]);
+        // Force the senderId to be the current user, even if updating an old row
+        await db.execute(`
+            INSERT INTO chat_requests (sender_id, receiver_id, status, initial_message) 
+            VALUES (?, ?, 'pending', ?) 
+            ON DUPLICATE KEY UPDATE 
+                sender_id = VALUES(sender_id),
+                receiver_id = VALUES(receiver_id),
+                status = 'pending', 
+                initial_message = VALUES(initial_message)`, 
+            [senderId, receiverId, message]);
+        
         io.to(`chat_${receiverId}`).emit('new_chat_request', { senderId, message });
         res.json({ success: true });
     } catch (err) {
@@ -3383,15 +3392,26 @@ app.post('/handleChatRequest', async (req, res) => {
     const { userId, otherUserId, action } = req.body;
     try {
         if (action === 'accept') {
-            await db.execute(`UPDATE chat_requests SET status = 'accepted' WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
-            const [request] = await db.execute(`SELECT initial_message FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
+            // 1. Update status to accepted
+            await db.execute(`UPDATE chat_requests SET status = 'accepted' WHERE 
+                (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, 
+                [otherUserId, userId, userId, otherUserId]);
+
+            // 2. Move the initial_message to the main messages table
+            const [request] = await db.execute(`SELECT initial_message, sender_id FROM chat_requests WHERE 
+                (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, 
+                [otherUserId, userId, userId, otherUserId]);
+
             if (request[0]?.initial_message) {
                 const encrypted = encrypt(request[0].initial_message);
-                await db.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, [otherUserId, userId, encrypted]);
+                // INSERT the message so /getChatUsers can find it
+                await db.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) 
+                    VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, 
+                    [request[0].sender_id, (request[0].sender_id == userId ? otherUserId : userId), encrypted]);
             }
             res.json({ success: true });
         } else {
-            await db.execute(`DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
+            await db.execute(`DELETE FROM chat_requests WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)`, [otherUserId, userId, userId, otherUserId]);
             res.json({ success: true });
         }
     } catch (err) {
@@ -3399,13 +3419,21 @@ app.post('/handleChatRequest', async (req, res) => {
     }
 });
 
-app.get('/chatRequests', async (req, res) => {
-    const { userId } = req.query;
+app.get('/chatRequest', async (req, res) => {
+    const { senderId, receiverId } = req.query;
     try {
-        const sql = `SELECT cr.id as requestId, cr.initial_message, u.id as userId, CONCAT(u.first_name, ' ', u.last_name) as name, u.profile_pic, u.gender, u.work_category FROM chat_requests cr 
-JOIN users u ON cr.sender_id = u.id WHERE cr.receiver_id = ? AND cr.status = 'pending' ORDER BY cr.id DESC`;
-        const [requests] = await db.execute(sql, [userId]);
-        res.json({ success: true, requests: requests.map(r => ({ ...r, lastMessage: r.initial_message || "Sent a request" })) });
+        const [rows] = await db.execute(
+            `SELECT initial_message, sender_id FROM chat_requests 
+             WHERE (sender_id = ? AND receiver_id = ?) 
+                OR (sender_id = ? AND receiver_id = ?)`, 
+            [senderId, receiverId, receiverId, senderId]
+        );
+        if (rows.length > 0) {
+            res.json({ success: true, initial_message: 
+rows[0].initial_message, senderId: rows[0].sender_id });
+        } else {
+            res.status(404).json({ success: false });
+        }
     } catch (err) {
         res.status(500).json({ success: false });
     }
