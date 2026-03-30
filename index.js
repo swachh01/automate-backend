@@ -2678,9 +2678,10 @@ app.get("/user/:userId", async (req, res) => {
                 COALESCE(bio, '') as bio,
                 COALESCE(home_location, '') as home_location,
                 EXISTS (
-                    SELECT 1 FROM messages m 
-                    WHERE (m.sender_id = ? AND m.receiver_id = users.id) 
-                       OR (m.sender_id = users.id AND m.receiver_id = ?)
+                    SELECT 1 FROM chat_requests cr 
+                    WHERE (cr.sender_id = ? AND cr.receiver_id = users.id) 
+                       OR (cr.sender_id = users.id AND cr.receiver_id = ?)
+                    AND cr.status = 'accepted'
                 ) as hasChat 
             FROM users WHERE id = ?`;
 
@@ -3301,9 +3302,10 @@ app.get('/searchUsers', async (req, res) => {
                    CONCAT(u.first_name, ' ', u.last_name) as name, 
                    u.work_category, u.work_detail, u.profile_pic, u.gender, u.profile_visibility,
                    EXISTS (
-                        SELECT 1 FROM messages m 
-                        WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
-                           OR (m.sender_id = u.id AND m.receiver_id = ?)
+                        SELECT 1 FROM chat_requests cr 
+                        WHERE (cr.sender_id = ? AND cr.receiver_id = u.id) 
+                           OR (cr.sender_id = u.id AND cr.receiver_id = ?)
+                        AND cr.status = 'accepted'
                     ) as hasChat,
                    CASE 
                         WHEN LOWER(u.first_name) LIKE ? THEN 1
