@@ -3403,7 +3403,7 @@ app.post('/handleChatRequest', async (req, res) => {
     }
 });
 
-app.get('/chatRequest', async (req, res) => {
+app.get('/chatRequests', async (req, res) => {
     const { senderId, receiverId } = req.query;
     if (!senderId || !receiverId) {
         return res.status(400).json({ success: false });
