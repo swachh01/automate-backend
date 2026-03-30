@@ -3290,6 +3290,7 @@ app.get('/searchUsers', async (req, res) => {
     if (!searchTerm) return res.json({ success: true, users: [] });
 
     try {
+        // 1. Get friends for profile pic visibility
         const [friendRows] = await db.query(
             `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
              FROM messages WHERE sender_id = ? OR receiver_id = ?`, 
@@ -3297,16 +3298,20 @@ app.get('/searchUsers', async (req, res) => {
         );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
+        // 2. Search Query
+        // We look for 'accepted' status to mark 'hasChat' as true
         const sql = `
             SELECT u.id, u.first_name, u.last_name, 
                    CONCAT(u.first_name, ' ', u.last_name) as name, 
                    u.work_category, u.work_detail, u.profile_pic, u.gender, u.profile_visibility,
-                   EXISTS (
-                        SELECT 1 FROM chat_requests cr 
-                        WHERE (cr.sender_id = ? AND cr.receiver_id = u.id) 
-                           OR (cr.sender_id = u.id AND cr.receiver_id = ?)
-                        AND cr.status = 'accepted'
-                    ) as hasChat,
+                   (
+                        SELECT EXISTS (
+                            SELECT 1 FROM chat_requests cr 
+                            WHERE ((cr.sender_id = ? AND cr.receiver_id = u.id) 
+                               OR (cr.sender_id = u.id AND cr.receiver_id = ?))
+                            AND cr.status = 'accepted'
+                        )
+                   ) as hasChat,
                    CASE 
                         WHEN LOWER(u.first_name) LIKE ? THEN 1
                         WHEN LOWER(u.last_name) LIKE ? THEN 2
@@ -3322,11 +3327,10 @@ app.get('/searchUsers', async (req, res) => {
         const startLike = `${searchTerm}%`;
 
         const [users] = await db.execute(sql, [
-            currentUserId, currentUserId, 
-            startLike, 
-            startLike, 
+            currentUserId, currentUserId, // for hasChat subquery
+            startLike, startLike,         // for search_priority
             searchLike, searchLike, searchLike, 
-            currentUserId 
+            currentUserId                 // exclude self
         ]);
 
         const response = users.map(u => ({ 
