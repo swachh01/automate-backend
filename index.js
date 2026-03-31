@@ -1759,7 +1759,7 @@ app.get('/getChatUsers', async (req, res) => {
                 profilePicUrl: profilePicUrl,
                 gender: row.gender,
                 lastSenderId: row.last_sender_id,
-                lastSenderName: row.last_sender_name,
+                lastSenderName: isGroup? row.last_sender_name : null,
                 lastMessageStatus: row.last_message_status 
             };
         });
