@@ -3383,8 +3383,7 @@ app.post('/sendChatRequest', async (req, res) => {
     }
 
     try {
-        // We use VALUES(initial_message) to refer to the 'message' 
-        // we attempted to insert in the first part of the query.
+        // Use VALUES(initial_message) to append ONLY the new incoming snippet
         const sql = `
             INSERT INTO chat_requests (sender_id, receiver_id, status, initial_message) 
             VALUES (?, ?, 'pending', ?) 
@@ -3393,13 +3392,11 @@ app.post('/sendChatRequest', async (req, res) => {
                 status = 'pending'
         `;
         
-        // Notice we only pass the parameters once for the INSERT part.
-        // The UPDATE part pulls from the VALUES we just tried to insert.
         await db.execute(sql, [senderId, receiverId, message]);
 
         io.to(`chat_${receiverId}`).emit('new_chat_request', { 
             senderId, 
-            message 
+            message // This should ideally be the full new concatenated string if you want real-time updates
         });
 
         res.json({ success: true });
