@@ -1646,8 +1646,8 @@ app.get('/getChatUsers', async (req, res) => {
                 LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
                 WHERE
                     (m.sender_id = ? OR m.receiver_id = ?)
+                    AND m.sender_id != m.receiver_id -- CRITICAL: Filter out self-chats
                     AND hm.message_id IS NULL
-                    AND m.sender_id !=m.receiver_id
                     AND NOT EXISTS (
                         SELECT 1 FROM chat_requests cr 
                         WHERE cr.sender_id = m.sender_id 
