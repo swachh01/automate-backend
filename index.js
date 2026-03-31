@@ -3377,12 +3377,29 @@ app.get('/searchUsers', async (req, res) => {
 
 app.post('/sendChatRequest', async (req, res) => {
     const { senderId, receiverId, message } = req.body;
+    
     try {
-        await db.execute(`INSERT INTO chat_requests (sender_id, receiver_id, status, initial_message) VALUES (?, ?, 'pending', ?) ON DUPLICATE KEY UPDATE status = 'pending', initial_message = ?`, 
-[senderId, receiverId, message, message]);
-        io.to(`chat_${receiverId}`).emit('new_chat_request', { senderId, message });
+        // We use CONCAT to append the new message to the old one with a newline
+        // 'initial_message' will now act as a preview of all messages sent during the request phase
+        const sql = `
+            INSERT INTO chat_requests (sender_id, receiver_id, status, initial_message) 
+            VALUES (?, ?, 'pending', ?) 
+            ON DUPLICATE KEY UPDATE 
+                initial_message = IF(status = 'pending', CONCAT(initial_message, '\n', ?), VALUES(initial_message)),
+                status = 'pending'
+        `;
+        
+        await db.execute(sql, [senderId, receiverId, message, message]);
+        
+        // Notify the receiver via Socket
+        io.to(`chat_${receiverId}`).emit('new_chat_request', { 
+            senderId, 
+            message: message // You can send just the latest bit or the whole concat
+        });
+        
         res.json({ success: true });
     } catch (err) {
+        console.error("Error sending chat request:", err);
         res.status(500).json({ success: false });
     }
 });
