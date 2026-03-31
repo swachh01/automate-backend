@@ -3429,6 +3429,40 @@ app.post('/handleChatRequest', async (req, res) => {
     }
 });
 
+// 1. Fetch existing request for the sender to see their old messages
+app.get('/checkChatRequest', async (req, res) => {
+    const { senderId, receiverId } = req.query;
+    try {
+        const [rows] = await db.execute(
+            `SELECT initial_message FROM chat_requests 
+             WHERE sender_id = ? AND receiver_id = ? AND status = 'pending'`,
+            [senderId, receiverId]
+        );
+        
+        if (rows.length > 0) {
+            res.json({ success: true, exists: true, message: rows[0].initial_message });
+        } else {
+            res.json({ success: true, exists: false });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
+// 2. Delete the request (Sender cancels it)
+app.post('/deleteChatRequest', async (req, res) => {
+    const { senderId, receiverId } = req.body;
+    try {
+        await db.execute(
+            `DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ? AND status = 'pending'`,
+            [senderId, receiverId]
+        );
+        res.json({ success: true, message: "Request deleted" });
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
 app.get('/chatRequests', async (req, res) => {
     const { userId } = req.query;
     try {
