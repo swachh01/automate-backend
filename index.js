@@ -3407,14 +3407,35 @@ app.post('/sendChatRequest', async (req, res) => {
 });
 
 app.post('/handleChatRequest', async (req, res) => {
-    const { userId, otherUserId, action } = req.body;
+    const { userId, otherUserId, action } = req.body; // userId is the one accepting (Receiver)
     try {
         if (action === 'accept') {
-            await db.execute(`UPDATE chat_requests SET status = 'accepted' WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
-            const [request] = await db.execute(`SELECT initial_message FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
-            if (request[0]?.initial_message) {
+            // 1. Get the original message before updating status
+            const [request] = await db.execute(
+                `SELECT initial_message, sender_id, receiver_id 
+                 FROM chat_requests 
+                 WHERE (sender_id = ? AND receiver_id = ?)`, 
+                [otherUserId, userId]
+            );
+
+            if (request.length > 0) {
+                const originalSender = request[0].sender_id;
+                const originalReceiver = request[0].receiver_id;
                 const encrypted = encrypt(request[0].initial_message);
-                await db.execute(`INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, [otherUserId, userId, encrypted]);
+
+                // 2. Insert into messages preserving the original direction
+                await db.execute(
+                    `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) 
+                     VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, 
+                    [originalSender, originalReceiver, encrypted]
+                );
+
+                // 3. Mark request as accepted
+                await db.execute(
+                    `UPDATE chat_requests SET status = 'accepted' 
+                     WHERE sender_id = ? AND receiver_id = ?`, 
+                    [originalSender, originalReceiver]
+                );
             }
             res.json({ success: true });
         } else {
@@ -3422,6 +3443,7 @@ app.post('/handleChatRequest', async (req, res) => {
             res.json({ success: true });
         }
     } catch (err) {
+        console.error("Handle Request Error:", err);
         res.status(500).json({ success: false });
     }
 });
