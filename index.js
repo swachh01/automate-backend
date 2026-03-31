@@ -3449,15 +3449,19 @@ app.get('/checkChatRequest', async (req, res) => {
     }
 });
 
-// 2. Delete the request (Sender cancels it)
 app.post('/deleteChatRequest', async (req, res) => {
     const { senderId, receiverId } = req.body;
     try {
         await db.execute(
-            `DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ? AND status = 'pending'`,
+            `DELETE FROM chat_requests 
+             WHERE sender_id = ? AND receiver_id = ? AND status = 'pending'`,
             [senderId, receiverId]
         );
-        res.json({ success: true, message: "Request deleted" });
+        
+        // Optional: Emit socket event so Hitesh's list updates in real-time
+        io.to(`chat_${receiverId}`).emit('chat_request_cancelled', { senderId });
+        
+        res.json({ success: true });
     } catch (err) {
         res.status(500).json({ success: false });
     }
