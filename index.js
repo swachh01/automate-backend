@@ -447,6 +447,32 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
+// Change 'app.get' to 'router.get' to keep it consistent with your app's structure
+router.get('/api/search-colleges', async (req, res) => {
+    const { query } = req.query;
+    const API_KEY = "579b464db66ec23bdd000001ee49dade0883483374e82ce58f242557";
+    const RESOURCE_ID = "e2954f67-824e-4861-a83d-6b58e72ef37e";
+
+    if (!query || query.length < 3) {
+        return res.json({ success: true, colleges: [] });
+    }
+
+    try {
+        // CRITICAL: Added encodeURIComponent to handle spaces in college names
+        const encodedQuery = encodeURIComponent(query);
+        const url = `https://api.data.gov.in/resource/${RESOURCE_ID}?api-key=${API_KEY}&format=json&filters[college_name]=*${encodedQuery}*&limit=50`;
+           
+        const response = await axios.get(url);
+        
+        const colleges = response.data.records ? response.data.records.map(record => record.college_name) : [];
+        
+        res.json({ success: true, colleges: colleges });
+    } catch (error) {
+        console.error("College Search Error:", error.message);
+        res.status(500).json({ success: false, message: "External API error" });
+    }
+});
+
 // ================= CREATE ACCOUNT =================
 
 app.post("/create-account", async (req, res) => {
@@ -601,32 +627,6 @@ app.get("/debug/check-user", async (req, res) => {
     }
 });
 
-// Add this near your other API routes in index.js
-app.get('/api/search-colleges', async (req, res) => {
-    const { query } = req.query;
-    const API_KEY = "579b464db66ec23bdd000001ee49dade0883483374e82ce58f242557";
-    // Resource ID for Colleges (AISHE)
-    const RESOURCE_ID = "e2954f67-824e-4861-a83d-6b58e72ef37e";
-
-    if (!query || query.length < 3) {
-        return res.json({ success: true, colleges: [] });
-    }
-
-    try {
-        // We use filters[college_name]=*query* for a wildcard search
-        const url = `https://api.data.gov.in/resource/${RESOURCE_ID}?api-key=${API_KEY}&format=json&filters[college_name]=*${query}*&limit=50`;
-        
-        const response = await axios.get(url);
-        
-        // Data.gov.in returns data in a 'records' array
-        const colleges = response.data.records.map(record => record.college_name);
-        
-        res.json({ success: true, colleges: colleges });
-    } catch (error) {
-        console.error("College Search Error:", error.message);
-        res.status(500).json({ success: false, message: "External API error" });
-    }
-});
 
 // ================= LOGIN =================
 
