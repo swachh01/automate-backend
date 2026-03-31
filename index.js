@@ -458,11 +458,45 @@ router.get('/api/search-colleges', (req, res) => {
     try {
         const searchTerm = query.toUpperCase();
         
-        // Use .college to access the institution name in each object
         const results = collegesData
             .filter(item => item.college && item.college.toUpperCase().includes(searchTerm))
             .slice(0, 50)
-            .map(item => item.college); // Return only the string names to the app
+            .map(item => {
+                let name = item.college;
+
+                // 1. Remove the "(Id: ...)" part at the end
+                name = name.replace(/\s*\(Id:.*?\)\s*/g, '');
+
+                // 2. Remove typical "Society/Trust" introductions
+                // This targets phrases like "Sinhgad Technical Education Societys"
+                const introPatterns = [
+                    /.*?\sEducation\sSocietys?\s/i,
+                    /.*?\sEducational\sSocietys?\s/i,
+                    /.*?\sShikshan\sSansthas?\s/i,
+                    /.*?\sTrusts?\s/i
+                ];
+                
+                introPatterns.forEach(pattern => {
+                    name = name.replace(pattern, '');
+                });
+
+                // 3. Clean up the address/location
+                // If it contains a comma, take the core name and the last location part (usually the city)
+                const parts = name.split(',');
+                if (parts.length > 1) {
+                    const coreName = parts[0].trim();
+                    const city = parts[parts.length - 1].trim();
+                    
+                    // Only combine if the city isn't already in the core name
+                    if (!coreName.toUpperCase().includes(city.toUpperCase())) {
+                        name = `${coreName}, ${city}`;
+                    } else {
+                        name = coreName;
+                    }
+                }
+
+                return name.trim();
+            });
 
         res.json({ success: true, colleges: results });
     } catch (error) {
