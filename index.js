@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const admin = require("firebase-admin");
 const axios = require('axios');
 const { parsePhoneNumberFromString } = require('libphonenumber-js');
+const collegesData = require('./colleges.json');
 
 let serviceAccount;
 
@@ -447,35 +448,26 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-router.get('/api/search-colleges', async (req, res) => {
+router.get('/api/search-colleges', (req, res) => {
     const { query } = req.query;
-    const API_KEY = "579b464db66ec23bdd000001ee49dade0883483374e82ce58f242557";
-    // Using the AISHE 2021-22 Directory Resource ID (Most stable)
-    const RESOURCE_ID = "e2954f67-824e-4861-a83d-6b58e72ef37e";
 
     if (!query || query.length < 3) {
         return res.json({ success: true, colleges: [] });
     }
 
     try {
-        // Try searching with a wildcard and a limit. 
-        // Note: Some versions of this API use 'name' instead of 'college_name'
-        const url = `https://api.data.gov.in/resource/${RESOURCE_ID}?api-key=${API_KEY}&format=json&filters[college_name]=*${encodeURIComponent(query)}*&limit=20`;
+        const searchTerm = query.toUpperCase();
         
-        console.log("Fetching from Gov API:", url); // For Cloud Logs
-        const response = await axios.get(url);
-        
-        let colleges = [];
-        if (response.data && response.data.records) {
-            colleges = response.data.records.map(record => record.college_name || record.name);
-        }
+        // Use .college to access the institution name in each object
+        const results = collegesData
+            .filter(item => item.college && item.college.toUpperCase().includes(searchTerm))
+            .slice(0, 50)
+            .map(item => item.college); // Return only the string names to the app
 
-        // If results are empty, the filter might be case-sensitive. 
-        // We return whatever we found.
-        res.json({ success: true, colleges: colleges });
+        res.json({ success: true, colleges: results });
     } catch (error) {
-        console.error("Data.gov.in Error:", error.response ? error.response.data : error.message);
-        res.status(500).json({ success: false, message: "External API error" });
+        console.error("Local search error:", error);
+        res.status(500).json({ success: false, message: "Search failed" });
     }
 });
 
