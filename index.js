@@ -3481,7 +3481,8 @@ app.get('/checkChatRequest', async (req, res) => {
     try {
         const [rows] = await db.execute(
             `SELECT initial_message FROM chat_requests 
-             WHERE sender_id = ? AND receiver_id = ? AND status IN ('pending','rejected'),
+             WHERE sender_id = ? AND receiver_id = ? AND status 
+IN ('pending','rejected')`,
             [senderId, receiverId]
         );
         
