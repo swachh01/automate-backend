@@ -3388,18 +3388,18 @@ app.post('/sendChatRequest', async (req, res) => {
     }
 
     try {
-        // Generate a clean timestamp: "Apr 01, 17:05"
+        // Force the timezone to IST regardless of where the server is hosted
         const now = new Date();
-        const timestamp = now.toLocaleString('en-US', { 
+        const timestamp = now.toLocaleString('en-IN', { 
+            timeZone: 'Asia/Kolkata',
             month: 'short', 
             day: '2-digit', 
             hour: '2-digit', 
             minute: '2-digit', 
-            hour12: false 
+            hour12: false // Set to true if you want 11:43 PM format
         });
 
-        // Format the message snippet with a separator line and timestamp
-        // The ──────────────── is a special character that creates a nice thin line
+        // The ──────────────── line break helps with the "separate lines" requirement
         const formattedEntry = `[${timestamp}]\n${message}\n────────────────`;
 
         const sql = `
@@ -3412,7 +3412,6 @@ app.post('/sendChatRequest', async (req, res) => {
         
         await db.execute(sql, [senderId, receiverId, formattedEntry]);
 
-        // Emit to the receiver so their list/badge updates
         io.to(`chat_${receiverId}`).emit('new_chat_request', { 
             senderId, 
             message: formattedEntry 
@@ -3420,7 +3419,7 @@ app.post('/sendChatRequest', async (req, res) => {
 
         res.json({ success: true });
     } catch (err) {
-        console.error("SQL Error in sendChatRequest:", err);
+        console.error("SQL Error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
