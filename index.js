@@ -3388,25 +3388,39 @@ app.post('/sendChatRequest', async (req, res) => {
     }
 
     try {
-        // Use VALUES(initial_message) to append ONLY the new incoming snippet
+        // Generate a clean timestamp: "Apr 01, 17:05"
+        const now = new Date();
+        const timestamp = now.toLocaleString('en-US', { 
+            month: 'short', 
+            day: '2-digit', 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            hour12: false 
+        });
+
+        // Format the message snippet with a separator line and timestamp
+        // The ──────────────── is a special character that creates a nice thin line
+        const formattedEntry = `[${timestamp}]\n${message}\n────────────────`;
+
         const sql = `
             INSERT INTO chat_requests (sender_id, receiver_id, status, initial_message) 
             VALUES (?, ?, 'pending', ?) 
             ON DUPLICATE KEY UPDATE 
-                initial_message = CONCAT(initial_message, '\n', VALUES(initial_message)),
+                initial_message = CONCAT(initial_message, '\n\n', VALUES(initial_message)),
                 status = 'pending'
         `;
         
-        await db.execute(sql, [senderId, receiverId, message]);
+        await db.execute(sql, [senderId, receiverId, formattedEntry]);
 
+        // Emit to the receiver so their list/badge updates
         io.to(`chat_${receiverId}`).emit('new_chat_request', { 
             senderId, 
-            message // This should ideally be the full new concatenated string if you want real-time updates
+            message: formattedEntry 
         });
 
         res.json({ success: true });
     } catch (err) {
-        console.error("SQL Error:", err);
+        console.error("SQL Error in sendChatRequest:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
