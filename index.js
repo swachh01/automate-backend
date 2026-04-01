@@ -1646,7 +1646,7 @@ app.get('/getChatUsers', async (req, res) => {
                 LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
                 WHERE
                     (m.sender_id = ? OR m.receiver_id = ?)
-                    AND m.sender_id != m.receiver_id -- CRITICAL: Filter out self-chats
+                    AND m.sender_id != m.receiver_id -- GUARD 1: Subquery filter
                     AND hm.message_id IS NULL
                     AND NOT EXISTS (
                         SELECT 1 FROM chat_requests cr 
@@ -1706,7 +1706,8 @@ app.get('/getChatUsers', async (req, res) => {
             LEFT JOIN users u_partner ON lc.chat_type = 'individual' AND lc.chat_id = u_partner.id
             LEFT JOIN \`group_table\` gt ON lc.chat_type = 'group' AND lc.chat_id = gt.group_id
             LEFT JOIN users u_sender ON lc.last_sender_id = u_sender.id
-            WHERE lc.rn = 1
+            WHERE lc.rn = 1 
+              AND lc.chat_id != ? -- GUARD 2: Final query filter
             ORDER BY lc.last_timestamp DESC;
         `;
 
@@ -1716,7 +1717,8 @@ app.get('/getChatUsers', async (req, res) => {
             currentUserId, 
             currentUserId, currentUserId, 
             currentUserId, 
-            currentUserId, currentUserId 
+            currentUserId, currentUserId,
+            currentUserId // Extra param for Guard 2
         ];
 
         const [rows] = await db.query(combinedQuery, params);
@@ -3410,10 +3412,9 @@ app.post('/sendChatRequest', async (req, res) => {
 });
 
 app.post('/handleChatRequest', async (req, res) => {
-    const { userId, otherUserId, action } = req.body; // userId is the one accepting (Receiver)
+    const { userId, otherUserId, action } = req.body; // userId is the Receiver (accepting)
     try {
         if (action === 'accept') {
-            // 1. Get the original message before updating status
             const [request] = await db.execute(
                 `SELECT initial_message, sender_id, receiver_id 
                  FROM chat_requests 
@@ -3424,16 +3425,22 @@ app.post('/handleChatRequest', async (req, res) => {
             if (request.length > 0) {
                 const originalSender = request[0].sender_id;
                 const originalReceiver = request[0].receiver_id;
+
+                // --- CRITICAL GUARD: Prevent self-chat creation ---
+                if (originalSender === originalReceiver) {
+                    await db.execute(`DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
+                    return res.json({ success: true, message: "Self-request ignored" });
+                }
+
+                const { encrypt } = require('./cryptoHelper');
                 const encrypted = encrypt(request[0].initial_message);
 
-                // 2. Insert into messages preserving the original direction
                 await db.execute(
                     `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) 
                      VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, 
                     [originalSender, originalReceiver, encrypted]
                 );
 
-                // 3. Mark request as accepted
                 await db.execute(
                     `UPDATE chat_requests SET status = 'accepted' 
                      WHERE sender_id = ? AND receiver_id = ?`, 
