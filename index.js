@@ -1719,11 +1719,12 @@ app.get('/getChatUsers', async (req, res) => {
             currentUserId, currentUserId 
         ];
 
-        const [rows] = await db.execute(combinedQuery, params);
+        const [rows] = await db.query(combinedQuery, params);
 
         const chatListItems = rows.map(row => {
             let lastMessage = "";
             try { 
+                const { decrypt } = require('./cryptoHelper');
                 lastMessage = row.last_message_content ? decrypt(row.last_message_content) : ""; 
             } catch (e) { 
                 lastMessage = "[Encrypted Message]"; 
@@ -1751,6 +1752,7 @@ app.get('/getChatUsers', async (req, res) => {
 
             return {
                 isGroup: isGroup,
+                chatType: row.chat_type,
                 chatId: chatId,
                 chatName: chatName,
                 lastMessage: lastMessage,
