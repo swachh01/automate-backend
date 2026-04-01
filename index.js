@@ -3462,8 +3462,12 @@ app.post('/handleChatRequest', async (req, res) => {
             }
             res.json({ success: true });
         } else {
-            await db.execute(`DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
-            res.json({ success: true });
+            await db.execute(
+                `UPDATE chat_requests SET status = 'rejected' 
+                 WHERE sender_id = ? AND receiver_id = ?`, 
+                [otherUserId, userId]
+            );
+            res.json({ success: true, message: "Declined" });
         }
     } catch (err) {
         console.error("Handle Request Error:", err);
@@ -3477,7 +3481,7 @@ app.get('/checkChatRequest', async (req, res) => {
     try {
         const [rows] = await db.execute(
             `SELECT initial_message FROM chat_requests 
-             WHERE sender_id = ? AND receiver_id = ? AND status = 'pending'`,
+             WHERE sender_id = ? AND receiver_id = ? AND status IN ('pending','rejected'),
             [senderId, receiverId]
         );
         
