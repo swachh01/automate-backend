@@ -3425,35 +3425,42 @@ app.post('/sendChatRequest', async (req, res) => {
 });
 
 app.post('/handleChatRequest', async (req, res) => {
-    const { userId, otherUserId, action } = req.body; // userId is the Receiver (accepting)
+    const { userId, otherUserId, action } = req.body; // userId = Receiver
     try {
         if (action === 'accept') {
             const [request] = await db.execute(
                 `SELECT initial_message, sender_id, receiver_id 
                  FROM chat_requests 
-                 WHERE (sender_id = ? AND receiver_id = ?)`, 
+                 WHERE sender_id = ? AND receiver_id = ?`, 
                 [otherUserId, userId]
             );
 
             if (request.length > 0) {
                 const originalSender = request[0].sender_id;
                 const originalReceiver = request[0].receiver_id;
+                let rawMessage = request[0].initial_message;
 
-                // --- CRITICAL GUARD: Prevent self-chat creation ---
-                if (originalSender === originalReceiver) {
-                    await db.execute(`DELETE FROM chat_requests WHERE sender_id = ? AND receiver_id = ?`, [otherUserId, userId]);
-                    return res.json({ success: true, message: "Self-request ignored" });
-                }
+                // --- CLEANING LOGIC ---
+                // 1. Remove the timestamps like [Apr 01, 17:05]
+                // 2. Remove the separator lines ────────────────
+                // 3. Trim extra newlines
+                let cleanMessage = rawMessage
+                    .replace(/\[.*?\d{2}:\d{2}\]/g, '') // Removes [Date, Time]
+                    .replace(/────────────────/g, '')    // Removes the lines
+                    .replace(/\n\s*\n/g, '\n')          // Collapses multiple newlines into one
+                    .trim();
 
                 const { encrypt } = require('./cryptoHelper');
-                const encrypted = encrypt(request[0].initial_message);
+                const encrypted = encrypt(cleanMessage);
 
+                // Insert into main messages table
                 await db.execute(
                     `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status) 
                      VALUES (?, ?, ?, UTC_TIMESTAMP(), 0)`, 
                     [originalSender, originalReceiver, encrypted]
                 );
 
+                // Mark request as accepted
                 await db.execute(
                     `UPDATE chat_requests SET status = 'accepted' 
                      WHERE sender_id = ? AND receiver_id = ?`, 
@@ -3462,12 +3469,13 @@ app.post('/handleChatRequest', async (req, res) => {
             }
             res.json({ success: true });
         } else {
+            // Reject logic remains the same (Soft delete/status update)
             await db.execute(
                 `UPDATE chat_requests SET status = 'rejected' 
                  WHERE sender_id = ? AND receiver_id = ?`, 
                 [otherUserId, userId]
             );
-            res.json({ success: true, message: "Declined" });
+            res.json({ success: true });
         }
     } catch (err) {
         console.error("Handle Request Error:", err);
@@ -3475,7 +3483,6 @@ app.post('/handleChatRequest', async (req, res) => {
     }
 });
 
-// 1. Fetch existing request for the sender to see their old messages
 app.get('/checkChatRequest', async (req, res) => {
     const { senderId, receiverId } = req.query;
     try {
