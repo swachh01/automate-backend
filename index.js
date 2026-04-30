@@ -451,7 +451,7 @@ app.get('/debug/routes', (req, res) => {
 router.get('/api/search-colleges', (req, res) => {
     const { query } = req.query;
 
-    if (!query || query.length < 3) {
+    if (!query || query.length < 2) { // Changed to 2 for better responsiveness
         return res.json({ success: true, colleges: [] });
     }
 
@@ -459,43 +459,24 @@ router.get('/api/search-colleges', (req, res) => {
         const searchTerm = query.toUpperCase();
         
         const results = collegesData
-            .filter(item => item.college && item.college.toUpperCase().includes(searchTerm))
+            .filter(item => {
+                const nameMatch = item.college && item.college.toUpperCase().includes(searchTerm);
+                const aliasMatch = item.aliases && item.aliases.some(alias => alias.toUpperCase().includes(searchTerm));
+                return nameMatch || aliasMatch;
+            })
             .slice(0, 50)
             .map(item => {
                 let name = item.college;
+                name = name.replace(/\s*\(Id:.*?\)\s*/g, ''); // Clean ID
 
-                // 1. Remove the "(Id: ...)" part at the end
-                name = name.replace(/\s*\(Id:.*?\)\s*/g, '');
+                // Clean typical Society/Trust names
+                const introPatterns = [/.*?\sEducation\sSocietys?\s/i, /.*?\sEducational\sSocietys?\s/i, /.*?\sShikshan\sSansthas?\s/i, /.*?\sTrusts?\s/i];
+                introPatterns.forEach(pattern => name = name.replace(pattern, ''));
 
-                // 2. Remove typical "Society/Trust" introductions
-                // This targets phrases like "Sinhgad Technical Education Societys"
-                const introPatterns = [
-                    /.*?\sEducation\sSocietys?\s/i,
-                    /.*?\sEducational\sSocietys?\s/i,
-                    /.*?\sShikshan\sSansthas?\s/i,
-                    /.*?\sTrusts?\s/i
-                ];
-                
-                introPatterns.forEach(pattern => {
-                    name = name.replace(pattern, '');
-                });
-
-                // 3. Clean up the address/location
-                // If it contains a comma, take the core name and the last location part (usually the city)
-                const parts = name.split(',');
-                if (parts.length > 1) {
-                    const coreName = parts[0].trim();
-                    const city = parts[parts.length - 1].trim();
-                    
-                    // Only combine if the city isn't already in the core name
-                    if (!coreName.toUpperCase().includes(city.toUpperCase())) {
-                        name = `${coreName}, ${city}`;
-                    } else {
-                        name = coreName;
-                    }
-                }
-
-                return name.trim();
+                return {
+                    name: name.trim(),
+                    location: `${item.district}, ${item.state}`
+                };
             });
 
         res.json({ success: true, colleges: results });
