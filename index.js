@@ -458,7 +458,6 @@ router.get('/api/search-colleges', (req, res) => {
     try {
         const searchTerm = query.toUpperCase().trim();
         
-        // 1. Filter the data into priority tiers
         let exactAliasMatches = [];
         let partialAliasMatches = [];
         let nameMatches = [];
@@ -470,16 +469,15 @@ router.get('/api/search-colleges', (req, res) => {
             const state = (item.state || "").toUpperCase();
             const aliases = item.aliases || [];
 
-            // Tier 1: Exact Alias Match (e.g., "SIT")
+            // Tier 1: Exact Alias Match
             if (aliases.some(al => al.toUpperCase() === searchTerm)) {
                 exactAliasMatches.push(item);
             } 
-            // Tier 2: Partial Alias Match (e.g., "SITS")
+            // Tier 2: Partial Alias Match
             else if (aliases.some(al => al.toUpperCase().includes(searchTerm))) {
                 partialAliasMatches.push(item);
             }
-            // Tier 3: Search term is anywhere in the full college name string
-            // This catches "Lonavala" because it's inside the college name field
+            // Tier 3: Search term inside the full name string (Catching "Lonavala")
             else if (collegeName.includes(searchTerm)) {
                 nameMatches.push(item);
             }
@@ -489,7 +487,6 @@ router.get('/api/search-colleges', (req, res) => {
             }
         });
 
-        // Combine results in priority order
         const combinedResults = [
             ...exactAliasMatches,
             ...partialAliasMatches,
@@ -497,12 +494,11 @@ router.get('/api/search-colleges', (req, res) => {
             ...locationMatches
         ];
 
-        // 2. Map to professional format and limit to 50 results
         const finalResults = combinedResults.slice(0, 50).map(item => {
             let name = item.college;
             
-            // Professional Cleaning: Remove ID and common prefixes
-            name = name.replace(/\s*\(Id:.*?\)\s*/g, '');[cite: 3]
+            // Professional Cleaning
+            name = name.replace(/\s*\(Id:.*?\)\s*/g, '');
             const introPatterns = [
                 /.*?\sEducation\sSocietys?\s/i, 
                 /.*?\sEducational\sSocietys?\s/i, 
@@ -513,7 +509,7 @@ router.get('/api/search-colleges', (req, res) => {
 
             return {
                 name: name.trim(),
-                location: `${item.district}, ${item.state}`[cite: 1, 3]
+                location: `${item.district}, ${item.state}`
             };
         });
 
