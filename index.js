@@ -522,6 +522,24 @@ router.post('/api/add-college', async (req, res) => {
     }
 });
 
+// Add this to your router section in index_2.js
+router.get('/api/google-places-autocomplete', async (req, res) => {
+    const { input } = req.query;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY; // Ensure this is in your Cloud Run variables[cite: 2]
+    
+    if (!input) return res.json({ predictions: [] });
+
+    try {
+        // We filter by 'school' and 'university' types to keep results relevant to Reloaded Automate
+        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&types=school|university&key=${apiKey}`;
+        const response = await axios.get(url);
+        res.json(response.data);
+    } catch (error) {
+        console.error("Google Proxy Error:", error.message);
+        res.status(500).json({ success: false });
+    }
+});
+
 router.get('/api/search-colleges', (req, res) => {
     const { query } = req.query;
 
