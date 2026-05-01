@@ -451,45 +451,38 @@ app.get('/debug/routes', (req, res) => {
 });
 
 router.post('/api/add-college', async (req, res) => {
-    // Sanitization: Allow only alphanumeric, spaces, and basic punctuation to prevent command injection
     const sanitize = (str) => str ? str.replace(/[^a-zA-Z0-9 ,.()]/g, "").trim() : "";
     
-    const name = sanitize(req.body.name);
-    const location = sanitize(req.body.location);
+    const university = sanitize(req.body.university);
+    const college = sanitize(req.body.college);
+    const fullAddress = sanitize(req.body.fullAddress);
     const filePath = path.join(__dirname, 'colleges.json');
 
-    if (!name || !location) {
-        return res.status(400).json({ success: false, message: "Valid name and location are required." });
-    }
-
     try {
-        // Read existing data
         let colleges = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
-        // 1. Check for duplicates (case-insensitive)
-        const exists = colleges.some(c => c.college.toLowerCase() === name.toLowerCase());
-        if (exists) {
-            return res.status(400).json({ success: false, message: "College already exists!" });
+        if (colleges.some(c => c.college.toLowerCase() === college.toLowerCase())) {
+            return res.status(400).json({ success: false, message: "Already exists" });
         }
 
-        // 2. Parse location and add new entry[cite: 1]
-        const parts = location.split(',').map(s => s.trim());
-        const district = parts[0] || "";
-        const state = parts[1] || "";
+        // Parsing Google address: "College Name, District, State, Country"
+        const addressParts = fullAddress.split(',').map(p => p.trim());
+        // Typically, for Indian addresses: [College, District, State, Country]
+        // We grab the 2nd to last for state and 3rd to last for district
+        const state = addressParts.length >= 2 ? addressParts[addressParts.length - 2] : "Unknown";
+        const district = addressParts.length >= 3 ? addressParts[addressParts.length - 3] : "Unknown";
 
         colleges.push({
-            college: name,
-            district: district,
+            university: university,
+            college: college,
+            college_type: "Added college",
             state: state,
-            aliases: [] // generateAliases.js will populate this[cite: 1]
+            district: district,
+            aliases: [] // Handled by generateAliases.js
         });
 
-        // Write update to local disk[cite: 1]
         fs.writeFileSync(filePath, JSON.stringify(colleges, null, 2));
 
-        // 3. Secure Git Sync[cite: 1]
-        // We use environment variables for the GITHUB_TOKEN to avoid hardcoding credentials[cite: 1]
-        // The command is chained to ensure each step succeeds before moving to the next[cite: 1]
         const githubToken = process.env.GITHUB_TOKEN;
         const repoUrl = `https://x-access-token:${githubToken}@github.com/swarayadav/reloaded-automate-backend.git`;
 
@@ -498,31 +491,21 @@ router.post('/api/add-college', async (req, res) => {
             `git config user.email "automate-bot@reloaded.com"`,
             `git config user.name "Reloaded Automate Bot"`,
             `git add colleges.json`,
-            `git commit -m "Auto-add college: ${name}"`,
+            `git commit -m "Auto-add: ${college}"`,
             `git remote set-url origin ${repoUrl}`,
             `git push origin main`
         ].join(' && ');
 
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`Git Sync Error: ${error.message}`);
-                // Return success true because the local file was updated, but warn about the sync[cite: 1]
-                return res.json({ 
-                    success: true, 
-                    message: "College added locally, but cloud sync failed. Check server logs." 
-                });
-            }
-            console.log(`Git Sync Success: ${stdout}`);
-            res.json({ success: true, message: "College added, aliases generated, and pushed to Git!" });
+        exec(command, (error) => {
+            if (error) return res.json({ success: true, message: "Added locally, push failed" });
+            res.json({ success: true, message: "Synced successfully" });
         });
 
     } catch (error) {
-        console.error("Critical Error in /api/add-college:", error);
-        res.status(500).json({ success: false, message: "Internal server error." });
+        res.status(500).json({ success: false });
     }
 });
 
-// Add this to your router section in index_2.js
 router.get('/api/google-places-autocomplete', async (req, res) => {
     const { input } = req.query;
     const apiKey = process.env.GOOGLE_MAPS_API_KEY; // Ensure this is in your Cloud Run variables[cite: 2]
