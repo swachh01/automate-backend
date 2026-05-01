@@ -458,44 +458,58 @@ router.get('/api/search-colleges', (req, res) => {
     try {
         const searchTerm = query.toUpperCase().trim();
         
-        const results = collegesData
-            .filter(item => {
-                // 1. Check for Exact Alias Match (e.g., "SIT" matches ["SIT", "SITC"])
-                const aliasMatch = item.aliases && item.aliases.some(alias => alias.toUpperCase() === searchTerm);
-                
-                // 2. Check if the Full Name starts with the query (High priority)
-                const nameStartsWith = item.college && item.college.toUpperCase().startsWith(searchTerm);
+        // 1. Filter the data
+        let filteredResults = collegesData.filter(item => {
+            const nameMatch = item.college && item.college.toUpperCase().includes(searchTerm);
+            const aliasMatch = item.aliases && item.aliases.some(alias => alias.toUpperCase().includes(searchTerm));
+            return nameMatch || aliasMatch;
+        });
 
-                // 3. Check if the query is contained anywhere in the name
-                const nameContains = item.college && item.college.toUpperCase().includes(searchTerm);
+        // 2. Sort the data with Priority
+        filteredResults.sort((a, b) => {
+            // Check if 'a' has an alias that matches the search term exactly
+            const aExactAlias = a.aliases && a.aliases.some(al => al.toUpperCase() === searchTerm);
+            // Check if 'b' has an alias that matches the search term exactly
+            const bExactAlias = b.aliases && b.aliases.some(al => al.toUpperCase() === searchTerm);
 
-                return aliasMatch || nameStartsWith || nameContains;
-            })
-            // Sort results to put Alias matches and StartsWith matches at the top
-            .sort((a, b) => {
-                const aAlias = a.aliases && a.aliases.some(al => al.toUpperCase() === searchTerm);
-                const bAlias = b.aliases && b.aliases.some(al => al.toUpperCase() === searchTerm);
-                if (aAlias && !bAlias) return -1;
-                if (!aAlias && bAlias) return 1;
-                return 0;
-            })
-            .slice(0, 50)
-            .map(item => {
-                let name = item.college;
-                // Clean typical Society/Trust names for a professional look
-                name = name.replace(/\s*\(Id:.*?\)\s*/g, ''); 
-                const introPatterns = [/.*?\sEducation\sSocietys?\s/i, /.*?\sEducational\sSocietys?\s/i, /.*?\sShikshan\sSansthas?\s/i, /.*?\sTrusts?\s/i];
-                introPatterns.forEach(pattern => name = name.replace(pattern, ''));
+            // Priority 1: Exact Alias matches (e.g., SIT)
+            if (aExactAlias && !bExactAlias) return -1;
+            if (!aExactAlias && bExactAlias) return 1;
 
-                return {
-                    name: name.trim(),
-                    location: `${item.district}, ${item.state}`
-                };
-            });
+            // Priority 2: Alias starts with search term (e.g., SITS)
+            const aStartAlias = a.aliases && a.aliases.some(al => al.toUpperCase().startsWith(searchTerm));
+            const bStartAlias = b.aliases && b.aliases.some(al => al.toUpperCase().startsWith(searchTerm));
+            if (aStartAlias && !bStartAlias) return -1;
+            if (!aStartAlias && bStartAlias) return 1;
 
-        res.json({ success: true, colleges: results });
+            // Priority 3: College Name starts with search term
+            const aNameStarts = a.college.toUpperCase().startsWith(searchTerm);
+            const bNameStarts = b.college.toUpperCase().startsWith(searchTerm);
+            if (aNameStarts && !bNameStarts) return -1;
+            if (!aNameStarts && bNameStarts) return 1;
+
+            // Default: Keep original order for general "includes" matches
+            return 0;
+        });
+
+        // 3. Map to professional format and limit to 50 results
+        const finalResults = filteredResults.slice(0, 50).map(item => {
+            let name = item.college;
+            name = name.replace(/\s*\(Id:.*?\)\s*/g, ''); // Clean ID[cite: 3]
+            
+            // Clean common trust/society headers[cite: 3]
+            const introPatterns = [/.*?\sEducation\sSocietys?\s/i, /.*?\sEducational\sSocietys?\s/i, /.*?\sShikshan\sSansthas?\s/i, /.*?\sTrusts?\s/i];
+            introPatterns.forEach(pattern => name = name.replace(pattern, ''));
+
+            return {
+                name: name.trim(),
+                location: `${item.district}, ${item.state}` // Matches your UI requirement[cite: 1, 3]
+            };
+        });
+
+        res.json({ success: true, colleges: finalResults });
     } catch (error) {
-        console.error("Local search error:", error);
+        console.error("Search error:", error);
         res.status(500).json({ success: false, message: "Search failed" });
     }
 });
