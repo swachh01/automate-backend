@@ -1,6 +1,4 @@
 require("dotenv").config();
-const sanitize = (str) => str.replace(/[^a-zA-Z0-9 ,.()]/g, "");
-const { exec } = require('child_process');
 const activeChatSessions = new Map();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
@@ -8,7 +6,6 @@ const bcrypt = require('bcryptjs');
 const admin = require("firebase-admin");
 const axios = require('axios');
 const { parsePhoneNumberFromString } = require('libphonenumber-js');
-const collegesData = require('./colleges.json');
 
 let serviceAccount;
 
@@ -450,61 +447,6 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-router.post('/api/add-college', async (req, res) => {
-    const sanitize = (str) => str ? str.replace(/[^a-zA-Z0-9 ,.()]/g, "").trim() : "";
-    
-    const university = sanitize(req.body.university);
-    const college = sanitize(req.body.college);
-    const fullAddress = sanitize(req.body.fullAddress);
-    const filePath = path.join(__dirname, 'colleges.json');
-
-    try {
-        let colleges = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-
-        if (colleges.some(c => c.college.toLowerCase() === college.toLowerCase())) {
-            return res.status(400).json({ success: false, message: "Already exists" });
-        }
-
-        // Parsing Google address: "College Name, District, State, Country"
-        const addressParts = fullAddress.split(',').map(p => p.trim());
-        // Typically, for Indian addresses: [College, District, State, Country]
-        // We grab the 2nd to last for state and 3rd to last for district
-        const state = addressParts.length >= 2 ? addressParts[addressParts.length - 2] : "Unknown";
-        const district = addressParts.length >= 3 ? addressParts[addressParts.length - 3] : "Unknown";
-
-        colleges.push({
-            university: university,
-            college: college,
-            college_type: "Added college",
-            state: state,
-            district: district,
-            aliases: [] // Handled by generateAliases.js
-        });
-
-        fs.writeFileSync(filePath, JSON.stringify(colleges, null, 2));
-
-        const githubToken = process.env.GITHUB_TOKEN;
-        const repoUrl = `https://x-access-token:${githubToken}@github.com/swarayadav/reloaded-automate-backend.git`;
-
-        const command = [
-            `node generateAliases.js`,
-            `git config user.email "automate-bot@reloaded.com"`,
-            `git config user.name "Reloaded Automate Bot"`,
-            `git add colleges.json`,
-            `git commit -m "Auto-add: ${college}"`,
-            `git remote set-url origin ${repoUrl}`,
-            `git push origin main`
-        ].join(' && ');
-
-        exec(command, (error) => {
-            if (error) return res.json({ success: true, message: "Added locally, push failed" });
-            res.json({ success: true, message: "Synced successfully" });
-        });
-
-    } catch (error) {
-        res.status(500).json({ success: false });
-    }
-});
 
 router.get('/api/google-places-autocomplete', async (req, res) => {
     const { input } = req.query;
@@ -523,77 +465,6 @@ router.get('/api/google-places-autocomplete', async (req, res) => {
     }
 });
 
-router.get('/api/search-colleges', (req, res) => {
-    const { query } = req.query;
-
-    if (!query || query.length < 2) {
-        return res.json({ success: true, colleges: [] });
-    }
-
-    try {
-        const searchTerm = query.toUpperCase().trim();
-        
-        let exactAliasMatches = [];
-        let partialAliasMatches = [];
-        let nameMatches = [];
-        let locationMatches = [];
-
-        collegesData.forEach(item => {
-            const collegeName = (item.college || "").toUpperCase();
-            const district = (item.district || "").toUpperCase();
-            const state = (item.state || "").toUpperCase();
-            const aliases = item.aliases || [];
-
-            // Tier 1: Exact Alias Match
-            if (aliases.some(al => al.toUpperCase() === searchTerm)) {
-                exactAliasMatches.push(item);
-            } 
-            // Tier 2: Partial Alias Match
-            else if (aliases.some(al => al.toUpperCase().includes(searchTerm))) {
-                partialAliasMatches.push(item);
-            }
-            // Tier 3: Search term inside the full name string (Catching "Lonavala")
-            else if (collegeName.includes(searchTerm)) {
-                nameMatches.push(item);
-            }
-            // Tier 4: Fallback to official location fields
-            else if (district.includes(searchTerm) || state.includes(searchTerm)) {
-                locationMatches.push(item);
-            }
-        });
-
-        const combinedResults = [
-            ...exactAliasMatches,
-            ...partialAliasMatches,
-            ...nameMatches,
-            ...locationMatches
-        ];
-
-        const finalResults = combinedResults.slice(0, 50).map(item => {
-            let name = item.college;
-            
-            // Professional Cleaning
-            name = name.replace(/\s*\(Id:.*?\)\s*/g, '');
-            const introPatterns = [
-                /.*?\sEducation\sSocietys?\s/i, 
-                /.*?\sEducational\sSocietys?\s/i, 
-                /.*?\sShikshan\sSansthas?\s/i, 
-                /.*?\sTrusts?\s/i
-            ];
-            introPatterns.forEach(pattern => name = name.replace(pattern, ''));
-
-            return {
-                name: name.trim(),
-                location: `${item.district}, ${item.state}`
-            };
-        });
-
-        res.json({ success: true, colleges: finalResults });
-    } catch (error) {
-        console.error("Search error:", error);
-        res.status(500).json({ success: false, message: "Search failed" });
-    }
-});
 
 // ================= CREATE ACCOUNT =================
 
