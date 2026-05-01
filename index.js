@@ -458,52 +458,62 @@ router.get('/api/search-colleges', (req, res) => {
     try {
         const searchTerm = query.toUpperCase().trim();
         
-        // 1. Filter the data
-        let filteredResults = collegesData.filter(item => {
-            const nameMatch = item.college && item.college.toUpperCase().includes(searchTerm);
-            const aliasMatch = item.aliases && item.aliases.some(alias => alias.toUpperCase().includes(searchTerm));
-            return nameMatch || aliasMatch;
+        // 1. Filter the data into priority tiers
+        let exactAliasMatches = [];
+        let partialAliasMatches = [];
+        let nameMatches = [];
+        let locationMatches = [];
+
+        collegesData.forEach(item => {
+            const collegeName = (item.college || "").toUpperCase();
+            const district = (item.district || "").toUpperCase();
+            const state = (item.state || "").toUpperCase();
+            const aliases = item.aliases || [];
+
+            // Tier 1: Exact Alias Match (e.g., "SIT")
+            if (aliases.some(al => al.toUpperCase() === searchTerm)) {
+                exactAliasMatches.push(item);
+            } 
+            // Tier 2: Partial Alias Match (e.g., "SITS")
+            else if (aliases.some(al => al.toUpperCase().includes(searchTerm))) {
+                partialAliasMatches.push(item);
+            }
+            // Tier 3: Search term is anywhere in the full college name string
+            // This catches "Lonavala" because it's inside the college name field
+            else if (collegeName.includes(searchTerm)) {
+                nameMatches.push(item);
+            }
+            // Tier 4: Fallback to official location fields
+            else if (district.includes(searchTerm) || state.includes(searchTerm)) {
+                locationMatches.push(item);
+            }
         });
 
-        // 2. Sort the data with Priority
-        filteredResults.sort((a, b) => {
-            // Check if 'a' has an alias that matches the search term exactly
-            const aExactAlias = a.aliases && a.aliases.some(al => al.toUpperCase() === searchTerm);
-            // Check if 'b' has an alias that matches the search term exactly
-            const bExactAlias = b.aliases && b.aliases.some(al => al.toUpperCase() === searchTerm);
+        // Combine results in priority order
+        const combinedResults = [
+            ...exactAliasMatches,
+            ...partialAliasMatches,
+            ...nameMatches,
+            ...locationMatches
+        ];
 
-            // Priority 1: Exact Alias matches (e.g., SIT)
-            if (aExactAlias && !bExactAlias) return -1;
-            if (!aExactAlias && bExactAlias) return 1;
-
-            // Priority 2: Alias starts with search term (e.g., SITS)
-            const aStartAlias = a.aliases && a.aliases.some(al => al.toUpperCase().startsWith(searchTerm));
-            const bStartAlias = b.aliases && b.aliases.some(al => al.toUpperCase().startsWith(searchTerm));
-            if (aStartAlias && !bStartAlias) return -1;
-            if (!aStartAlias && bStartAlias) return 1;
-
-            // Priority 3: College Name starts with search term
-            const aNameStarts = a.college.toUpperCase().startsWith(searchTerm);
-            const bNameStarts = b.college.toUpperCase().startsWith(searchTerm);
-            if (aNameStarts && !bNameStarts) return -1;
-            if (!aNameStarts && bNameStarts) return 1;
-
-            // Default: Keep original order for general "includes" matches
-            return 0;
-        });
-
-        // 3. Map to professional format and limit to 50 results
-        const finalResults = filteredResults.slice(0, 50).map(item => {
+        // 2. Map to professional format and limit to 50 results
+        const finalResults = combinedResults.slice(0, 50).map(item => {
             let name = item.college;
-            name = name.replace(/\s*\(Id:.*?\)\s*/g, ''); // Clean ID[cite: 3]
             
-            // Clean common trust/society headers[cite: 3]
-            const introPatterns = [/.*?\sEducation\sSocietys?\s/i, /.*?\sEducational\sSocietys?\s/i, /.*?\sShikshan\sSansthas?\s/i, /.*?\sTrusts?\s/i];
+            // Professional Cleaning: Remove ID and common prefixes
+            name = name.replace(/\s*\(Id:.*?\)\s*/g, '');[cite: 3]
+            const introPatterns = [
+                /.*?\sEducation\sSocietys?\s/i, 
+                /.*?\sEducational\sSocietys?\s/i, 
+                /.*?\sShikshan\sSansthas?\s/i, 
+                /.*?\sTrusts?\s/i
+            ];
             introPatterns.forEach(pattern => name = name.replace(pattern, ''));
 
             return {
                 name: name.trim(),
-                location: `${item.district}, ${item.state}` // Matches your UI requirement[cite: 1, 3]
+                location: `${item.district}, ${item.state}`[cite: 1, 3]
             };
         });
 
