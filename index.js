@@ -1,4 +1,6 @@
 require("dotenv").config();
+const sanitize = (str) => str.replace(/[^a-zA-Z0-9 ,.()]/g, "");
+const { exec } = require('child_process');
 const activeChatSessions = new Map();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
@@ -446,6 +448,78 @@ app.get('/debug/routes', (req, res) => {
     }
   });
   res.json({ routes });
+});
+
+router.post('/api/add-college', async (req, res) => {
+    // Sanitization: Allow only alphanumeric, spaces, and basic punctuation to prevent command injection
+    const sanitize = (str) => str ? str.replace(/[^a-zA-Z0-9 ,.()]/g, "").trim() : "";
+    
+    const name = sanitize(req.body.name);
+    const location = sanitize(req.body.location);
+    const filePath = path.join(__dirname, 'colleges.json');
+
+    if (!name || !location) {
+        return res.status(400).json({ success: false, message: "Valid name and location are required." });
+    }
+
+    try {
+        // Read existing data
+        let colleges = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+        // 1. Check for duplicates (case-insensitive)
+        const exists = colleges.some(c => c.college.toLowerCase() === name.toLowerCase());
+        if (exists) {
+            return res.status(400).json({ success: false, message: "College already exists!" });
+        }
+
+        // 2. Parse location and add new entry[cite: 1]
+        const parts = location.split(',').map(s => s.trim());
+        const district = parts[0] || "";
+        const state = parts[1] || "";
+
+        colleges.push({
+            college: name,
+            district: district,
+            state: state,
+            aliases: [] // generateAliases.js will populate this[cite: 1]
+        });
+
+        // Write update to local disk[cite: 1]
+        fs.writeFileSync(filePath, JSON.stringify(colleges, null, 2));
+
+        // 3. Secure Git Sync[cite: 1]
+        // We use environment variables for the GITHUB_TOKEN to avoid hardcoding credentials[cite: 1]
+        // The command is chained to ensure each step succeeds before moving to the next[cite: 1]
+        const githubToken = process.env.GITHUB_TOKEN;
+        const repoUrl = `https://x-access-token:${githubToken}@github.com/swarayadav/reloaded-automate-backend.git`;
+
+        const command = [
+            `node generateAliases.js`,
+            `git config user.email "automate-bot@reloaded.com"`,
+            `git config user.name "Reloaded Automate Bot"`,
+            `git add colleges.json`,
+            `git commit -m "Auto-add college: ${name}"`,
+            `git remote set-url origin ${repoUrl}`,
+            `git push origin main`
+        ].join(' && ');
+
+        exec(command, (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Git Sync Error: ${error.message}`);
+                // Return success true because the local file was updated, but warn about the sync[cite: 1]
+                return res.json({ 
+                    success: true, 
+                    message: "College added locally, but cloud sync failed. Check server logs." 
+                });
+            }
+            console.log(`Git Sync Success: ${stdout}`);
+            res.json({ success: true, message: "College added, aliases generated, and pushed to Git!" });
+        });
+
+    } catch (error) {
+        console.error("Critical Error in /api/add-college:", error);
+        res.status(500).json({ success: false, message: "Internal server error." });
+    }
 });
 
 router.get('/api/search-colleges', (req, res) => {
