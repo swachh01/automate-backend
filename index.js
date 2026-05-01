@@ -451,25 +451,39 @@ app.get('/debug/routes', (req, res) => {
 router.get('/api/search-colleges', (req, res) => {
     const { query } = req.query;
 
-    if (!query || query.length < 2) { // Changed to 2 for better responsiveness
+    if (!query || query.length < 2) {
         return res.json({ success: true, colleges: [] });
     }
 
     try {
-        const searchTerm = query.toUpperCase();
+        const searchTerm = query.toUpperCase().trim();
         
         const results = collegesData
             .filter(item => {
-                const nameMatch = item.college && item.college.toUpperCase().includes(searchTerm);
-                const aliasMatch = item.aliases && item.aliases.some(alias => alias.toUpperCase().includes(searchTerm));
-                return nameMatch || aliasMatch;
+                // 1. Check for Exact Alias Match (e.g., "SIT" matches ["SIT", "SITC"])
+                const aliasMatch = item.aliases && item.aliases.some(alias => alias.toUpperCase() === searchTerm);
+                
+                // 2. Check if the Full Name starts with the query (High priority)
+                const nameStartsWith = item.college && item.college.toUpperCase().startsWith(searchTerm);
+
+                // 3. Check if the query is contained anywhere in the name
+                const nameContains = item.college && item.college.toUpperCase().includes(searchTerm);
+
+                return aliasMatch || nameStartsWith || nameContains;
+            })
+            // Sort results to put Alias matches and StartsWith matches at the top
+            .sort((a, b) => {
+                const aAlias = a.aliases && a.aliases.some(al => al.toUpperCase() === searchTerm);
+                const bAlias = b.aliases && b.aliases.some(al => al.toUpperCase() === searchTerm);
+                if (aAlias && !bAlias) return -1;
+                if (!aAlias && bAlias) return 1;
+                return 0;
             })
             .slice(0, 50)
             .map(item => {
                 let name = item.college;
-                name = name.replace(/\s*\(Id:.*?\)\s*/g, ''); // Clean ID
-
-                // Clean typical Society/Trust names
+                // Clean typical Society/Trust names for a professional look
+                name = name.replace(/\s*\(Id:.*?\)\s*/g, ''); 
                 const introPatterns = [/.*?\sEducation\sSocietys?\s/i, /.*?\sEducational\sSocietys?\s/i, /.*?\sShikshan\sSansthas?\s/i, /.*?\sTrusts?\s/i];
                 introPatterns.forEach(pattern => name = name.replace(pattern, ''));
 
