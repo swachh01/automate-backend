@@ -1553,7 +1553,7 @@ const messagePayload = {
       priority: "high",
       sound: "custom_notification",
       // Add tag so that only ONE icon appears in the status bar per sender
-      tag: sender_id.toString()[cite: 1]
+      tag: sender_id.toString()
     }
   }
 };
