@@ -1544,7 +1544,7 @@ const messagePayload = {
     title: senderName,
     body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message,
     // Add groupKey so the Android app knows which stack to put this message in
-    groupKey: "com.swarajyadav.CHAT_GROUP_" + sender_id.toString()[cite: 1]
+    groupKey: "com.swarajyadav.CHAT_GROUP_" + sender_id.toString()
   }, 
   android: {
     priority: "high",
