@@ -1429,7 +1429,6 @@ app.post('/sendMessage', async (req, res) => {
 
     if ((type === 'location' || type === 'live_location') && duration) {
     if (parseInt(duration) === -1) {
-        // Use a far future date for "Until Stopped"
         expiresAt = '2099-12-31 23:59:59';
     } else if (parseInt(duration) > 0) {
         const date = new Date();
@@ -1543,17 +1542,22 @@ const messagePayload = {
     senderProfilePic: senderPic || "",
     chatPartnerId: sender_id.toString(),
     title: senderName,
-    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
-  },
+    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message,
+    // Add groupKey so the Android app knows which stack to put this message in
+    groupKey: "com.swarajyadav.CHAT_GROUP_" + sender_id.toString()[cite: 1]
+  }, 
   android: {
     priority: "high",
     notification: {
-      channelId: "channel_custom_sound_v3", 
+      channelId: "channel_custom_sound_v3",
       priority: "high",
-      sound: "custom_notification"
+      sound: "custom_notification",
+      // Add tag so that only ONE icon appears in the status bar per sender
+      tag: sender_id.toString()[cite: 1]
     }
   }
 };
+
       await admin.messaging().send(messagePayload);
       console.log(`DATA-ONLY FCM Sent to ${receiverIdStr} (Partner was not in chat)`);
     }
