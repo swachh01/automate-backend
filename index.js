@@ -1302,6 +1302,38 @@ app.post("/updateFcmToken", async (req, res) => {
     }
 });
 
+// 1. SAVE A NEW VEHICLE
+app.post('/user/save-vehicle', (req, res) => {
+    const { userId, type, state, district, series, number } = req.body;
+
+    const query = `INSERT INTO user_vehicles (userId, type, state, district, series, number) 
+                   VALUES (?, ?, ?, ?, ?, ?)`;
+
+    db.query(query, [userId, type, state, district, series, number], (err, result) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ message: "Database error" });
+        }
+        res.status(200).json({ message: "Vehicle saved successfully", vehicleId: result.insertId });
+    });
+});
+
+// 2. FETCH SAVED VEHICLES BY USER AND TYPE
+app.get('/user/vehicles/:userId/:type', (req, res) => {
+    const { userId, type } = req.params;
+
+    const query = `SELECT * FROM user_vehicles WHERE userId = ? AND type = ?`;
+
+    db.query(query, [userId, type], (err, results) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ message: "Database error" });
+        }
+        // This returns the array that Retrofit expects as List<Vehicle>
+        res.status(200).json(results);
+    });
+});
+
 app.get("/getUserTravelPlan/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
