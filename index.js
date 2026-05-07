@@ -1540,7 +1540,6 @@ app.post('/sendMessage', async (req, res) => {
     };
 
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
-    io.to(`chat_${sender_id}`).emit('new_message_received', messageToEmit);
 
 try {
   const receiverIdStr = receiver_id.toString();
