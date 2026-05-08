@@ -2145,7 +2145,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
         SELECT 
             id, from_place, to_place, 
             DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            fare, status, added_fare as hasAddedFare, 'Rickshaw' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Sharing Rickshaw' as commute_type
         FROM travel_plans WHERE user_id = ?
 
         UNION ALL
@@ -2153,7 +2153,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            fare, status, added_fare as hasAddedFare, 'Cab' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Reserved Cab' as commute_type
         FROM travel_plans_cab WHERE user_id = ?
 
         UNION ALL
@@ -2161,7 +2161,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            fare, status, added_fare as hasAddedFare, 'Own' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Personal Vehicle' as commute_type
         FROM travel_plans_own WHERE user_id = ?
       ) AS combined_history
       ORDER BY travel_time DESC
