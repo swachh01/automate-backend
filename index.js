@@ -1161,7 +1161,7 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
 });
 
 app.get("/travel-plans/destinations-by-type", async (req, res) => {
-    const { userId, commuteType } = req.query;
+    const { userId, commuteType, rideCategory } = req.query;
 
     let tableName;
     let destinationCol;
@@ -1179,6 +1179,10 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
         statusFilter = "status = 'Trip Active' AND time > NOW()";
+
+        if (rideCategory) {
+            statusFilter += ` AND ride_category = ${db.escape(rideCategory)}`;
+        }
     }
 
     if (commuteType === 'Rickshaw' && rideCategory) {
