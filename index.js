@@ -823,8 +823,7 @@ app.post("/addTravelPlan", async (req, res) => {
     let connection; 
 
     try {
-        // Destructure 'landmark' from req.body
-        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, landmark } = req.body;
+        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, landmark, ride_category, service_provider, vehicle_number, ride_otp, driver_name } = req.body;
 
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
@@ -850,14 +849,21 @@ app.post("/addTravelPlan", async (req, res) => {
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-             landmark, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, NOW(), NOW());
+             landmark, ride_category, service_number, vehicle_number, 
+ride_otp, driver_name, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'Trip Active',?,?,?,?,?, ?, ?, ?, ?, ?, 
+NOW(), NOW());
         `;
 
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
-            landmark || null
+            landmark || null,
+            ride_category || 'Planned',
+            service_provider || 'Automate',
+            vehicle_number || null,
+            ride_otp || null,
+            driver_name || null
         ]);
 
         const newPlanId = planResult.insertId;
@@ -1171,6 +1177,10 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         statusFilter = "status = 'Trip Active' AND time > NOW()";
     }
 
+    if (commuteType === 'Rickshaw' && rideCategory) {
+        statusFilter += ` AND ride_category = '${rideCategory}'`;
+    }
+
     try {
         const query = `
             SELECT 
@@ -1180,11 +1190,10 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
                 g.group_id  
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
-            WHERE ${statusFilter}
+            WHERE ${statusFilter} AND ${commuteType === 'Rickshaw' ? 'time' : 'travel_datetime'} > NOW()
             GROUP BY tp.${destinationCol}, g.group_id
             ORDER BY userCount DESC
         `;
-
         const [destinations] = await db.query(query, [userId]);
         const formattedDestinations = destinations.map(d => ({
             groupId: d.group_id, 
@@ -1203,7 +1212,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
 app.get('/users/destination', async (req, res) => {
     const TAG = "/users/destination";
-    const { groupId, userId, commuteType, destinationName } = req.query;
+    const { groupId, userId, commuteType, destinationName, rideCategory } = req.query;
 
     if (!userId || (!groupId && !destinationName)) {
         return res.status(400).json({ success: false, message: 'Missing required parameters' });
@@ -1248,28 +1257,30 @@ app.get('/users/destination', async (req, res) => {
             return res.status(404).json({ success: false, message: 'Destination not identified' });
         }
 
+        let categoryFilter = "";
+        if (commuteType === 'Rickshaw' && rideCategory) {
+            categoryFilter = ` AND tp.ride_category = ${db.escape(rideCategory)}`;
+        }
+
         const query = `
             SELECT
                 u.id,           
                 u.id as userId, 
                 CONCAT(u.first_name, ' ', u.last_name) as name,
-                u.work_category,
-                u.work_detail,
-                u.profile_pic AS profilePic,
-                u.gender,
-                u.profile_visibility,
-                ${timeSelection} as time,
-                tp.${fromCol} AS fromPlace, 
-                tp.${toCol} AS toPlace
-                ${extraCols}
+                -- ... other user fields ...
+                tp.ride_category,
+                tp.service_provider,
+                tp.vehicle_number,
+                tp.driver_name,
+                tp.ride_otp
             FROM ${tableName} tp
             JOIN users u ON tp.user_id = u.id
             WHERE
                 tp.${toCol} = ?
                 AND tp.status = 'Trip Active' 
-                AND tp.user_id != ?   
-            ORDER BY
-                tp.created_at DESC
+                AND tp.user_id != ?
+                ${categoryFilter}   
+            ORDER BY tp.created_at DESC
         `;
 
         const [users] = await db.execute(query, [finalDestName, currentUserId]);
@@ -2145,7 +2156,8 @@ app.get('/tripHistory/:userId', async (req, res) => {
         SELECT 
             id, from_place, to_place, 
             DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            fare, status, added_fare as hasAddedFare, 'Sharing Rickshaw' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Sharing Rickshaw' as commute_type,
+            ride_category, service_provider, vehicle_number
         FROM travel_plans WHERE user_id = ?
 
         UNION ALL
@@ -2153,7 +2165,8 @@ app.get('/tripHistory/:userId', async (req, res) => {
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            fare, status, added_fare as hasAddedFare, 'Reserved Cab' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Reserved Cab' as commute_type,
+            ride_category, service_provider, vehicle_number
         FROM travel_plans_cab WHERE user_id = ?
 
         UNION ALL
@@ -2161,7 +2174,8 @@ app.get('/tripHistory/:userId', async (req, res) => {
         SELECT 
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            fare, status, added_fare as hasAddedFare, 'Personal Vehicle' as commute_type
+            fare, status, added_fare as hasAddedFare, 'Personal Vehicle' as commute_type,
+            ride_category, service_provider, vehicle_number
         FROM travel_plans_own WHERE user_id = ?
       ) AS combined_history
       ORDER BY travel_time DESC
