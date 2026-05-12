@@ -823,7 +823,8 @@ app.post("/addTravelPlan", async (req, res) => {
     let connection; 
 
     try {
-        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, landmark, ride_category, service_provider, vehicle_number, ride_otp, driver_name } = req.body;
+        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, landmark, ride_category, service_provider, vehicle_number, ride_otp, driver_name, pickupAt } = 
+req.body;
 
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
@@ -849,7 +850,7 @@ app.post("/addTravelPlan", async (req, res) => {
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-             landmark, ride_category, service_number, vehicle_number, 
+             landmark, ride_category, service_provider, vehicle_number, 
 ride_otp, driver_name, created_at, updated_at)
           VALUES (?, ?, ?, ?, 'Trip Active',?,?,?,?,?, ?, ?, ?, ?, ?, 
 NOW(), NOW());
@@ -857,7 +858,10 @@ NOW(), NOW());
 
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
-            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
+            fromPlaceLat || 0.0,
+            fromPlaceLng || 0.0,
+            toPlaceLat || 0.0,
+            toPlaceLng || 0.0,
             landmark || null,
             ride_category || 'Planned',
             service_provider || 'Automate',
