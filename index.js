@@ -830,10 +830,10 @@ app.post("/addTravelPlan", async (req, res) => {
             landmark, vehicle_number, vehicleNumber 
         } = req.body;
 
-        const ride_category = req.body.ride_category || req.body.rideCategory;
-        const service_provider = req.body.service_provider || req.body.serviceProvider;
-        const finalVehicleNumber = vehicle_number || vehicleNumber || req.body.vehicle_number || null;
-        console.log("DEBUG:", { ride_category, service_provider, finalVehicleNumber });
+        const ride_category = req.body.ride_category || req.body.rideCategory || 'Planned';
+        const service_provider = req.body.service_provider || req.body.serviceProvider || 'AutoMate';
+        const finalVehicleNumber = vehicle_number || vehicleNumber || null;
+
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
             toPlaceLat === undefined || toPlaceLng === undefined) {
@@ -878,8 +878,8 @@ app.post("/addTravelPlan", async (req, res) => {
             toPlaceLat || 0.0,
             toPlaceLng || 0.0,
             landmark || null,
-            ride_category || 'Planned',
-            service_provider || 'AutoMate',
+            ride_category,
+            service_provider,
             finalVehicleNumber
         ]);
 
