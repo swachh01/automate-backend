@@ -819,7 +819,8 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
 //==============================================ADD TRAVEL PLAN=========================================================
 
 
-// ================ ADD TRAVEL PLAN (UPDATED) =================
+//==============================================ADD TRAVEL PLAN (UPDATED)=========================================================
+
 app.post("/addTravelPlan", async (req, res) => {
     const TAG = "/addTravelPlan"; 
     let connection; 
@@ -841,11 +842,12 @@ req.body;
         try {
             formattedTime = new Date(time);
             if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format."); }
-            
-            // FIX: If this is an Instant Ride, pad the visibility window by +20 minutes
+
+            // 🚀 FIX: If this is an Instant Booking, extend the timestamp by +20 minutes 
+            // so it stays active and visible to other users in the community.
             if (ride_category === "Instant" || ride_category === "Instant Ride") {
                 formattedTime.setMinutes(formattedTime.getMinutes() + 20);
-                console.log(TAG, `Instant ride detected. Padding active time to: ${formattedTime.toISOString()}`);
+                console.log(TAG, `Instant ride detected! Visibility extended to: ${formattedTime.toISOString()}`);
             }
         } catch (timeError) {
              return res.status(400).json({ success: false, message: "Invalid time format." });
