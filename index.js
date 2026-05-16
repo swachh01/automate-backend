@@ -860,16 +860,14 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 🚀 REMOVED: Deleted columns ride_otp and driver_name from table layout
         const planQuery = `
-          INSERT INTO travel_plans
-            (user_id, from_place, to_place, time, status,
-             from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-             landmark, ride_category, service_provider, vehicle_number, 
-             created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
-        `;
-
+  INSERT INTO travel_plans
+    (user_id, from_place, to_place, time, status,
+     from_place_lat, from_place_lng, to_place_lat, to_place_lng,
+     landmark, ride_category, service_provider, vehicle_number, 
+     created_at, updated_at)
+  VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+`;
         // Pass the dynamically assigned constants safely into your pool execution driver
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
