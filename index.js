@@ -818,16 +818,22 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
 
 //==============================================ADD TRAVEL PLAN=========================================================
 
-
-//==============================================ADD TRAVEL PLAN (UPDATED)=========================================================
-
 app.post("/addTravelPlan", async (req, res) => {
     const TAG = "/addTravelPlan"; 
     let connection; 
 
     try {
-        const { userId, fromPlace, toPlace, time, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, landmark, ride_category, service_provider, vehicle_number, ride_otp, driver_name, pickupAt } = 
-req.body;
+        // Extract raw properties from the request body
+        const { 
+            userId, fromPlace, toPlace, time, 
+            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, 
+            landmark, vehicle_number, vehicleNumber 
+        } = req.body;
+
+        // 🚀 THE FIX: Read both snake_case and camelCase parameters sent by your Android App
+        const ride_category = req.body.ride_category || req.body.rideCategory;
+        const service_provider = req.body.service_provider || req.body.serviceProvider;
+        const finalVehicleNumber = vehicle_number || vehicleNumber || null;
 
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
@@ -843,8 +849,7 @@ req.body;
             formattedTime = new Date(time);
             if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format."); }
 
-            // 🚀 FIX: If this is an Instant Booking, extend the timestamp by +20 minutes 
-            // so it stays active and visible to other users in the community.
+            // Handle the +20 mins buffer window for instant ride components
             if (ride_category === "Instant" || ride_category === "Instant Ride") {
                 formattedTime.setMinutes(formattedTime.getMinutes() + 20);
                 console.log(TAG, `Instant ride detected! Visibility extended to: ${formattedTime.toISOString()}`);
@@ -856,15 +861,17 @@ req.body;
         connection = await db.getConnection();
         await connection.beginTransaction();
 
+        // 🚀 REMOVED: Deleted columns ride_otp and driver_name from table layout
         const planQuery = `
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
              landmark, ride_category, service_provider, vehicle_number, 
-             ride_otp, driver_name, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'Trip Active',?,?,?,?,?, ?, ?, ?, ?, ?, NOW(), NOW());
+             created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
         `;
 
+        // Pass the dynamically assigned constants safely into your pool execution driver
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
             fromPlaceLat || 0.0,
@@ -873,10 +880,8 @@ req.body;
             toPlaceLng || 0.0,
             landmark || null,
             ride_category || 'Planned',
-            service_provider || 'Automate',
-            vehicle_number || null,
-            ride_otp || null,
-            driver_name || null
+            service_provider || 'AutoMate',
+            finalVehicleNumber
         ]);
 
         const newPlanId = planResult.insertId;
@@ -902,6 +907,7 @@ req.body;
 
         await connection.commit();
 
+        // --- Travel Buddy FCM Notification Triggers ---
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
