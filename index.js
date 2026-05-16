@@ -1245,21 +1245,26 @@ app.get('/users/destination', async (req, res) => {
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    let extraCols = ", tp.landmark, NULL as companyName, NULL as fare";
-    let timeSelection = "DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')";
+    
+    // Default columns mapping for standard travel_plans (Rickshaw)
+    let categorySelection = "tp.ride_category";
+    let providerSelection = "tp.service_provider";
+    let vehicleSelection = "tp.vehicle_number";
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        extraCols = ", tp.landmark, tp.company_name as companyName, tp.estimated_fare as fare";
-        timeSelection = "DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')";
+        categorySelection = "'Instant'"; // Cab app integrations are implicitly Instant bookings
+        providerSelection = "tp.company_name"; // Maps Uber/Ola/Rapido strings
+        vehicleSelection = "tp.vehicle_number";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        extraCols = ", tp.landmark, tp.vehicle_type as companyName, tp.estimated_fare as fare";
-        timeSelection = "DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')";
+        categorySelection = "'Planned'"; // Personal vehicle plans are usually planned
+        providerSelection = "'Personal Vehicle'";
+        vehicleSelection = "tp.vehicle_number";
     }
 
     try {
@@ -1285,7 +1290,6 @@ app.get('/users/destination', async (req, res) => {
             categoryFilter = ` AND tp.ride_category = ${db.escape(rideCategory)}`;
         }
 
-        // ==================== FIXED QUERY PROPERTIES MATCHING @SERIALIZEDNAME ====================
         const query = `
             SELECT
                 u.id,           
@@ -1297,13 +1301,17 @@ app.get('/users/destination', async (req, res) => {
                 u.dob,
                 u.profile_pic,
                 u.profile_visibility,
-                tp.from_place as fromPlace,
-                tp.to_place as toPlace,
-                DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time,
+                tp.${fromCol} as fromPlace,
+                tp.${toCol} as toPlace,
+                CASE 
+                    WHEN '${commuteType}' = 'Cab' THEN DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')
+                    WHEN '${commuteType}' = 'Own' THEN DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')
+                    ELSE DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')
+                END as time,
                 tp.landmark,
-                tp.ride_category as ride_category,       -- 🚀 FIXED: Maps directly to @SerializedName("ride_category")
-                tp.service_provider as service_provider, -- 🚀 FIXED: Maps directly to @SerializedName("service_provider")
-                tp.vehicle_number as vehicle_number      -- 🚀 FIXED: Maps directly to @SerializedName("vehicle_number")
+                ${categorySelection} as ride_category,       
+                ${providerSelection} as service_provider, 
+                ${vehicleSelection} as vehicle_number      
             FROM ${tableName} tp
             JOIN users u ON tp.user_id = u.id
             WHERE
