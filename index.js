@@ -1279,17 +1279,27 @@ app.get('/users/destination', async (req, res) => {
             categoryFilter = ` AND tp.ride_category = ${db.escape(rideCategory)}`;
         }
 
+        // ==================== UPDATED USERS BY DESTINATION QUERY ====================
         const query = `
             SELECT
                 u.id,           
                 u.id as userId, 
                 CONCAT(u.first_name, ' ', u.last_name) as name,
-                -- ... other user fields ...
-                tp.ride_category,
-                tp.service_provider,
-                tp.vehicle_number,
-                tp.driver_name,
-                tp.ride_otp
+                u.work_category,
+                u.work_detail,
+                u.gender,
+                u.dob,
+                u.profile_pic,
+                u.profile_visibility,
+                tp.from_place as fromPlace,
+                tp.to_place as toPlace,
+                DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time,
+                tp.landmark,
+                tp.ride_category as ride_category,
+                tp.service_provider as service_provider,   -- 🚀 Keeps fallback serialization working perfectly
+                tp.service_provider as serviceProvider,   -- 🚀 Explicitly matches standard JSON parsing structures
+                tp.vehicle_number as vehicleNumber,       -- 🚀 Matches Android model parameters
+                tp.vehicle_number
             FROM ${tableName} tp
             JOIN users u ON tp.user_id = u.id
             WHERE
