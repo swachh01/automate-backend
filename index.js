@@ -823,20 +823,22 @@ app.post("/addTravelPlan", async (req, res) => {
     let connection; 
 
     try {
-        // Extract raw properties from the request body (including incoming instant fare)
+        // Extract both camelCase and snake_case properties to prevent structural mismatch fields
         const { 
             userId, fromPlace, toPlace, time, 
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, 
-            landmark, vehicle_number, vehicleNumber,
-            instant_fare, instantFare
+            landmark, vehicle_number, vehicleNumber, 
+            instant_fare, instantFare, fare 
         } = req.body;
 
-        const ride_category = req.body.ride_category || req.body.rideCategory || 'Planned';
-        const service_provider = req.body.service_provider || req.body.serviceProvider || 'AutoMate';
-        const finalVehicleNumber = vehicle_number || vehicleNumber || null;
+        // Standardize fallback conditions using explicit key lookups matching your JSON body payload
+        const ride_category = req.body.rideCategory || req.body.ride_category || 'Planned';
+        const service_provider = req.body.serviceProvider || req.body.service_provider || 'AutoMate';
+        const finalVehicleNumber = vehicleNumber || vehicle_number || null;
         
-        // Handle variations of incoming instant fare property bindings safely
-        const finalInstantFare = instant_fare !== undefined ? instant_fare : (instantFare !== undefined ? instantFare : null);
+        // Ensure accurate tracking assignments across dynamic inputs 
+        const finalInstantFare = instantFare !== undefined ? instantFare : (instant_fare !== undefined ? instant_fare : null);
+        const baselineFare = fare || 0.00;
 
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
@@ -864,27 +866,28 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // Updated query execution layout to explicitly record vehicle_number and instant_fare fields
+        // Query execution matches structural arrangement specifications inside your schema model profile
         const planQuery = `
   INSERT INTO travel_plans
     (user_id, from_place, to_place, time, status,
      from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-     landmark, ride_category, service_provider, vehicle_number, instant_fare,
+     landmark, ride_category, service_provider, vehicle_number, instant_fare, fare,
      created_at, updated_at)
-  VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+  VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
 `;
-        // Pass the dynamically assigned constants safely into your pool execution driver array
+        // Order sequence accurately pairs indices with parameter array declarations
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
-            fromPlaceLat || 0.0,
-            fromPlaceLng || 0.0,
-            toPlaceLat || 0.0,
-            toPlaceLng || 0.0,
+            fromPlaceLat,
+            fromPlaceLng,
+            toPlaceLat,
+            toPlaceLng,
             landmark || null,
             ride_category,
             service_provider,
             finalVehicleNumber,
-            finalInstantFare
+            finalInstantFare,
+            baselineFare
         ]);
 
         const newPlanId = planResult.insertId;
