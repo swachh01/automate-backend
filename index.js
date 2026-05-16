@@ -823,16 +823,20 @@ app.post("/addTravelPlan", async (req, res) => {
     let connection; 
 
     try {
-        // Extract raw properties from the request body
+        // Extract raw properties from the request body (including incoming instant fare)
         const { 
             userId, fromPlace, toPlace, time, 
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, 
-            landmark, vehicle_number, vehicleNumber 
+            landmark, vehicle_number, vehicleNumber,
+            instant_fare, instantFare
         } = req.body;
 
         const ride_category = req.body.ride_category || req.body.rideCategory || 'Planned';
         const service_provider = req.body.service_provider || req.body.serviceProvider || 'AutoMate';
         const finalVehicleNumber = vehicle_number || vehicleNumber || null;
+        
+        // Handle variations of incoming instant fare property bindings safely
+        const finalInstantFare = instant_fare !== undefined ? instant_fare : (instantFare !== undefined ? instantFare : null);
 
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
@@ -860,15 +864,16 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
+        // Updated query execution layout to explicitly record vehicle_number and instant_fare fields
         const planQuery = `
   INSERT INTO travel_plans
     (user_id, from_place, to_place, time, status,
      from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-     landmark, ride_category, service_provider, vehicle_number, 
+     landmark, ride_category, service_provider, vehicle_number, instant_fare,
      created_at, updated_at)
-  VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+  VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
 `;
-        // Pass the dynamically assigned constants safely into your pool execution driver
+        // Pass the dynamically assigned constants safely into your pool execution driver array
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
             fromPlaceLat || 0.0,
@@ -878,7 +883,8 @@ app.post("/addTravelPlan", async (req, res) => {
             landmark || null,
             ride_category,
             service_provider,
-            finalVehicleNumber
+            finalVehicleNumber,
+            finalInstantFare
         ]);
 
         const newPlanId = planResult.insertId;
@@ -1202,12 +1208,16 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     }
 
     try {
+        // Explicitly projecting vehicle_number and instant_fare fields within the aggregate selection block
+        // Using MAX() flags to pull strings cleanly through the GROUP BY constraint
         const query = `
             SELECT 
-                ${destinationCol} as destination, 
+                tp.${destinationCol} as destination, 
                 COUNT(*) as userCount,
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
-                g.group_id  
+                g.group_id,
+                MAX(tp.vehicle_number) AS vehicle_number,
+                MAX(tp.instant_fare) AS instant_fare
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter} AND ${commuteType === 'Rickshaw' ? 'time' : 'travel_datetime'} > NOW()
@@ -1215,11 +1225,15 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
             ORDER BY userCount DESC
         `;
         const [destinations] = await db.query(query, [userId]);
+        
+        // Mapping elements directly into the complete model payload structural contract
         const formattedDestinations = destinations.map(d => ({
             groupId: d.group_id, 
             destination: d.destination,
             userCount: d.userCount,
-            isCurrentUserGoing: d.isCurrentUserGoing
+            isCurrentUserGoing: d.isCurrentUserGoing,
+            vehicleNumber: d.vehicle_number || null, // Resolves text tracking visibility on front-end layouts
+            instantFare: d.instant_fare || null      // Preserves fare amount parameters cleanly for rendering
         }));
 
         res.json({ success: true, destinations: formattedDestinations });
@@ -1227,7 +1241,6 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         console.error("Error fetching filtered destinations:", err);
         res.status(500).json({ success: false, message: "Database error" });
     }
-
 });
 
 app.get('/users/destination', async (req, res) => {
