@@ -1279,7 +1279,7 @@ app.get('/users/destination', async (req, res) => {
             categoryFilter = ` AND tp.ride_category = ${db.escape(rideCategory)}`;
         }
 
-        // ==================== UPDATED USERS BY DESTINATION QUERY ====================
+        // ==================== FIXED QUERY PROPERTIES MATCHING @SERIALIZEDNAME ====================
         const query = `
             SELECT
                 u.id,           
@@ -1295,11 +1295,9 @@ app.get('/users/destination', async (req, res) => {
                 tp.to_place as toPlace,
                 DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z') as time,
                 tp.landmark,
-                tp.ride_category as ride_category,
-                tp.service_provider as service_provider,   -- 🚀 Keeps fallback serialization working perfectly
-                tp.service_provider as serviceProvider,   -- 🚀 Explicitly matches standard JSON parsing structures
-                tp.vehicle_number as vehicleNumber,       -- 🚀 Matches Android model parameters
-                tp.vehicle_number
+                tp.ride_category as ride_category,       -- 🚀 FIXED: Maps directly to @SerializedName("ride_category")
+                tp.service_provider as service_provider, -- 🚀 FIXED: Maps directly to @SerializedName("service_provider")
+                tp.vehicle_number as vehicle_number      -- 🚀 FIXED: Maps directly to @SerializedName("vehicle_number")
             FROM ${tableName} tp
             JOIN users u ON tp.user_id = u.id
             WHERE
