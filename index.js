@@ -1188,6 +1188,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     let destinationCol;
     let statusFilter = "status = 'Trip Active'";
 
+    // Determine the schema configuration mapping dynamically
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
@@ -1210,20 +1211,25 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         statusFilter += ` AND ride_category = '${rideCategory}'`;
     }
 
+    // Assign the exact datetime column name per table to prevent column clashing bugs
+    let timeColumn = 'time';
+    if (commuteType === 'Cab') timeColumn = 'travel_datetime';
+    if (commuteType === 'Own') timeColumn = 'travel_time';
+
     try {
-        // Explicitly projecting vehicle_number and instant_fare fields within the aggregate selection block
-        // Using MAX() flags to pull strings cleanly through the GROUP BY constraint
+        // Project vehicle_number and instant_fare safely through conditional fallbacks 
+        // using MAX flags to ensure compatibility across structural table fragments
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
                 COUNT(*) as userCount,
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
                 g.group_id,
-                MAX(tp.vehicle_number) AS vehicle_number,
-                MAX(tp.instant_fare) AS instant_fare
+                MAX(CASE WHEN '${commuteType}' = 'Rickshaw' OR '${commuteType}' = 'Cab' THEN tp.vehicle_number ELSE NULL END) AS vehicle_number,
+                MAX(CASE WHEN '${commuteType}' = 'Rickshaw' THEN tp.instant_fare ELSE NULL END) AS instant_fare
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
-            WHERE ${statusFilter} AND ${commuteType === 'Rickshaw' ? 'time' : 'travel_datetime'} > NOW()
+            WHERE ${statusFilter} AND tp.${timeColumn} > NOW()
             GROUP BY tp.${destinationCol}, g.group_id
             ORDER BY userCount DESC
         `;
