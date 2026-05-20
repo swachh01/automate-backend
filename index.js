@@ -832,13 +832,13 @@ app.post("/addTravelPlan", async (req, res) => {
             landmark 
         } = req.body;
 
-        // RESOLUTION FIX: Read both formats explicitly so both Planned and Instant activities store correctly
+        // Resolution mapping for Android's serialized payload properties
         const ride_category    = req.body.rideCategory || req.body.ride_category || 'Planned';
         const service_provider = req.body.serviceProvider || req.body.service_provider || 'AutoMate';
         const vehicle_number   = req.body.vehicleNumber || req.body.vehicle_number || null;
         const mobile_number    = req.body.mobileNumber || req.body.mobile_number || null;
         
-        // Handle precision double parsing fallback assignment checks
+        // Handle precise parameter conversions safely
         const instant_fare = req.body.instantFare !== undefined ? req.body.instantFare : (req.body.instant_fare !== undefined ? req.body.instant_fare : null);
         const fare = req.body.fare || 0.00;
 
@@ -856,7 +856,7 @@ app.post("/addTravelPlan", async (req, res) => {
             formattedTime = new Date(time);
             if (isNaN(formattedTime.getTime())) throw new Error("Invalid format.");
 
-            // Add expiration padding for instant carpools to populate on feeds safely
+            // Add expiration padding for instant carpools to stay visible on standard feeds
             if (ride_category === "Instant") {
                 formattedTime.setMinutes(formattedTime.getMinutes() + 20);
             }
@@ -867,7 +867,7 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // Execution matches explicit column updates perfectly
+        // 1. Insert core tracking travel plan record row matches columns layout perfectly
         const planQuery = `
           INSERT INTO travel_plans 
             (user_id, from_place, to_place, time, status, 
@@ -896,6 +896,7 @@ app.post("/addTravelPlan", async (req, res) => {
              throw new Error("Core travel plan row entry creation insertion failed.");
         }
 
+        // 2. Manage destination group room allocation sequences
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [toPlace]);
 
@@ -907,28 +908,32 @@ app.post("/addTravelPlan", async (req, res) => {
         }
         const groupId = groupRows[0].group_id;
 
+        // 3. Connect active user to the target group channel
         const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
         await connection.query(memberQuery, [groupId, userId]);
 
+        // 4. Fetch the user's name using the open transaction pool context *before* the commit completes
+        const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
+        const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
+
+        // 5. Look for match criteria inside active table boundaries
+        const [matchingUsers] = await connection.query(`
+            SELECT DISTINCT u.fcm_token 
+            FROM travel_plans tp
+            JOIN users u ON tp.user_id = u.id
+            WHERE tp.to_place = ? 
+              AND tp.status = 'Trip Active'
+              AND tp.user_id != ? 
+              AND u.fcm_token IS NOT NULL
+              AND u.trip_alerts_enabled = 1
+        `, [toPlace, userId]);
+
+        // 6. Complete transaction sequence updates atomically
         await connection.commit();
 
-        // --- Notification Triggers ---
-        try {
-            const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
-            const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
-
-            const [matchingUsers] = await connection.query(`
-                SELECT DISTINCT u.fcm_token 
-                FROM travel_plans tp
-                JOIN users u ON tp.user_id = u.id
-                WHERE tp.to_place = ? 
-                  AND tp.status = 'Trip Active'
-                  AND tp.user_id != ? 
-                  AND u.fcm_token IS NOT NULL
-                  AND u.trip_alerts_enabled = 1
-            `, [toPlace, userId]);
-
-            if (matchingUsers.length > 0) {
+        // --- Asynchronous Notification Dispatches Execution ---
+        if (matchingUsers.length > 0) {
+            try {
                 const tokens = matchingUsers.map(u => u.fcm_token);
                 const messagePayload = {
                     tokens: tokens,
@@ -952,9 +957,10 @@ app.post("/addTravelPlan", async (req, res) => {
                     }
                 };
                 await admin.messaging().sendEachForMulticast(messagePayload);
+                console.log(TAG, `Successfully broadcasted matching notifications to ${tokens.length} subscribers.`);
+            } catch (notifyError) {
+                console.error(TAG, "FCM notification dispatch failed to execute cleanly:", notifyError.message);
             }
-        } catch (notifyError) {
-            console.error(TAG, "Notification dispatcher skipped context validation: ", notifyError.message);
         }
 
         res.status(201).json({
