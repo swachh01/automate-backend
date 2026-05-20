@@ -823,20 +823,22 @@ app.post("/addTravelPlan", async (req, res) => {
     let connection; 
 
     try {
-        // Extract both camelCase and snake_case properties to prevent structural mismatch fields
+        // Extract both camelCase and snake_case tracking metrics to match modern model variations
         const { 
             userId, fromPlace, toPlace, time, 
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, 
             landmark, vehicle_number, vehicleNumber, 
-            instant_fare, instantFare, fare 
+            instant_fare, instantFare, fare,
+            mobileNumber, mobile_number 
         } = req.body;
 
-        // Standardize fallback conditions using explicit key lookups matching your JSON body payload
+        // Standardize dynamic properties fallback logic across explicit object body targets
         const ride_category = req.body.rideCategory || req.body.ride_category || 'Planned';
         const service_provider = req.body.serviceProvider || req.body.service_provider || 'AutoMate';
         const finalVehicleNumber = vehicleNumber || vehicle_number || null;
+        const finalMobileNumber = mobileNumber || mobile_number || null;
         
-        // Ensure accurate tracking assignments across dynamic inputs 
+        // Ensure accurate analytical variable types assignment safely
         const finalInstantFare = instantFare !== undefined ? instantFare : (instant_fare !== undefined ? instant_fare : null);
         const baselineFare = fare || 0.00;
 
@@ -845,7 +847,7 @@ app.post("/addTravelPlan", async (req, res) => {
             toPlaceLat === undefined || toPlaceLng === undefined) {
             return res.status(400).json({
                 success: false,
-                message: "Missing required fields."
+                message: "Missing required tracking location data points fields."
             });
         }
 
@@ -854,7 +856,7 @@ app.post("/addTravelPlan", async (req, res) => {
             formattedTime = new Date(time);
             if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format."); }
 
-            // Handle the +20 mins buffer window for instant ride components
+            // Handle window extension criteria for instant context components
             if (ride_category === "Instant" || ride_category === "Instant Ride") {
                 formattedTime.setMinutes(formattedTime.getMinutes() + 20);
                 console.log(TAG, `Instant ride detected! Visibility extended to: ${formattedTime.toISOString()}`);
@@ -866,22 +868,24 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // Query execution matches structural arrangement specifications inside your schema model profile
+        // Query string execution matches columns tracking blueprint model
         const planQuery = `
-  INSERT INTO travel_plans
-    (user_id, from_place, to_place, time, status,
-     from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-     landmark, ride_category, service_provider, vehicle_number, instant_fare, fare,
-     created_at, updated_at)
-  VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
-`;
-        // Order sequence accurately pairs indices with parameter array declarations
+          INSERT INTO travel_plans
+            (user_id, from_place, to_place, time, status,
+             from_place_lat, from_place_lng, to_place_lat, to_place_lng,
+             landmark, ride_category, service_provider, vehicle_number, instant_fare, fare,
+             created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+        `;
+
+        const landmarkWithPhone = finalMobileNumber 
+            ? `${landmark} (Contact: ${finalMobileNumber})` 
+            : landmark;
+
+        // Sequential parameter index binding checks out exactly perfectly
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
-            fromPlaceLat,
-            fromPlaceLng,
-            toPlaceLat,
-            toPlaceLng,
+            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
             landmark || null,
             ride_category,
             service_provider,
@@ -894,7 +898,7 @@ app.post("/addTravelPlan", async (req, res) => {
         if (!newPlanId) {
              await connection.rollback();
              connection.release();
-             throw new Error("Travel plan insert failed.");
+             throw new Error("Travel plan database entry insertion failed.");
         }
 
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
@@ -904,7 +908,7 @@ app.post("/addTravelPlan", async (req, res) => {
         if (groupRows.length === 0) {
             await connection.rollback();
             connection.release();
-            throw new Error(`Failed to find group_id.`);
+            throw new Error(`Failed to map dynamic destination room tracking component group_id.`);
         }
         const groupId = groupRows[0].group_id;
 
@@ -913,7 +917,7 @@ app.post("/addTravelPlan", async (req, res) => {
 
         await connection.commit();
 
-        // --- Travel Buddy FCM Notification Triggers ---
+        // --- Travel Match Notification Triggers ---
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
@@ -960,7 +964,7 @@ app.post("/addTravelPlan", async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Plan submitted successfully and group joined",
+            message: "Plan submitted successfully and destination channel connected.",
             id: newPlanId
         });
 
@@ -968,8 +972,8 @@ app.post("/addTravelPlan", async (req, res) => {
         if (connection) {
             try { await connection.rollback(); } catch (e) {}
         }
-        console.error(TAG, `Error saving travel plan:`, err);
-        res.status(500).json({ success: false, message: "Server error occurred." });
+        console.error(TAG, `Error saving travel plan context mapping:`, err);
+        res.status(500).json({ success: false, message: "Server encountered a structural execution issue." });
     } finally {
         if (connection) { connection.release(); }
     }
