@@ -823,84 +823,81 @@ app.post("/addTravelPlan", async (req, res) => {
     let connection; 
 
     try {
-        // Extract both camelCase and snake_case tracking metrics to match modern model variations
+        console.log(TAG, "Incoming payload payload details:", req.body);
+
+        // Robust destructuring mapping covers all serialization formats sent by both activities
         const { 
             userId, fromPlace, toPlace, time, 
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, 
-            landmark, vehicle_number, vehicleNumber, 
-            instant_fare, instantFare, fare,
-            mobileNumber, mobile_number 
+            landmark
         } = req.body;
 
-        // Standardize dynamic properties fallback logic across explicit object body targets
-        const ride_category = req.body.rideCategory || req.body.ride_category || 'Planned';
+        // Resolve string values checks by scanning both camelCase and snake_case request inputs
+        const ride_category    = req.body.rideCategory || req.body.ride_category || 'Planned';
         const service_provider = req.body.serviceProvider || req.body.service_provider || 'AutoMate';
-        const finalVehicleNumber = vehicleNumber || vehicle_number || null;
-        const finalMobileNumber = mobileNumber || mobile_number || null;
+        const vehicle_number   = req.body.vehicleNumber || req.body.vehicle_number || null;
+        const mobile_number    = req.body.mobileNumber || req.body.mobile_number || null;
         
-        // Ensure accurate analytical variable types assignment safely
-        const finalInstantFare = instantFare !== undefined ? instantFare : (instant_fare !== undefined ? instant_fare : null);
-        const baselineFare = fare || 0.00;
+        // Handle precise fallback parsing for instant ride numeric fare values
+        const instant_fare = req.body.instantFare !== undefined ? req.body.instantFare : (req.body.instant_fare !== undefined ? req.body.instant_fare : null);
+        const fare = req.body.fare || 0.00;
 
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
             toPlaceLat === undefined || toPlaceLng === undefined) {
             return res.status(400).json({
                 success: false,
-                message: "Missing required tracking location data points fields."
+                message: "Missing required location tracking data points."
             });
         }
 
         let formattedTime;
         try {
             formattedTime = new Date(time);
-            if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date format."); }
+            if (isNaN(formattedTime.getTime())) throw new Error("Invalid format.");
 
-            // Handle window extension criteria for instant context components
-            if (ride_category === "Instant" || ride_category === "Instant Ride") {
+            // Visibility window logic adjustment for immediate bookings context
+            if (ride_category === "Instant") {
                 formattedTime.setMinutes(formattedTime.getMinutes() + 20);
-                console.log(TAG, `Instant ride detected! Visibility extended to: ${formattedTime.toISOString()}`);
+                console.log(TAG, `Instant ride detected! Vis window extended to: ${formattedTime.toISOString()}`);
             }
         } catch (timeError) {
-             return res.status(400).json({ success: false, message: "Invalid time format." });
+             return res.status(400).json({ success: false, message: "Invalid date timestamp." });
         }
 
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // Query string execution matches columns tracking blueprint model
+        // Target insertion maps matching sequential table parameters
         const planQuery = `
           INSERT INTO travel_plans
             (user_id, from_place, to_place, time, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-             landmark, ride_category, service_provider, vehicle_number, instant_fare, fare,
+             landmark, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare,
              created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
         `;
 
-        const landmarkWithPhone = finalMobileNumber 
-            ? `${landmark} (Contact: ${finalMobileNumber})` 
-            : landmark;
-
-        // Sequential parameter index binding checks out exactly perfectly
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace, formattedTime,
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
-            landmark || null,
+            landmark || "Instant Booking",
             ride_category,
             service_provider,
-            finalVehicleNumber,
-            finalInstantFare,
-            baselineFare
+            vehicle_number,
+            instant_fare,
+            mobile_number,
+            fare
         ]);
 
         const newPlanId = planResult.insertId;
         if (!newPlanId) {
              await connection.rollback();
              connection.release();
-             throw new Error("Travel plan database entry insertion failed.");
+             throw new Error("Failed to insert core tracking travel plan record row.");
         }
 
+        // Auto-connect dynamic chat destination components channels 
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [toPlace]);
 
@@ -908,7 +905,7 @@ app.post("/addTravelPlan", async (req, res) => {
         if (groupRows.length === 0) {
             await connection.rollback();
             connection.release();
-            throw new Error(`Failed to map dynamic destination room tracking component group_id.`);
+            throw new Error(`Failed to bind channel tracking group_id reference.`);
         }
         const groupId = groupRows[0].group_id;
 
@@ -916,8 +913,9 @@ app.post("/addTravelPlan", async (req, res) => {
         await connection.query(memberQuery, [groupId, userId]);
 
         await connection.commit();
+        console.log(TAG, `Plan successfully created with ID: ${newPlanId}. Group channel mapping attached.`);
 
-        // --- Travel Match Notification Triggers ---
+        // --- Travel Buddy Live Notifications ---
         try {
             const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
             const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
@@ -959,12 +957,12 @@ app.post("/addTravelPlan", async (req, res) => {
                 await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
-            console.error(TAG, "Error sending travel match notification:", notifyError.message);
+            console.error(TAG, "Notification dispatcher skipped execution: ", notifyError.message);
         }
 
         res.status(201).json({
             success: true,
-            message: "Plan submitted successfully and destination channel connected.",
+            message: "Plan submitted successfully.",
             id: newPlanId
         });
 
@@ -972,10 +970,10 @@ app.post("/addTravelPlan", async (req, res) => {
         if (connection) {
             try { await connection.rollback(); } catch (e) {}
         }
-        console.error(TAG, `Error saving travel plan context mapping:`, err);
-        res.status(500).json({ success: false, message: "Server encountered a structural execution issue." });
+        console.error(TAG, `Fatal database transaction error context:`, err);
+        res.status(500).json({ success: false, message: "Internal Server database pipeline failure." });
     } finally {
-        if (connection) { connection.release(); }
+        if (connection) connection.release();
     }
 });
 
