@@ -2345,7 +2345,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
       vehicle_number: trip.vehicle_number || null
     }));
 
-    const [countResult] = await db.query suicide (`
+    const [countResult] = await db.query (`
       SELECT 
         (SELECT COUNT(*) FROM travel_plans WHERE user_id = ?) +
         (SELECT COUNT(*) FROM travel_plans_cab WHERE user_id = ?) +
