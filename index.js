@@ -1192,19 +1192,22 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     let tableName;
     let destinationCol;
     let statusFilter = "status = 'Trip Active'";
+    let timeColumn = 'time';
 
-    // Determine the schema configuration mapping dynamically
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
+        timeColumn = 'travel_datetime';
         statusFilter = "status = 'Trip Active' AND travel_datetime > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
+        timeColumn = 'travel_time';
         statusFilter = "status = 'Trip Active' AND travel_time > NOW()";
     } else {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
+        timeColumn = 'time';
         statusFilter = "status = 'Trip Active' AND time > NOW()";
 
         if (rideCategory) {
@@ -1216,22 +1219,27 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         statusFilter += ` AND ride_category = '${rideCategory}'`;
     }
 
-    // Assign the exact datetime column name per table to prevent column clashing bugs
-    let timeColumn = 'time';
-    if (commuteType === 'Cab') timeColumn = 'travel_datetime';
-    if (commuteType === 'Own') timeColumn = 'travel_time';
-
     try {
-        // Project vehicle_number and instant_fare safely through conditional fallbacks 
-        // using MAX flags to ensure compatibility across structural table fragments
+        // Isolate expressions to avoid compilation scans on columns that don't exist
+        let vehicleSelector = "NULL";
+        let fareSelector = "NULL";
+
+        if (commuteType === 'Rickshaw') {
+            vehicleSelector = "tp.vehicle_number";
+            fareSelector = "tp.instant_fare";
+        } else if (commuteType === 'Cab') {
+            vehicleSelector = "tp.vehicle_number"; // Assuming vehicle_number exists in cab table, else use NULL
+            fareSelector = "tp.estimated_fare";
+        }
+
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
                 COUNT(*) as userCount,
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
                 g.group_id,
-                MAX(CASE WHEN '${commuteType}' = 'Rickshaw' OR '${commuteType}' = 'Cab' THEN tp.vehicle_number ELSE NULL END) AS vehicle_number,
-                MAX(CASE WHEN '${commuteType}' = 'Rickshaw' THEN tp.instant_fare ELSE NULL END) AS instant_fare
+                MAX(${vehicleSelector}) AS vehicle_number,
+                MAX(${fareSelector}) AS instant_fare
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter} AND tp.${timeColumn} > NOW()
@@ -1240,14 +1248,13 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         `;
         const [destinations] = await db.query(query, [userId]);
         
-        // Mapping elements directly into the complete model payload structural contract
         const formattedDestinations = destinations.map(d => ({
             groupId: d.group_id, 
             destination: d.destination,
             userCount: d.userCount,
             isCurrentUserGoing: d.isCurrentUserGoing,
-            vehicleNumber: d.vehicle_number || null, // Resolves text tracking visibility on front-end layouts
-            instantFare: d.instant_fare || null      // Preserves fare amount parameters cleanly for rendering
+            vehicleNumber: d.vehicle_number || null, 
+            instantFare: d.instant_fare || null      
         }));
 
         res.json({ success: true, destinations: formattedDestinations });
