@@ -2303,15 +2303,15 @@ app.get('/tripHistory/:userId', async (req, res) => {
         SELECT 
             id, from_place, to_place, 
             DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
-            fare, status, added_fare as hasAddedFare, 'Sharing Rickshaw' as commute_type,
-            ride_category, service_provider, vehicle_number
+            fare, status, NULL as hasAddedFare, 'Sharing Rickshaw' as commute_type,
+            NULL as ride_category, NULL as service_provider, NULL as vehicle_number
         FROM travel_plans WHERE user_id = ?
 
         UNION ALL
 
         SELECT 
-            id, from_place, to_place,
-            DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+            id, pickup_location as from_place, destination as to_place,
+            DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
             fare, status, added_fare as hasAddedFare, 'Reserved Cab' as commute_type,
             ride_category, service_provider, vehicle_number
         FROM travel_plans_cab WHERE user_id = ?
