@@ -985,93 +985,159 @@ app.post("/addCabTravelPlan", async (req, res) => {
     let connection;
 
     try {
-        const { userId, companyName, time, pickup, destination, landmark, estimatedFare } = req.body;
+        console.log(TAG, "Incoming payload details received:", req.body);
 
-        if (!userId || !destination || !time || !companyName) {
-            return res.status(400).json({ success: false, message: "Missing required fields" });
+        // Destructure core required location tracking values safely
+        const {
+            userId, fromPlace, toPlace, time,
+            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
+            landmark
+        } = req.body;
+
+        // Resolution mapping for Android's serialized payload properties
+        const ride_category    = req.body.rideCategory    || req.body.ride_category    || 'Planned';
+        const service_provider = req.body.serviceProvider || req.body.service_provider || 'AutoMate';
+        const vehicle_number   = req.body.vehicleNumber   || req.body.vehicle_number   || null;
+        const mobile_number    = req.body.mobileNumber    || req.body.mobile_number    || null;
+
+        const instant_fare = req.body.instantFare !== undefined ? req.body.instantFare
+                           : (req.body.instant_fare !== undefined ? req.body.instant_fare : null);
+        const fare = req.body.fare || 0.00;
+
+        if (!userId || !fromPlace || !toPlace || !time ||
+            fromPlaceLat === undefined || fromPlaceLng === undefined ||
+            toPlaceLat === undefined || toPlaceLng === undefined) {
+            return res.status(400).json({
+                success: false,
+                message: "Required route coordination parameters are missing."
+            });
         }
 
         let formattedTime;
         try {
             formattedTime = new Date(time);
-            if (isNaN(formattedTime.getTime())) { throw new Error("Invalid date"); }
-        } catch (e) {
-            return res.status(400).json({ success: false, message: "Invalid time format." });
+            if (isNaN(formattedTime.getTime())) throw new Error("Invalid format.");
+
+            // Add expiration padding for instant cab rides to stay visible on standard feeds
+            if (ride_category === "Instant") {
+                formattedTime.setMinutes(formattedTime.getMinutes() + 20);
+            }
+        } catch (timeError) {
+            return res.status(400).json({ success: false, message: "Invalid date format." });
         }
 
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        const query = `INSERT INTO travel_plans_cab (user_id, company_name, travel_datetime, pickup_location, destination, landmark, status, estimated_fare) 
-                       VALUES (?, ?, ?, ?, ?, ?, 'Trip Active', ?)`;
-        const [cabResult] = await connection.query(query, [userId, companyName, formattedTime, pickup, destination, landmark, estimatedFare || 0.00]);
+        // 1. Insert core tracking travel plan record into travel_plans_cab
+        const planQuery = `
+          INSERT INTO travel_plans_cab
+            (user_id, from_place, to_place, time, status,
+             from_place_lat, from_place_lng, to_place_lat, to_place_lng,
+             landmark, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare,
+             created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+        `;
 
-        const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
-        await connection.query(groupQuery, [destination]);
+        const [planResult] = await connection.query(planQuery, [
+            userId, fromPlace, toPlace, formattedTime,
+            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
+            landmark || "Instant Booking",
+            ride_category,
+            service_provider,
+            vehicle_number,
+            instant_fare,
+            mobile_number,
+            fare
+        ]);
 
-        const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [destination]);
-        const groupId = groupRows.length > 0 ? groupRows[0].group_id : null;
-
-        if (groupId) {
-            const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
-            await connection.query(memberQuery, [groupId, userId]);
+        const newPlanId = planResult.insertId;
+        if (!newPlanId) {
+            await connection.rollback();
+            connection.release();
+            throw new Error("Core cab travel plan row entry creation insertion failed.");
         }
 
+        // 2. Manage destination group room allocation sequences
+        const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`;
+        await connection.query(groupQuery, [toPlace]);
+
+        const [groupRows] = await connection.query('SELECT group_id FROM \`group_table\` WHERE group_name = ?', [toPlace]);
+        if (groupRows.length === 0) {
+            await connection.rollback();
+            connection.release();
+            throw new Error(`Failed to establish destination chat group_id context allocation channel.`);
+        }
+        const groupId = groupRows[0].group_id;
+
+        // 3. Connect active user to the target group channel
+        const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
+        await connection.query(memberQuery, [groupId, userId]);
+
+        // 4. Fetch the user's name using the open transaction pool context before the commit completes
+        const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
+        const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
+
+        // 5. Look for match criteria inside active table boundaries
+        const [matchingUsers] = await connection.query(`
+            SELECT DISTINCT u.fcm_token
+            FROM travel_plans_cab tp
+            JOIN users u ON tp.user_id = u.id
+            WHERE tp.to_place = ?
+              AND tp.status = 'Trip Active'
+              AND tp.user_id != ?
+              AND u.fcm_token IS NOT NULL
+              AND u.trip_alerts_enabled = 1
+        `, [toPlace, userId]);
+
+        // 6. Complete transaction sequence updates atomically
         await connection.commit();
 
-        try {
-            const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
-            const joinerName = userRows.length > 0 ? userRows[0].name : "A traveler";
-
-            const [matchingUsers] = await connection.query(`
-                SELECT DISTINCT u.fcm_token 
-                FROM travel_plans_cab tp
-                JOIN users u ON tp.user_id = u.id
-                WHERE tp.destination = ? 
-                  AND tp.status = 'Trip Active'
-                  AND tp.user_id != ? 
-                  AND u.fcm_token IS NOT NULL
-                  AND u.trip_alerts_enabled = 1
-            `, [destination, userId]);
-
-            if (matchingUsers.length > 0) {
+        // --- Asynchronous Notification Dispatches Execution ---
+        if (matchingUsers.length > 0) {
+            try {
                 const tokens = matchingUsers.map(u => u.fcm_token).filter(t => t);
                 const messagePayload = {
-    tokens: tokens,
-    notification: {
-        title: "New Cab Buddy!",
-        body: `${joinerName} is also taking a cab to ${destination}!`
-    },
-    android: {
-        priority: "high",
-        notification: {
-            channelId: "channel_custom_sound_v3", 
-            priority: "high",
-            defaultSound: true
-        }
-    },
-    data: {
-        type: "travel_match",
-        destinationName: String(destination),
-        commuteType: "Cab"
-    }
-};
+                    tokens: tokens,
+                    notification: {
+                        title: "New Cab Buddy!",
+                        body: `${joinerName} is also taking a cab to ${toPlace}!`
+                    },
+                    android: {
+                        priority: "high",
+                        notification: {
+                            channelId: "channel_custom_sound_v3",
+                            sound: "custom_notification",
+                            priority: "high",
+                            defaultSound: false
+                        }
+                    },
+                    data: {
+                        type: "travel_match",
+                        destinationName: String(toPlace),
+                        groupId: String(groupId),
+                        commuteType: "Cab"
+                    }
+                };
                 await admin.messaging().sendEachForMulticast(messagePayload);
+                console.log(TAG, `Successfully broadcasted matching cab notifications to ${tokens.length} subscribers.`);
+            } catch (notifyError) {
+                console.error(TAG, "FCM notification dispatch failed to execute cleanly:", notifyError.message);
             }
-        } catch (notifyError) {
-            console.error(TAG, "Notification Error: " + notifyError.message);
         }
 
-        res.status(201).json({ 
-            success: true, 
-            message: "Cab plan saved successfully",
-            id: cabResult.insertId 
+        res.status(201).json({
+            success: true,
+            message: "Cab plan submitted successfully and group joined",
+            id: newPlanId
         });
 
     } catch (err) {
-        if (connection) await connection.rollback();
-        console.error(TAG, "Error:", err);
-        res.status(500).json({ success: false, message: "Server error" });
+        if (connection) {
+            try { await connection.rollback(); } catch (e) {}
+        }
+        console.error(TAG, `Transaction rollback generated error:`, err);
+        res.status(500).json({ success: false, message: "Server transaction execution failure." });
     } finally {
         if (connection) connection.release();
     }
@@ -1196,9 +1262,9 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
-        destinationCol = 'destination';
-        timeColumn = 'travel_datetime';
-        statusFilter = "status = 'Trip Active' AND travel_datetime > NOW()";
+        destinationCol = 'to_place';
+        timeColumn = 'time';
+        statusFilter = "status = 'Trip Active' AND time > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
@@ -1224,9 +1290,11 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         if (commuteType === 'Rickshaw') {
             vehicleSelector = "tp.vehicle_number";
             fareSelector = "tp.instant_fare";
+        } else if (commuteType === 'Cab') {
+            vehicleSelector = "tp.vehicle_number";
+            fareSelector = "tp.instant_fare";
         }
-        // Cab: no vehicle_number/fare columns on this destinations list endpoint — NULL is correct
-        // Own: same — no vehicle_number/fare needed here
+        // Own: no vehicle_number/fare needed here
 
         const query = `
             SELECT 
@@ -1274,10 +1342,10 @@ app.get("/users/destination", async (req, res) => {
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
-        fromCol = 'pickup_location';
-        toCol = 'destination';
-        dbTimeField = 'travel_datetime';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+        fromCol = 'from_place';
+        toCol = 'to_place';
+        dbTimeField = 'time';
+        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
@@ -1298,11 +1366,11 @@ app.get("/users/destination", async (req, res) => {
         let categorySelection, providerSelection, vehicleSelection, fareSelection, mobileSelection;
 
         if (commuteType === 'Cab') {
-            categorySelection = "'Instant'";
-            providerSelection = "tp.company_name";
-            vehicleSelection  = "NULL";       // travel_plans_cab has no vehicle_number column
-            fareSelection     = "tp.estimated_fare";
-            mobileSelection   = "NULL";       // Provide fallback if travel_plans_cab lacks explicit column tracking
+            categorySelection = "tp.ride_category";
+            providerSelection = "tp.service_provider";
+            vehicleSelection  = "tp.vehicle_number";
+            fareSelection     = "tp.instant_fare";
+            mobileSelection   = "tp.mobile_number";
         } else if (commuteType === 'Own') {
             categorySelection = "'Planned'";
             providerSelection = "'Own Vehicle'";
@@ -2229,7 +2297,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
-    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_datetime < NOW()`, [uId]);
+    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_time < NOW()`, [uId]);
 
     const historyQuery = `
@@ -2244,10 +2312,10 @@ app.get('/tripHistory/:userId', async (req, res) => {
         UNION ALL
 
         SELECT 
-            id, pickup_location as from_place, destination as to_place,
-            DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
+            id, from_place, to_place,
+            DATE_FORMAT(time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
             fare, status, added_fare as hasAddedFare, 'Reserved Cab' as commute_type,
-            NULL as ride_category, NULL as service_provider, NULL as vehicle_number
+            ride_category, service_provider, vehicle_number
         FROM travel_plans_cab WHERE user_id = ?
 
         UNION ALL
@@ -2463,7 +2531,7 @@ app.get('/checkCompletedTrips/:userId', async (req, res) => {
 app.post('/autoUpdateCompletedTrips', async (req, res) => {
   try {
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE status = 'Trip Active' AND time < NOW()`);
-    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE status = 'Trip Active' AND travel_datetime < NOW()`);
+    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE status = 'Trip Active' AND time < NOW()`);
     res.json({ success: true, message: "Trips updated" });
   } catch (error) {
     console.error('Error auto-updating trips:', error);
