@@ -1993,6 +1993,7 @@ app.get("/getUsersGoing", async (req, res) => {
         const friendIds = new Set(friendRows.map(row => row.friend_id));
         friendIds.add(parseInt(currentUserId));
 
+        // Fix: Added u.work_detail to the SELECT clause
         const plansQuery = `
             SELECT
                 tp.user_id,
@@ -2000,6 +2001,8 @@ app.get("/getUsersGoing", async (req, res) => {
                 u.profile_pic,
                 u.gender,
                 u.profile_visibility,
+                u.work_category,
+                u.work_detail,
                 tp.from_place as fromPlace,
                 tp.to_place as toPlace,
                 DATE_FORMAT(tp.time, '%Y-%m-%d %H:%i:%s') as time
@@ -2018,6 +2021,8 @@ app.get("/getUsersGoing", async (req, res) => {
             toPlace: user.toPlace,
             time: user.time,
             gender: user.gender,
+            workCategory: user.work_category, // Pass to client
+            workDetail: user.work_detail,     // Pass to client
             profile_pic: getVisibleProfilePic(user, parseInt(currentUserId), friendIds)
         }));
 
