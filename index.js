@@ -1257,62 +1257,41 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     }
 });
 
-app.get('/users/destination', async (req, res) => {
-    const TAG = "/users/destination";
+// ==================== FULLY UPDATED AND uncut ENDPOINT ====================
+app.get("/users/destination", async (req, res) => {
     const { groupId, userId, commuteType, destinationName, rideCategory } = req.query;
 
-    if (!userId || (!groupId && !destinationName)) {
-        return res.status(400).json({ success: false, message: 'Missing required parameters' });
-    }
-
-    const currentUserId = parseInt(userId);
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    
-    // Default columns mapping for standard travel_plans (Rickshaw)
-    let categorySelection = "tp.ride_category";
-    let providerSelection = "tp.service_provider";
-    let vehicleSelection = "tp.vehicle_number";
+    let statusFilter = "tp.status = 'Trip Active'";
 
+    // 1. Map tables dynamically and configure isolated constraints
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        categorySelection = "'Instant'"; // Cab app integrations are implicitly Instant bookings
-        providerSelection = "tp.company_name"; // Maps Uber/Ola/Rapido strings
-        vehicleSelection = "tp.vehicle_number";
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
-        categorySelection = "'Planned'"; // Personal vehicle plans are usually planned
-        providerSelection = "'Personal Vehicle'";
-        vehicleSelection = "tp.vehicle_number";
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
+    } else {
+        // Standard Rickshaw / general travel plans table filter mapping
+        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
+        if (rideCategory) {
+            statusFilter += ` AND tp.ride_category = ${db.escape(rideCategory)}`;
+        }
     }
 
     try {
-        const [friendRows] = await db.query(
-            `SELECT DISTINCT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as friend_id 
-             FROM messages WHERE sender_id = ? OR receiver_id = ?`,
-            [currentUserId, currentUserId, currentUserId]
-        );
-        const friendIds = new Set(friendRows.map(row => row.friend_id));
-
-        let finalDestName = destinationName;
-        if (!finalDestName && groupId) {
-            const [groupRows] = await db.query("SELECT group_name FROM group_table WHERE group_id = ?", [groupId]);
-            if (groupRows.length > 0) finalDestName = groupRows[0].group_name;
-        }
-
-        if (!finalDestName) {
-            return res.status(404).json({ success: false, message: 'Destination not identified' });
-        }
-
-        let categoryFilter = "";
-        if (commuteType === 'Rickshaw' && rideCategory) {
-            categoryFilter = ` AND tp.ride_category = ${db.escape(rideCategory)}`;
-        }
+        // 2. Safe Dynamic Column Projection
+        // Uses string match fallbacks to supply clean NULL vectors to avoid SQL structural clashes
+        const categorySelection = (commuteType === 'Cab') ? "'Instant'" : "tp.ride_category";
+        const providerSelection = (commuteType === 'Cab') ? "tp.company_name" : ((commuteType === 'Rickshaw') ? "tp.service_provider" : "'AutoMate'");
+        const vehicleSelection  = (commuteType === 'Own') ? "NULL" : "tp.vehicle_number";
+        const fareSelection     = (commuteType === 'Cab') ? "tp.estimated_fare" : ((commuteType === 'Rickshaw') ? "tp.instant_fare" : "tp.fare");
 
         const query = `
             SELECT
@@ -1333,36 +1312,48 @@ app.get('/users/destination', async (req, res) => {
                     ELSE DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')
                 END as time,
                 tp.landmark,
-                ${categorySelection} as ride_category,       
-                ${providerSelection} as service_provider, 
-                ${vehicleSelection} as vehicle_number      
+                COALESCE(${categorySelection}, 'Planned') as ride_category,       
+                COALESCE(${providerSelection}, 'AutoMate') as service_provider, 
+                ${vehicleSelection} as vehicle_number,
+                COALESCE(${fareSelection}, 0.00) as fare
             FROM ${tableName} tp
             JOIN users u ON tp.user_id = u.id
-            WHERE
-                tp.${toCol} = ?
-                AND tp.status = 'Trip Active' 
-                AND tp.user_id != ?
-                ${categoryFilter}   
-            ORDER BY tp.created_at DESC
+            WHERE ${statusFilter} AND tp.${toCol} = ? AND tp.user_id != ?
+            ORDER BY tp.id DESC
         `;
 
-        const [users] = await db.execute(query, [finalDestName, currentUserId]);
+        const [users] = await db.query(query, [destinationName, userId]);
+
+        // Helper tracking framework to resolve profile pic distribution rules safely
+        const getVisibleProfilePic = (userRecord) => {
+            if (!userRecord.profile_pic) return null;
+            if (userRecord.profile_visibility === 'Everyone') return userRecord.profile_pic;
+            return null; 
+        };
 
         const responseUsers = users.map(user => ({
-            ...user,
-            commuteType: commuteType,
-            profilePic: getVisibleProfilePic(
-                { ...user, profile_pic: user.profilePic, user_id: user.id },
-                currentUserId,
-                friendIds
-            )
+            id: user.id,
+            userId: user.userId,
+            name: user.name,
+            workCategory: user.work_category,
+            workDetail: user.work_detail,
+            gender: user.gender,
+            fromPlace: user.fromPlace,
+            toPlace: user.toPlace,
+            time: user.time,
+            landmark: user.landmark || "",
+            ride_category: user.ride_category,
+            service_provider: user.service_provider,
+            vehicle_number: user.vehicle_number || "",
+            fare: String(user.fare),
+            profilePic: getVisibleProfilePic(user)
         }));
 
         res.json({ success: true, users: responseUsers });
 
-    } catch (error) {
-        console.error(TAG, "Error fetching users:", error);
-        res.status(500).json({ success: false, message: 'Server error fetching users' });
+    } catch (err) {
+        console.error("Error inside /users/destination route controller layer:", err);
+        res.status(500).json({ success: false, message: "Server error fetching users" });
     }
 });
 
