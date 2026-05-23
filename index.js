@@ -2295,7 +2295,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
 
     // FIXED: Ensured execution checks hit valid time columns across individual layout architectures
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
-    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
+    await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_datetime < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_time < NOW()`, [uId]);
 
     const historyQuery = `
