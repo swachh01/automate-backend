@@ -1257,7 +1257,6 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     }
 });
 
-// ==================== FULLY UPDATED AND uncut ENDPOINT ====================
 app.get("/users/destination", async (req, res) => {
     const { groupId, userId, commuteType, destinationName, rideCategory } = req.query;
 
@@ -1265,20 +1264,25 @@ app.get("/users/destination", async (req, res) => {
     let fromCol = 'from_place';
     let toCol = 'to_place';
     let statusFilter = "tp.status = 'Trip Active'";
+    
+    // ✅ FIX 1: Determine the specific datetime column token inside JavaScript 
+    // to prevent MySQL from evaluating missing fields across table boundaries
+    let dbTimeField = 'time';
 
-    // 1. Map tables dynamically and configure isolated constraints
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
+        dbTimeField = 'travel_datetime';
         statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
+        dbTimeField = 'travel_time';
         statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
     } else {
-        // Standard Rickshaw / general travel plans table filter mapping
+        // Standard Rickshaw / travel_plans structure filtering
         statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
         if (rideCategory) {
             statusFilter += ` AND tp.ride_category = ${db.escape(rideCategory)}`;
@@ -1286,12 +1290,26 @@ app.get("/users/destination", async (req, res) => {
     }
 
     try {
-        // 2. Safe Dynamic Column Projection
-        // Uses string match fallbacks to supply clean NULL vectors to avoid SQL structural clashes
-        const categorySelection = (commuteType === 'Cab') ? "'Instant'" : "tp.ride_category";
-        const providerSelection = (commuteType === 'Cab') ? "tp.company_name" : ((commuteType === 'Rickshaw') ? "tp.service_provider" : "'AutoMate'");
-        const vehicleSelection  = (commuteType === 'Own') ? "NULL" : "tp.vehicle_number";
-        const fareSelection     = (commuteType === 'Cab') ? "tp.estimated_fare" : ((commuteType === 'Rickshaw') ? "tp.instant_fare" : "tp.fare");
+        // ✅ FIX 2: Safely isolate structural query selections per table profile
+        let categorySelection, providerSelection, vehicleSelection, fareSelection;
+
+        if (commuteType === 'Cab') {
+            categorySelection = "'Instant'";
+            providerSelection = "tp.company_name";
+            vehicleSelection  = "tp.vehicle_number";
+            fareSelection     = "tp.estimated_fare";
+        } else if (commuteType === 'Own') {
+            categorySelection = "'Planned'";
+            providerSelection = "'Own Vehicle'";
+            vehicleSelection  = "NULL";
+            fareSelection     = "0.00";
+        } else {
+            // Standard Rickshaw table profile mapping parameters safely
+            categorySelection = "tp.ride_category";
+            providerSelection = "tp.service_provider";
+            vehicleSelection  = "tp.vehicle_number";
+            fareSelection     = "tp.instant_fare";
+        }
 
         const query = `
             SELECT
@@ -1306,11 +1324,7 @@ app.get("/users/destination", async (req, res) => {
                 u.profile_visibility,
                 tp.${fromCol} as fromPlace,
                 tp.${toCol} as toPlace,
-                CASE 
-                    WHEN '${commuteType}' = 'Cab' THEN DATE_FORMAT(tp.travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z')
-                    WHEN '${commuteType}' = 'Own' THEN DATE_FORMAT(tp.travel_time, '%Y-%m-%dT%H:%i:%s.000Z')
-                    ELSE DATE_FORMAT(tp.time, '%Y-%m-%dT%H:%i:%s.000Z')
-                END as time,
+                DATE_FORMAT(tp.${dbTimeField}, '%Y-%m-%dT%H:%i:%s.000Z') as time,
                 tp.landmark,
                 COALESCE(${categorySelection}, 'Planned') as ride_category,       
                 COALESCE(${providerSelection}, 'AutoMate') as service_provider, 
@@ -1324,7 +1338,6 @@ app.get("/users/destination", async (req, res) => {
 
         const [users] = await db.query(query, [destinationName, userId]);
 
-        // Helper tracking framework to resolve profile pic distribution rules safely
         const getVisibleProfilePic = (userRecord) => {
             if (!userRecord.profile_pic) return null;
             if (userRecord.profile_visibility === 'Everyone') return userRecord.profile_pic;
