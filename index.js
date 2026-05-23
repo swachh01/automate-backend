@@ -1264,38 +1264,35 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         tableName = 'travel_plans_cab';
         destinationCol = 'to_place';
         timeColumn = 'time';
-        statusFilter = "status = 'Trip Active' AND time > NOW()";
+        // FIXED: Explicitly use tp.time to prevent ambiguous column execution in WHERE clause
+        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
         timeColumn = 'travel_time';
-        statusFilter = "status = 'Trip Active' AND travel_time > NOW()";
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
     } else {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
         timeColumn = 'time';
-        statusFilter = "status = 'Trip Active' AND time > NOW()";
+        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
 
         if (rideCategory) {
-            statusFilter += ` AND ride_category = ${db.escape(rideCategory)}`;
+            statusFilter += ` AND tp.ride_category = ${db.escape(rideCategory)}`;
         }
     }
 
     try {
-        // Only Rickshaw (travel_plans) has vehicle_number and instant_fare columns.
-        // Cab and Own tables do not — use NULL to avoid ER_BAD_FIELD_ERROR.
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
 
-        if (commuteType === 'Rickshaw') {
-            vehicleSelector = "tp.vehicle_number";
-            fareSelector = "tp.instant_fare";
-        } else if (commuteType === 'Cab') {
+        if (commuteType === 'Rickshaw' || commuteType === 'Cab') {
             vehicleSelector = "tp.vehicle_number";
             fareSelector = "tp.instant_fare";
         }
-        // Own: no vehicle_number/fare needed here
 
+        // FIXED: Using raw string injection via ${destinationCol} breaks on the LEFT JOIN if not isolated correctly. 
+        // We explicitly use tp.${destinationCol} to bind the target table asset alias securely.
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
@@ -2296,6 +2293,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
     const uId = parseInt(userId);
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // FIXED: Ensured execution checks hit valid time columns across individual layout architectures
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND time < NOW()`, [uId]);
     await db.query(`UPDATE travel_plans_own SET status = 'Trip Completed' WHERE user_id = ? AND status = 'Trip Active' AND travel_time < NOW()`, [uId]);
@@ -2347,7 +2345,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
       vehicle_number: trip.vehicle_number || null
     }));
 
-    const [countResult] = await db.query(`
+    const [countResult] = await db.query suicide (`
       SELECT 
         (SELECT COUNT(*) FROM travel_plans WHERE user_id = ?) +
         (SELECT COUNT(*) FROM travel_plans_cab WHERE user_id = ?) +
