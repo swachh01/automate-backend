@@ -1262,10 +1262,9 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
-        destinationCol = 'to_place';
-        timeColumn = 'time';
-        // FIXED: Explicitly use tp.time to prevent ambiguous column execution in WHERE clause
-        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
+        destinationCol = 'destination';
+        timeColumn = 'travel_datetime';
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
@@ -1339,10 +1338,10 @@ app.get("/users/destination", async (req, res) => {
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
-        fromCol = 'from_place';
-        toCol = 'to_place';
-        dbTimeField = 'time';
-        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
+        fromCol = 'pickup_location';
+        toCol = 'destination';
+        dbTimeField = 'travel_datetime';
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
