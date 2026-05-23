@@ -1268,7 +1268,7 @@ app.get("/users/destination", async (req, res) => {
     let toCol = 'to_place';
     let statusFilter = "tp.status = 'Trip Active'";
     
-    // ✅ FIX 1: Determine the specific datetime column token inside JavaScript 
+    // Determine the specific datetime column token inside JavaScript 
     // to prevent MySQL from evaluating missing fields across table boundaries
     let dbTimeField = 'time';
 
@@ -1293,25 +1293,29 @@ app.get("/users/destination", async (req, res) => {
     }
 
     try {
-        // ✅ FIX 2: Safely isolate structural query selections per table profile
-        let categorySelection, providerSelection, vehicleSelection, fareSelection;
+        // Safely isolate structural query selections per table profile
+        // Added dynamic mobileSelection mappings across individual table endpoints
+        let categorySelection, providerSelection, vehicleSelection, fareSelection, mobileSelection;
 
         if (commuteType === 'Cab') {
             categorySelection = "'Instant'";
             providerSelection = "tp.company_name";
             vehicleSelection  = "NULL";       // travel_plans_cab has no vehicle_number column
             fareSelection     = "tp.estimated_fare";
+            mobileSelection   = "NULL";       // Provide fallback if travel_plans_cab lacks explicit column tracking
         } else if (commuteType === 'Own') {
             categorySelection = "'Planned'";
             providerSelection = "'Own Vehicle'";
             vehicleSelection  = "NULL";
             fareSelection     = "0.00";
+            mobileSelection   = "NULL";       // Provide fallback if travel_plans_own lacks explicit column tracking
         } else {
             // Standard Rickshaw table profile mapping parameters safely
             categorySelection = "tp.ride_category";
             providerSelection = "tp.service_provider";
             vehicleSelection  = "tp.vehicle_number";
             fareSelection     = "tp.instant_fare";
+            mobileSelection   = "tp.mobile_number"; // Pulls directly from core table configuration
         }
 
         const query = `
@@ -1332,7 +1336,8 @@ app.get("/users/destination", async (req, res) => {
                 COALESCE(${categorySelection}, 'Planned') as ride_category,       
                 COALESCE(${providerSelection}, 'AutoMate') as service_provider, 
                 ${vehicleSelection} as vehicle_number,
-                COALESCE(${fareSelection}, 0.00) as fare
+                COALESCE(${fareSelection}, 0.00) as fare,
+                ${mobileSelection} as mobile_number
             FROM ${tableName} tp
             JOIN users u ON tp.user_id = u.id
             WHERE ${statusFilter} AND tp.${toCol} = ? AND tp.user_id != ?
@@ -1362,6 +1367,7 @@ app.get("/users/destination", async (req, res) => {
             service_provider: user.service_provider,
             vehicle_number: user.vehicle_number || "",
             fare: String(user.fare),
+            mobileNumber: user.mobile_number || null, // Bound safely to parse downstream on client Android models
             profilePic: getVisibleProfilePic(user)
         }));
 
