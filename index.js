@@ -2247,7 +2247,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_datetime, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
             fare, status, added_fare as hasAddedFare, 'Reserved Cab' as commute_type,
-            ride_category, service_provider, vehicle_number
+            NULL as ride_category, NULL as service_provider, NULL as vehicle_number
         FROM travel_plans_cab WHERE user_id = ?
 
         UNION ALL
@@ -2256,7 +2256,7 @@ app.get('/tripHistory/:userId', async (req, res) => {
             id, pickup_location as from_place, destination as to_place,
             DATE_FORMAT(travel_time, '%Y-%m-%dT%H:%i:%s.000Z') as travel_time,
             fare, status, added_fare as hasAddedFare, 'Personal Vehicle' as commute_type,
-            ride_category, service_provider, vehicle_number
+            NULL as ride_category, NULL as service_provider, NULL as vehicle_number
         FROM travel_plans_own WHERE user_id = ?
       ) AS combined_history
       ORDER BY travel_time DESC
@@ -2270,10 +2270,13 @@ app.get('/tripHistory/:userId', async (req, res) => {
       from_place: trip.from_place,
       to_place: trip.to_place,
       travel_time: trip.travel_time,
-      fare: trip.fare ? parseFloat(trip.fare) : 0.00, 
+      fare: trip.fare ? parseFloat(trip.fare) : 0.00,
       status: trip.status,
-      hasAddedFare: Boolean(trip.hasAddedFare), 
-      commute_type: trip.commute_type 
+      hasAddedFare: Boolean(trip.hasAddedFare),
+      commute_type: trip.commute_type,
+      ride_category: trip.ride_category || null,
+      service_provider: trip.service_provider || null,
+      vehicle_number: trip.vehicle_number || null
     }));
 
     const [countResult] = await db.query(`
