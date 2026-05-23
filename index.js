@@ -1299,7 +1299,7 @@ app.get("/users/destination", async (req, res) => {
         if (commuteType === 'Cab') {
             categorySelection = "'Instant'";
             providerSelection = "tp.company_name";
-            vehicleSelection  = "tp.vehicle_number";
+            vehicleSelection  = "NULL";       // travel_plans_cab has no vehicle_number column
             fareSelection     = "tp.estimated_fare";
         } else if (commuteType === 'Own') {
             categorySelection = "'Planned'";
