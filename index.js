@@ -1215,22 +1215,18 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         }
     }
 
-    if (commuteType === 'Rickshaw' && rideCategory) {
-        statusFilter += ` AND ride_category = '${rideCategory}'`;
-    }
-
     try {
-        // Isolate expressions to avoid compilation scans on columns that don't exist
+        // Only Rickshaw (travel_plans) has vehicle_number and instant_fare columns.
+        // Cab and Own tables do not — use NULL to avoid ER_BAD_FIELD_ERROR.
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
 
         if (commuteType === 'Rickshaw') {
             vehicleSelector = "tp.vehicle_number";
             fareSelector = "tp.instant_fare";
-        } else if (commuteType === 'Cab') {
-            vehicleSelector = "tp.vehicle_number"; // Assuming vehicle_number exists in cab table, else use NULL
-            fareSelector = "tp.estimated_fare";
         }
+        // Cab: no vehicle_number/fare columns on this destinations list endpoint — NULL is correct
+        // Own: same — no vehicle_number/fare needed here
 
         const query = `
             SELECT 
