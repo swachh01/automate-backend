@@ -657,7 +657,8 @@ app.post("/login", async (req, res) => {
       const normalized = normalizePhoneData(phone, country_code);
       finalPhone = normalized.phone;
       query = `SELECT 
-        id, 
+        id,
+        user_id, 
         CONCAT(first_name, ' ', last_name) as name, 
         work_category, 
         phone, 
@@ -675,7 +676,8 @@ app.post("/login", async (req, res) => {
       queryParams = [finalPhone, normalized.country_code];
   } else {
       query = `SELECT 
-        id, 
+        id,
+        user_id, 
         CONCAT(first_name, ' ', last_name) as name, 
         work_category, 
         phone, 
