@@ -833,7 +833,7 @@ app.post("/addTravelPlan", async (req, res) => {
         } = req.body;
 
         // Resolution mapping for Android's serialized payload properties
-        const ride_category    = req.body.rideCategory || req.body.ride_category || 'Planned';
+        const ride_category    = req.body.rideCategory || req.body.ride_category;
         const service_provider = req.body.serviceProvider || req.body.service_provider || 'AutoMate';
         const vehicle_number   = req.body.vehicleNumber || req.body.vehicle_number || null;
         const mobile_number    = req.body.mobileNumber || req.body.mobile_number || null;
@@ -848,6 +848,13 @@ app.post("/addTravelPlan", async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: "Required route coordination parameters are missing."
+            });
+        }
+
+        if (!ride_category) {
+            return res.status(400).json({
+                success: false,
+                message: "rideCategory is required (must be 'Instant' or 'Planned')."
             });
         }
 
@@ -1005,7 +1012,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
         const toPlaceLng = req.body.toPlaceLng !== undefined ? req.body.toPlaceLng : req.body.toLng;
 
         // Resolution mapping for Android's serialized payload properties
-        const ride_category    = req.body.rideCategory    || req.body.ride_category    || 'Planned';
+        const ride_category    = req.body.rideCategory    || req.body.ride_category;
         const service_provider = req.body.serviceProvider || req.body.service_provider || 'AutoMate';
         const vehicle_number   = req.body.vehicleNumber   || req.body.vehicle_number   || null;
         const mobile_number    = req.body.mobileNumber    || req.body.mobile_number    || null;
@@ -1021,6 +1028,13 @@ app.post("/addCabTravelPlan", async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: "Required route coordination parameters are missing."
+            });
+        }
+
+        if (!ride_category) {
+            return res.status(400).json({
+                success: false,
+                message: "rideCategory is required (must be 'Instant' or 'Planned')."
             });
         }
 
