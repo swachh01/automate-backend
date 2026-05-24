@@ -411,6 +411,25 @@ function normalizePhoneData(phone, countryCode) {
     };
 }
 
+async function generateUniqueUserId(firstName) {
+    const cleanName = firstName.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    let isUnique = false;
+    let finalUserId = "";
+
+    while (!isUnique) {
+        // Create a 4-character random alphanumeric suffix
+        const randomSuffix = Math.random().toString(36).substring(2, 6);
+        finalUserId = `${cleanName}_${randomSuffix}`;
+
+        // Verify against DB to ensure zero collisions
+        const [rows] = await db.query("SELECT id FROM users WHERE user_id = ?", [finalUserId]);
+        if (rows.length === 0) {
+            isUnique = true;
+        }
+    }
+    return finalUserId;
+}
+
 app.get("/health", async (_req, res) => {
   try {
     await db.query('SELECT 1');
@@ -717,9 +736,10 @@ app.post("/login", async (req, res) => {
   }
 });
 
+// Replace your existing app.post("/updateProfile", ...) with this:
 app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
   try {
-    console.log("=== Update Profile Request ===");
+    console.log("=== Update Profile Request (Stage 4 Complete) ===");
     const { 
       userId, 
       dob, 
@@ -733,8 +753,22 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing userId" });
     }
 
+    // --- NEW LOGIC: Generate user_id if they don't have one ---
+    const [currentUser] = await db.query("SELECT first_name, user_id FROM users WHERE id = ?", [userId]);
+    if (currentUser.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
     const sets = [];
     const params = [];
+
+    // Only generate a new id if it's currently missing or null
+    if (!currentUser[0].user_id) {
+      const generatedId = await generateUniqueUserId(currentUser[0].first_name);
+      sets.push("user_id = ?");
+      params.push(generatedId);
+    }
+    // ---------------------------------------------------------
 
     if (dob) {
       sets.push("dob = ?");
@@ -780,6 +814,7 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     const [rows] = await db.query(
       `SELECT
         id,
+        user_id,
         CONCAT(first_name, ' ', last_name) as name,
         work_category,
         work_detail,
@@ -797,7 +832,7 @@ app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
     );
 
     const updatedUser = rows[0];
-    console.log("Profile Updated for User:", updatedUser.id);
+    console.log("Profile Updated for User:", updatedUser.id, "Generated UserID:", updatedUser.user_id);
 
     res.json({
       success: true,
@@ -3516,36 +3551,39 @@ app.get('/searchUsers', async (req, res) => {
         );
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-        const sql = `
-            SELECT u.id, u.first_name, u.last_name, 
-                   CONCAT(u.first_name, ' ', u.last_name) as name, 
-                   u.work_category, u.work_detail, u.profile_pic, u.gender, u.profile_visibility,
-                   EXISTS (
-                        SELECT 1 FROM messages m 
-                        WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
-                           OR (m.sender_id = u.id AND m.receiver_id = ?)
-                    ) as hasChat,
-                   CASE 
-                        WHEN LOWER(u.first_name) LIKE ? THEN 1
-                        WHEN LOWER(u.last_name) LIKE ? THEN 2
-                        ELSE 3
-                   END as search_priority
-            FROM users u 
-            WHERE (LOWER(u.first_name) LIKE ? OR LOWER(u.last_name) LIKE ? OR LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ?)
-              AND u.id != ? 
-            ORDER BY search_priority ASC, u.first_name ASC 
-            LIMIT 100`;
+        // Locate app.get('/searchUsers'...) and update the sql text block to include u.user_id:
+const sql = `
+    SELECT u.id, u.user_id, u.first_name, u.last_name, 
+           CONCAT(u.first_name, ' ', u.last_name) as name, 
+           u.work_category, u.work_detail, u.profile_pic, u.gender, u.profile_visibility,
+           EXISTS (
+                SELECT 1 FROM messages m 
+                WHERE (m.sender_id = ? AND m.receiver_id = u.id) 
+                   OR (m.sender_id = u.id AND m.receiver_id = ?)
+            ) as hasChat,
+           CASE 
+                WHEN LOWER(u.user_id) LIKE ? THEN 0   -- Highest priority if matching unique user_id
+                WHEN LOWER(u.first_name) LIKE ? THEN 1
+                WHEN LOWER(u.last_name) LIKE ? THEN 2
+                ELSE 3
+           END as search_priority
+    FROM users u 
+    WHERE (LOWER(u.first_name) LIKE ? OR LOWER(u.last_name) LIKE ? OR LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ? OR LOWER(u.user_id) LIKE ?)
+      AND u.id != ? 
+    ORDER BY search_priority ASC, u.first_name ASC 
+    LIMIT 100`;
 
-        const searchLike = `%${searchTerm}%`;
-        const startLike = `${searchTerm}%`;
+const searchLike = `%${searchTerm}%`;
+const startLike = `${searchTerm}%`;
 
-        const [users] = await db.execute(sql, [
-            currentUserId, currentUserId, 
-            startLike, 
-            startLike, 
-            searchLike, searchLike, searchLike, 
-            currentUserId 
-        ]);
+const [users] = await db.execute(sql, [
+    currentUserId, currentUserId, 
+    startLike, // user_id priority match
+    startLike, 
+    startLike, 
+    searchLike, searchLike, searchLike, searchLike, // user_id context match
+    currentUserId 
+]);
 
         const response = users.map(u => ({ 
             ...u, 
