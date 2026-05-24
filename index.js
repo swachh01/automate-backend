@@ -980,6 +980,8 @@ app.post("/addTravelPlan", async (req, res) => {
     }
 });
 
+// ================= UPDATE WITHIN /addCabTravelPlan =================
+
 app.post("/addCabTravelPlan", async (req, res) => {
     const TAG = "/addCabTravelPlan";
     let connection;
@@ -987,12 +989,20 @@ app.post("/addCabTravelPlan", async (req, res) => {
     try {
         console.log(TAG, "Incoming payload details received:", req.body);
 
-        // Destructure core required location tracking values safely
-        const {
-            userId, fromPlace, toPlace, time,
-            fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
-            landmark
-        } = req.body;
+        // Safely extract properties by handling both backend-preferred and Android payload formats
+        const userId = req.body.userId;
+        const fromPlace = req.body.fromPlace;
+        const toPlace = req.body.toPlace;
+        const landmark = req.body.landmark;
+        
+        // Map alternative time tokens
+        const time = req.body.time || req.body.dateTime;
+
+        // Map alternative coordinate layouts
+        const fromPlaceLat = req.body.fromPlaceLat !== undefined ? req.body.fromPlaceLat : req.body.fromLat;
+        const fromPlaceLng = req.body.fromPlaceLng !== undefined ? req.body.fromPlaceLng : req.body.fromLng;
+        const toPlaceLat = req.body.toPlaceLat !== undefined ? req.body.toPlaceLat : req.body.toLat;
+        const toPlaceLng = req.body.toPlaceLng !== undefined ? req.body.toPlaceLng : req.body.toLng;
 
         // Resolution mapping for Android's serialized payload properties
         const ride_category    = req.body.rideCategory    || req.body.ride_category    || 'Planned';
@@ -1004,6 +1014,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
                            : (req.body.instant_fare !== undefined ? req.body.instant_fare : null);
         const fare = req.body.fare || 0.00;
 
+        // Validation Check
         if (!userId || !fromPlace || !toPlace || !time ||
             fromPlaceLat === undefined || fromPlaceLng === undefined ||
             toPlaceLat === undefined || toPlaceLng === undefined) {
@@ -1018,7 +1029,6 @@ app.post("/addCabTravelPlan", async (req, res) => {
             formattedTime = new Date(time);
             if (isNaN(formattedTime.getTime())) throw new Error("Invalid format.");
 
-            // Add expiration padding for instant cab rides to stay visible on standard feeds
             if (ride_category === "Instant") {
                 formattedTime.setMinutes(formattedTime.getMinutes() + 20);
             }
@@ -1030,9 +1040,10 @@ app.post("/addCabTravelPlan", async (req, res) => {
         await connection.beginTransaction();
 
         // 1. Insert core tracking travel plan record into travel_plans_cab
+        // Note: Using your actual table schema column mappings (pickup_location, destination, travel_datetime)
         const planQuery = `
           INSERT INTO travel_plans_cab
-            (user_id, from_place, to_place, time, status,
+            (user_id, pickup_location, destination, travel_datetime, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
              landmark, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare,
              created_at, updated_at)
@@ -1074,7 +1085,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
         const memberQuery = `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`;
         await connection.query(memberQuery, [groupId, userId]);
 
-        // 4. Fetch the user's name using the open transaction pool context before the commit completes
+        // 4. Fetch the user's name
         const [userRows] = await connection.query("SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", [userId]);
         const joinerName = userRows.length > 0 ? userRows[0].name : "Someone";
 
@@ -1083,7 +1094,7 @@ app.post("/addCabTravelPlan", async (req, res) => {
             SELECT DISTINCT u.fcm_token
             FROM travel_plans_cab tp
             JOIN users u ON tp.user_id = u.id
-            WHERE tp.to_place = ?
+            WHERE tp.destination = ?
               AND tp.status = 'Trip Active'
               AND tp.user_id != ?
               AND u.fcm_token IS NOT NULL
