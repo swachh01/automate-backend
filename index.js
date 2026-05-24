@@ -1275,7 +1275,15 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
         timeColumn = 'travel_datetime';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+        // Instant rides have a +20min travel_datetime set at insert time; their status drives visibility.
+        // Planned rides are future bookings so we keep the time gate.
+        if (rideCategory === 'Instant') {
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant'";
+        } else if (rideCategory === 'Planned') {
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
+        } else {
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+        }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
@@ -1352,7 +1360,13 @@ app.get("/users/destination", async (req, res) => {
         fromCol = 'pickup_location';
         toCol = 'destination';
         dbTimeField = 'travel_datetime';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+        if (rideCategory === 'Instant') {
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant'";
+        } else if (rideCategory === 'Planned') {
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
+        } else {
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+        }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
