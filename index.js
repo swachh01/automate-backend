@@ -2488,52 +2488,126 @@ app.get('/socket-status', (req, res) => {
 
 app.put('/trip/complete/:tripId', async (req, res) => {
     const TAG = "PUT /trip/complete/:tripId";
+    let connection;
     try {
         const { tripId } = req.params;
-        const { fare, didGo } = req.body;
+        const { 
+            fare, 
+            didGo, 
+            commuteType, 
+            durationMinutes, 
+            companionSource, 
+            companionUserId, 
+            companionNameFallback 
+        } = req.body;
 
         if (!tripId || isNaN(tripId) || didGo === undefined) {
             return res.status(400).json({ success: false, message: 'Invalid trip ID or missing didGo status' });
         }
 
         const tId = parseInt(tripId);
-        const status = didGo === true ? 'Fare Added' : 'Trip Cancelled';
-        const tripFare = didGo === true ? (parseFloat(fare) || 0.00) : 0.00;
+        const targetStatus = (didGo === true || didGo === 'true') ? 'Fare Added' : 'Trip Cancelled';
+        const tripFare = (didGo === true || didGo === 'true') ? (parseFloat(fare) || 0.00) : 0.00;
+        
+        // Match string labels against the table signatures
+        let resolvedCommuteType = 'Rickshaw';
+        if (commuteType && commuteType.toLowerCase().includes('cab')) resolvedCommuteType = 'Cab';
+        if (commuteType && commuteType.toLowerCase().includes('own')) resolvedCommuteType = 'Own';
+        if (commuteType && commuteType.toLowerCase().includes('personal')) resolvedCommuteType = 'Own';
 
-        const [rickshawRes] = await db.query(
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        // 1. Process sync operations upstream against specific collection maps
+        let affected = 0;
+        
+        // Attempt Update 1: Rickshaw Plan Array
+        const [rRes] = await connection.query(
             'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-            [status, tripFare, tId]
+            [targetStatus, tripFare, tId]
         );
+        affected += rRes.affectedRows;
 
-        let cabRes = { affectedRows: 0 };
-        if (rickshawRes.affectedRows === 0) {
-            [cabRes] = await db.query(
+        // Attempt Update 2: Cab Plan Array
+        if (rRes.affectedRows === 0) {
+            const [cRes] = await connection.query(
                 'UPDATE travel_plans_cab SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-                [status, tripFare, tId]
+                [targetStatus, tripFare, tId]
             );
+            affected += cRes.affectedRows;
         }
 
-        let ownRes = { affectedRows: 0 };
-        if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
-            [ownRes] = await db.query(
+        // Attempt Update 3: Personal Vector System Map
+        if (affected === 0) {
+            const [oRes] = await connection.query(
                 'UPDATE travel_plans_own SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-                [status, tripFare, tId]
+                [targetStatus, tripFare, tId]
             );
+            affected += oRes.affectedRows;
         }
 
-        if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
-            res.json({
-                success: true,
-                message: didGo ? 'Fare added successfully' : 'Trip marked as cancelled',
-                newStatus: status
-            });
-        } else {
-            res.status(404).json({ success: false, message: 'Trip not found' });
+        if (affected === 0) {
+            await connection.rollback();
+            return res.status(404).json({ success: false, message: 'Trip target execution reference vector not found' });
         }
+
+        // 2. Build metadata mapping record within secondary schema
+        const insertInfoQuery = `
+            INSERT INTO trip_information 
+            (trip_id, commute_type, did_go, duration_minutes, total_fare, companion_source, companion_user_id, companion_name_fallback)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        
+        await connection.query(insertInfoQuery, [
+            tId,
+            resolvedCommuteType,
+            didGo ? 1 : 0,
+            durationMinutes ? parseInt(durationMinutes) : null,
+            tripFare,
+            companionSource || 'Random',
+            companionUserId ? parseInt(companionUserId) : null,
+            companionNameFallback || null
+        ]);
+
+        await connection.commit();
+        res.json({
+            success: true,
+            message: didGo ? 'Trip details and fare cataloged completely' : 'Trip logged as cancelled structural state',
+            newStatus: targetStatus
+        });
 
     } catch (error) {
-        console.error(TAG, 'Error completing trip:', error);
-        res.status(500).json({ success: false, message: 'Error completing trip' });
+        if (connection) await connection.rollback();
+        console.error(TAG, 'Critical context execution operational failure:', error);
+        res.status(500).json({ success: false, message: 'Error processing trip completion transactional workflow' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+app.get('/tripInformation/:tripId', async (req, res) => {
+    const TAG = "GET /tripInformation/:tripId";
+    try {
+        const { tripId } = req.params;
+        const query = `
+            SELECT ti.*, 
+                   u.user_id as companion_handle,
+                   CONCAT(u.first_name, ' ', u.last_name) as companion_full_name,
+                   u.work_category as companion_work_category,
+                   u.profile_pic as companion_profile_pic
+            FROM trip_information ti
+            LEFT JOIN users u ON ti.companion_user_id = u.id
+            WHERE ti.trip_id = ?
+            ORDER BY ti.id DESC LIMIT 1
+        `;
+        const [rows] = await db.query(query, [parseInt(tripId)]);
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: "No supplementary tracking data available for this trip identifier asset" });
+        }
+        res.json({ success: true, data: rows[0] });
+    } catch (error) {
+        console.error(TAG, error);
+        res.status(500).json({ success: false, message: "Internal directory failure parsing structural mapping values" });
     }
 });
 
