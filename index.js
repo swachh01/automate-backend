@@ -2567,11 +2567,20 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             resolvedCompanionSource = 'App';
         }
 
-        // 2. Insert metrics safely into trip_information
+        // 2. Insert metrics safely into trip_information or UPSERT cleanly if matching unique trip_id index key
         const insertInfoQuery = `
             INSERT INTO trip_information 
             (trip_id, commute_type, did_go, duration_minutes, total_fare, companion_source, companion_user_id, companion_name_fallback)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                commute_type = VALUES(commute_type),
+                did_go = VALUES(did_go),
+                duration_minutes = VALUES(duration_minutes),
+                total_fare = VALUES(total_fare),
+                companion_source = VALUES(companion_source),
+                companion_user_id = VALUES(companion_user_id),
+                companion_name_fallback = VALUES(companion_name_fallback),
+                created_at = CURRENT_TIMESTAMP
         `;
         
         await connection.query(insertInfoQuery, [
