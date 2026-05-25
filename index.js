@@ -1448,7 +1448,7 @@ app.get("/users/destination", async (req, res) => {
             SELECT
                 u.id,           
                 u.id as userId, 
-                u.user_id,
+                u.user_id as username_handle,
                 CONCAT(u.first_name, ' ', u.last_name) as name,
                 u.work_category,
                 u.work_detail,
@@ -1482,7 +1482,7 @@ app.get("/users/destination", async (req, res) => {
         const responseUsers = users.map(user => ({
             id: user.id,
             userId: user.userId,
-            user_id: user.userId,
+            user_id: user.username_handle,
             name: user.name,
             workCategory: user.work_category,
             workDetail: user.work_detail,
