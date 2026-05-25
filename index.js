@@ -2497,8 +2497,8 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             commuteType, 
             durationMinutes, 
             companionSource, 
-            companionUserId, 
-            companionNameFallback 
+            companionUserId, // This is now a comma-separated string like "3,7,12" or a single ID string
+            companionNameFallback // This is now a comma-separated string like "Alice,Bob" or a single name string
         } = req.body;
 
         if (!tripId || isNaN(tripId) || didGo === undefined) {
@@ -2506,8 +2506,10 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         }
 
         const tId = parseInt(tripId);
-        const targetStatus = (didGo === true || didGo === 'true') ? 'Fare Added' : 'Trip Cancelled';
-        const tripFare = (didGo === true || didGo === 'true') ? (parseFloat(fare) || 0.00) : 0.00;
+        // Ensure boolean checks handle both strict types and raw stringified forms from network layers safely
+        const isExecuted = (didGo === true || didGo === 'true' || didGo === 1 || didGo === '1');
+        const targetStatus = isExecuted ? 'Fare Added' : 'Trip Cancelled';
+        const tripFare = isExecuted ? (parseFloat(fare) || 0.00) : 0.00;
         
         // Match string labels against the table signatures
         let resolvedCommuteType = 'Rickshaw';
@@ -2558,21 +2560,23 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
         
+        // FIXED: companion_user_id now casts safely to String (or remains a clean string) 
+        // to maintain all comma-separated items without truncation.
         await connection.query(insertInfoQuery, [
             tId,
             resolvedCommuteType,
-            didGo ? 1 : 0,
+            isExecuted ? 1 : 0,
             durationMinutes ? parseInt(durationMinutes) : null,
             tripFare,
             companionSource || 'Random',
-            companionUserId ? parseInt(companionUserId) : null,
+            companionUserId ? String(companionUserId).trim() : null,
             companionNameFallback || null
         ]);
 
         await connection.commit();
         res.json({
             success: true,
-            message: didGo ? 'Trip details and fare cataloged completely' : 'Trip logged as cancelled structural state',
+            message: isExecuted ? 'Trip details and fare cataloged completely' : 'Trip logged as cancelled structural state',
             newStatus: targetStatus
         });
 
@@ -2589,22 +2593,44 @@ app.get('/tripInformation/:tripId', async (req, res) => {
     const TAG = "GET /tripInformation/:tripId";
     try {
         const { tripId } = req.params;
-        const query = `
-            SELECT ti.*, 
-                   u.user_id as companion_handle,
-                   CONCAT(u.first_name, ' ', u.last_name) as companion_full_name,
-                   u.work_category as companion_work_category,
-                   u.profile_pic as companion_profile_pic
-            FROM trip_information ti
-            LEFT JOIN users u ON ti.companion_user_id = u.id
-            WHERE ti.trip_id = ?
-            ORDER BY ti.id DESC LIMIT 1
-        `;
-        const [rows] = await db.query(query, [parseInt(tripId)]);
+        
+        // 1. Fetch trip information row records securely
+        const infoQuery = `SELECT * FROM trip_information WHERE trip_id = ? ORDER BY id DESC LIMIT 1`;
+        const [rows] = await db.query(infoQuery, [parseInt(tripId)]);
+        
         if (rows.length === 0) {
             return res.status(404).json({ success: false, message: "No supplementary tracking data available for this trip identifier asset" });
         }
-        res.json({ success: true, data: rows[0] });
+        
+        const tripInfo = rows[0];
+
+        // 2. If it contains companion IDs, look up user records dynamically matching string arrays securely
+        if (tripInfo.companion_source === 'App' && tripInfo.companion_user_id) {
+            // Split incoming comma-separated string fields "3,7,12" securely inside JS context layers
+            const companionIds = tripInfo.companion_user_id.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+            
+            if (companionIds.length > 0) {
+                // Fetch profiles using an IN collection statement dynamically matching targets cleanly
+                const [users] = await db.query(
+                    `SELECT id, user_id, CONCAT(first_name, ' ', last_name) as name, work_category, profile_pic FROM users WHERE id IN (?)`,
+                    [companionIds]
+                );
+                
+                // Pack individual data models or strings neatly if your layout logic down the road expects joined objects
+                tripInfo.companion_handle = users.map(u => u.user_id).join(', ');
+                tripInfo.companion_full_name = users.map(u => u.name).join(', ');
+                tripInfo.companion_work_category = users.map(u => u.work_category).join(', ');
+                tripInfo.companion_profile_pic = users.length > 0 ? users[0].profile_pic : null; // Fallback to first asset instance for UI node rendering
+            }
+        } else {
+            // Standard assignment for fallback text logs manually inputted
+            tripInfo.companion_handle = null;
+            tripInfo.companion_full_name = tripInfo.companion_name_fallback || null;
+            tripInfo.companion_work_category = null;
+            tripInfo.companion_profile_pic = null;
+        }
+
+        res.json({ success: true, data: tripInfo });
     } catch (error) {
         console.error(TAG, error);
         res.status(500).json({ success: false, message: "Internal directory failure parsing structural mapping values" });
