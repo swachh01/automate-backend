@@ -2925,6 +2925,7 @@ app.get("/user/:userId", async (req, res) => {
         const query = `
             SELECT 
                 id, 
+                user_id,
                 CONCAT(first_name, ' ', last_name) as name, 
                 work_category, 
                 gender, 
