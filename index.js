@@ -2497,8 +2497,8 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             commuteType, 
             durationMinutes, 
             companionSource, 
-            companionUserId, // This is now a comma-separated string like "3,7,12" or a single ID string
-            companionNameFallback // This is now a comma-separated string like "Alice,Bob" or a single name string
+            companionUserId, 
+            companionNameFallback 
         } = req.body;
 
         if (!tripId || isNaN(tripId) || didGo === undefined) {
@@ -2506,12 +2506,10 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         }
 
         const tId = parseInt(tripId);
-        // Ensure boolean checks handle both strict types and raw stringified forms from network layers safely
         const isExecuted = (didGo === true || didGo === 'true' || didGo === 1 || didGo === '1');
         const targetStatus = isExecuted ? 'Fare Added' : 'Trip Cancelled';
         const tripFare = isExecuted ? (parseFloat(fare) || 0.00) : 0.00;
         
-        // Match string labels against the table signatures
         let resolvedCommuteType = 'Rickshaw';
         if (commuteType && commuteType.toLowerCase().includes('cab')) resolvedCommuteType = 'Cab';
         if (commuteType && commuteType.toLowerCase().includes('own')) resolvedCommuteType = 'Own';
@@ -2520,18 +2518,17 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Process sync operations upstream against specific collection maps
         let affected = 0;
         
-        // Attempt Update 1: Rickshaw Plan Array
+        // Update 1: Rickshaw Travel Plans
         const [rRes] = await connection.query(
             'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
             [targetStatus, tripFare, tId]
         );
         affected += rRes.affectedRows;
 
-        // Attempt Update 2: Cab Plan Array
-        if (rRes.affectedRows === 0) {
+        // Update 2: Cab Travel Plans
+        if (affected === 0) {
             const [cRes] = await connection.query(
                 'UPDATE travel_plans_cab SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
                 [targetStatus, tripFare, tId]
@@ -2539,7 +2536,7 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             affected += cRes.affectedRows;
         }
 
-        // Attempt Update 3: Personal Vector System Map
+        // Update 3: Personal Vehicle Plans
         if (affected === 0) {
             const [oRes] = await connection.query(
                 'UPDATE travel_plans_own SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
@@ -2553,15 +2550,17 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             return res.status(404).json({ success: false, message: 'Trip target execution reference vector not found' });
         }
 
-        // 2. Build metadata mapping record within secondary schema
+        // 2. Build metadata mapping record within secondary schema safely as string fields
         const insertInfoQuery = `
             INSERT INTO trip_information 
             (trip_id, commute_type, did_go, duration_minutes, total_fare, companion_source, companion_user_id, companion_name_fallback)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
         
-        // FIXED: companion_user_id now casts safely to String (or remains a clean string) 
-        // to maintain all comma-separated items without truncation.
+        // Clean and convert incoming string properties safely to pass to table structures smoothly
+        const cleanCompanionIdsStr = companionUserId ? String(companionUserId).trim() : null;
+        const cleanCompanionNamesStr = companionNameFallback ? String(companionNameFallback).trim() : null;
+
         await connection.query(insertInfoQuery, [
             tId,
             resolvedCommuteType,
@@ -2569,8 +2568,8 @@ app.put('/trip/complete/:tripId', async (req, res) => {
             durationMinutes ? parseInt(durationMinutes) : null,
             tripFare,
             companionSource || 'Random',
-            companionUserId ? String(companionUserId).trim() : null,
-            companionNameFallback || null
+            cleanCompanionIdsStr,
+            cleanCompanionNamesStr
         ]);
 
         await connection.commit();
