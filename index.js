@@ -1887,6 +1887,7 @@ app.get('/getChatUsers', async (req, res) => {
                 lc.last_message_status,
                 CONCAT(u_sender.first_name, ' ', u_sender.last_name) AS last_sender_name,
                 CASE WHEN lc.chat_type = 'individual' THEN CONCAT(u_partner.first_name, ' ', u_partner.last_name) ELSE NULL END AS username,
+                CASE WHEN lc.chat_type = 'individual' THEN u_partner.user_id ELSE NULL END AS user_handle,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_pic ELSE NULL END AS profile_pic,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.gender ELSE NULL END AS gender,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_visibility ELSE NULL END AS profile_visibility,
@@ -1971,7 +1972,8 @@ app.get('/getChatUsers', async (req, res) => {
                 gender: row.gender,
                 lastSenderId: row.last_sender_id,
                 lastSenderName: isGroup? row.last_sender_name : null,
-                lastMessageStatus: row.last_message_status 
+                lastMessageStatus: row.last_message_status,
+                user_id: isGroup ? null : row.user_handle 
             };
         });
 
