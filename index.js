@@ -2606,36 +2606,39 @@ app.get('/tripInformation/:tripId', async (req, res) => {
     try {
         const { tripId } = req.params;
         
-        // 1. Fetch trip information row records securely
         const infoQuery = `SELECT * FROM trip_information WHERE trip_id = ? ORDER BY id DESC LIMIT 1`;
         const [rows] = await db.query(infoQuery, [parseInt(tripId)]);
         
         if (rows.length === 0) {
-            return res.status(404).json({ success: false, message: "No supplementary tracking data available for this trip identifier asset" });
+            return res.status(404).json({ success: false, message: "No supplementary tracking data available" });
         }
         
         const tripInfo = rows[0];
 
-        // 2. If it contains companion IDs, look up user records dynamically matching string arrays securely
         if (tripInfo.companion_source === 'App' && tripInfo.companion_user_id) {
-            // Split incoming comma-separated string fields "3,7,12" securely inside JS context layers
-            const companionIds = tripInfo.companion_user_id.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+            // Split clean incoming string collection parameters "2220001,1770001" safely
+            const companionIds = String(tripInfo.companion_user_id)
+                .split(',')
+                .map(id => parseInt(id.trim()))
+                .filter(id => !isNaN(id));
             
             if (companionIds.length > 0) {
-                // Fetch profiles using an IN collection statement dynamically matching targets cleanly
                 const [users] = await db.query(
                     `SELECT id, user_id, CONCAT(first_name, ' ', last_name) as name, work_category, profile_pic FROM users WHERE id IN (?)`,
                     [companionIds]
                 );
                 
-                // Pack individual data models or strings neatly if your layout logic down the road expects joined objects
-                tripInfo.companion_handle = users.map(u => u.user_id).join(', ');
-                tripInfo.companion_full_name = users.map(u => u.name).join(', ');
-                tripInfo.companion_work_category = users.map(u => u.work_category).join(', ');
-                tripInfo.companion_profile_pic = users.length > 0 ? users[0].profile_pic : null; // Fallback to first asset instance for UI node rendering
+                // CRITICAL FIXED FACTOR: Re-order database list rows to exactly preserve original app array sequences 
+                const sortedUsers = companionIds.map(id => users.find(u => u.id === id)).filter(Boolean);
+                
+                tripInfo.companion_handle = sortedUsers.map(u => u.user_id || '').filter(Boolean).join(', ');
+                tripInfo.companion_full_name = sortedUsers.map(u => u.name || '').filter(Boolean).join(', ');
+                tripInfo.companion_work_category = sortedUsers.map(u => u.work_category || '').filter(Boolean).join(', ');
+                tripInfo.companion_profile_pic = sortedUsers.length > 0 ? sortedUsers[0].profile_pic : null;
+            } else {
+                tripInfo.companion_full_name = tripInfo.companion_name_fallback || null;
             }
         } else {
-            // Standard assignment for fallback text logs manually inputted
             tripInfo.companion_handle = null;
             tripInfo.companion_full_name = tripInfo.companion_name_fallback || null;
             tripInfo.companion_work_category = null;
