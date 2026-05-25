@@ -2510,6 +2510,7 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         const targetStatus = isExecuted ? 'Fare Added' : 'Trip Cancelled';
         const tripFare = isExecuted ? (parseFloat(fare) || 0.00) : 0.00;
         
+        // Exact column ENUM matching alignment: 'Rickshaw', 'Cab', 'Own'
         let resolvedCommuteType = 'Rickshaw';
         if (commuteType && commuteType.toLowerCase().includes('cab')) resolvedCommuteType = 'Cab';
         if (commuteType && commuteType.toLowerCase().includes('own')) resolvedCommuteType = 'Own';
@@ -2520,56 +2521,68 @@ app.put('/trip/complete/:tripId', async (req, res) => {
 
         let affected = 0;
         
-        // Update 1: Rickshaw Travel Plans
-        const [rRes] = await connection.query(
-            'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-            [targetStatus, tripFare, tId]
-        );
-        affected += rRes.affectedRows;
-
-        // Update 2: Cab Travel Plans
-        if (affected === 0) {
-            const [cRes] = await connection.query(
-                'UPDATE travel_plans_cab SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
+        // 1. Update primary tables gracefully
+        try {
+            const [rRes] = await connection.query(
+                'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
                 [targetStatus, tripFare, tId]
             );
-            affected += cRes.affectedRows;
+            affected += rRes.affectedRows;
+        } catch (err) {
+            console.warn(`${TAG} - travel_plans skip:`, err.message);
         }
 
-        // Update 3: Personal Vehicle Plans
         if (affected === 0) {
-            const [oRes] = await connection.query(
-                'UPDATE travel_plans_own SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-                [targetStatus, tripFare, tId]
-            );
-            affected += oRes.affectedRows;
+            try {
+                const [cRes] = await connection.query(
+                    'UPDATE travel_plans_cab SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
+                    [targetStatus, tripFare, tId]
+                );
+                affected += cRes.affectedRows;
+            } catch (err) {
+                console.warn(`${TAG} - travel_plans_cab skip:`, err.message);
+            }
+        }
+
+        if (affected === 0) {
+            try {
+                const [oRes] = await connection.query(
+                    'UPDATE travel_plans_own SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
+                    [targetStatus, tripFare, tId]
+                );
+                affected += oRes.affectedRows;
+            } catch (err) {
+                console.warn(`${TAG} - travel_plans_own skip:`, err.message);
+            }
         }
 
         if (affected === 0) {
             await connection.rollback();
-            return res.status(404).json({ success: false, message: 'Trip target execution reference vector not found' });
+            return res.status(404).json({ success: false, message: 'Trip target reference not found' });
         }
 
-        // 2. Build metadata mapping record within secondary schema safely as string fields
+        // Exact companion ENUM matching alignment: 'Random', 'App'
+        let resolvedCompanionSource = 'Random';
+        if (companionSource && companionSource.toLowerCase().includes('app')) {
+            resolvedCompanionSource = 'App';
+        }
+
+        // 2. Insert metrics safely into trip_information
         const insertInfoQuery = `
             INSERT INTO trip_information 
             (trip_id, commute_type, did_go, duration_minutes, total_fare, companion_source, companion_user_id, companion_name_fallback)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
         
-        // Clean and convert incoming string properties safely to pass to table structures smoothly
-        const cleanCompanionIdsStr = companionUserId ? String(companionUserId).trim() : null;
-        const cleanCompanionNamesStr = companionNameFallback ? String(companionNameFallback).trim() : null;
-
         await connection.query(insertInfoQuery, [
             tId,
             resolvedCommuteType,
             isExecuted ? 1 : 0,
             durationMinutes ? parseInt(durationMinutes) : null,
             tripFare,
-            companionSource || 'Random',
-            cleanCompanionIdsStr,
-            cleanCompanionNamesStr
+            resolvedCompanionSource,
+            companionUserId ? String(companionUserId).trim() : null, // Safely handled as standard VARCHAR sequence
+            companionNameFallback || null
         ]);
 
         await connection.commit();
@@ -2581,7 +2594,7 @@ app.put('/trip/complete/:tripId', async (req, res) => {
 
     } catch (error) {
         if (connection) await connection.rollback();
-        console.error(TAG, 'Critical context execution operational failure:', error);
+        console.error(TAG, 'Transaction Exception Fail:', error);
         res.status(500).json({ success: false, message: 'Error processing trip completion transactional workflow' });
     } finally {
         if (connection) connection.release();
