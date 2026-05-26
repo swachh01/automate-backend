@@ -3052,6 +3052,7 @@ app.get("/user/:userId", async (req, res) => {
                 user_id,
                 CONCAT(first_name, ' ', last_name) as name, 
                 work_category, 
+                phone,
                 gender, 
                 dob, 
                 work_detail, 
