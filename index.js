@@ -892,11 +892,6 @@ app.post("/addTravelPlan", async (req, res) => {
         try {
             formattedTime = new Date(time);
             if (isNaN(formattedTime.getTime())) throw new Error("Invalid format.");
-
-            // Add expiration padding for instant carpools to stay visible on standard feeds
-            if (ride_category === "Instant") {
-                formattedTime.setMinutes(formattedTime.getMinutes() + 20);
-            }
         } catch (timeError) {
              return res.status(400).json({ success: false, message: "Invalid date format." });
         }
@@ -904,18 +899,21 @@ app.post("/addTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert core tracking travel plan record row matches columns layout perfectly
+        // 1. Insert core tracking travel plan record using safe dynamic database evaluation
         const planQuery = `
           INSERT INTO travel_plans 
             (user_id, from_place, to_place, time, status, 
              from_place_lat, from_place_lng, to_place_lat, to_place_lng, 
              landmark, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare, 
              created_at, updated_at) 
-          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+          VALUES (?, ?, ?, 
+             CASE WHEN ? = 'Instant' THEN DATE_ADD(NOW(), INTERVAL 20 MINUTE) ELSE ? END, 
+             'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
         `;
 
         const [planResult] = await connection.query(planQuery, [
-            userId, fromPlace, toPlace, formattedTime,
+            userId, fromPlace, toPlace,
+            ride_category, formattedTime,
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
             landmark || "Instant Booking",
             ride_category,
@@ -1065,10 +1063,6 @@ app.post("/addCabTravelPlan", async (req, res) => {
         try {
             formattedTime = new Date(time);
             if (isNaN(formattedTime.getTime())) throw new Error("Invalid format.");
-
-            if (ride_category === "Instant") {
-                formattedTime.setMinutes(formattedTime.getMinutes() + 20);
-            }
         } catch (timeError) {
             return res.status(400).json({ success: false, message: "Invalid date format." });
         }
@@ -1076,19 +1070,21 @@ app.post("/addCabTravelPlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert core tracking travel plan record into travel_plans_cab
-        // Note: Using your actual table schema column mappings (pickup_location, destination, travel_datetime)
+        // 1. Insert core tracking travel plan record using safe dynamic database evaluation
         const planQuery = `
           INSERT INTO travel_plans_cab
             (user_id, pickup_location, destination, travel_datetime, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
              landmark, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare,
              created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+          VALUES (?, ?, ?, 
+             CASE WHEN ? = 'Instant' THEN DATE_ADD(NOW(), INTERVAL 20 MINUTE) ELSE ? END, 
+             'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
         `;
 
         const [planResult] = await connection.query(planQuery, [
-            userId, fromPlace, toPlace, formattedTime,
+            userId, fromPlace, toPlace,
+            ride_category, formattedTime,
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
             landmark || "Instant Booking",
             ride_category,
