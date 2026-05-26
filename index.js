@@ -106,7 +106,7 @@ const storage = new CloudinaryStorage({
   params: {
     folder: 'reloaded_automate_profiles',
     allowed_formats: ['jpg', 'jpeg', 'png', 'heic'],
-    transformation: [{ width: 500, height: 500, crop: 'limit', format: 'jpg' }]
+    transformation: [{ width: 1080, height: 1080, crop: 'limit', format: 'jpg' }] 
   }
 });
 const upload = multer({ storage: storage });
