@@ -1194,7 +1194,8 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
     let connection;
 
     try {
-        const { userId, vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare } = req.body;
+        // 1. ADD mobileNumber HERE to the destructured body properties
+        const { userId, vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare, mobileNumber } = req.body;
 
         if (!userId || !destination || !time || !vehicleNumber || !vehicleType) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -1211,9 +1212,11 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, estimated_fare, status) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
+        // 2. UPDATE SQL QUERY string block to register the new column context
+        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, estimated_fare, mobile_number, status) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
 
+        // 3. APPEND mobileNumber to the target value array assignments safely
         const [ownResult] = await connection.query(query, [
             userId, 
             vehicleType, 
@@ -1222,7 +1225,8 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
             destination, 
             formattedTime, 
             landmark || null, 
-            estimatedFare || 0.00
+            estimatedFare || 0.00,
+            mobileNumber || null
         ]);
 
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
@@ -1256,25 +1260,25 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
             if (matchingUsers.length > 0) {
                 const tokens = matchingUsers.map(u => u.fcm_token).filter(t => t);
                 const messagePayload = {
-    tokens: tokens,
-    notification: {
-        title: "New Travel Buddy!",
-        body: `${joinerName} is driving to ${destination}!`
-    },
-    android: {
-        priority: "high",
-        notification: {
-            channelId: "channel_custom_sound_v3",
-            priority: "high",
-            defaultSound: true
-        }
-    },
-    data: {
-        type: "travel_match",
-        destinationName: String(destination),
-        commuteType: "Own"
-    }
-};
+                    tokens: tokens,
+                    notification: {
+                        title: "New Travel Buddy!",
+                        body: `${joinerName} is driving to ${destination}!`
+                    },
+                    android: {
+                        priority: "high",
+                        notification: {
+                            channelId: "channel_custom_sound_v3",
+                            priority: "high",
+                            defaultSound: true
+                        }
+                    },
+                    data: {
+                        type: "travel_match",
+                        destinationName: String(destination),
+                        commuteType: "Own"
+                    }
+                };
                 await admin.messaging().sendEachForMulticast(messagePayload);
             }
         } catch (notifyError) {
@@ -1308,14 +1312,12 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
         timeColumn = 'travel_datetime';
-        // Instant rides have a +20min travel_datetime set at insert time; their status drives visibility.
-        // Planned rides are future bookings so we keep the time gate.
         if (rideCategory === 'Instant') {
             statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant'";
         } else if (rideCategory === 'Planned') {
             statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW'";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
@@ -1337,13 +1339,18 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
 
-        if (commuteType === 'Rickshaw' || commuteType === 'Cab') {
+        // Enabled vehicle_number lookup for 'Own' along with 'Rickshaw' and 'Cab'
+        if (commuteType === 'Rickshaw' || commuteType === 'Cab' || commuteType === 'Own') {
             vehicleSelector = "tp.vehicle_number";
+        }
+        
+        // Maps instant_fare calculation blocks for hired rides, falls back to estimated_fare for personal vehicles
+        if (commuteType === 'Rickshaw' || commuteType === 'Cab') {
             fareSelector = "tp.instant_fare";
+        } else if (commuteType === 'Own') {
+            fareSelector = "tp.estimated_fare";
         }
 
-        // FIXED: Using raw string injection via ${destinationCol} breaks on the LEFT JOIN if not isolated correctly. 
-        // We explicitly use tp.${destinationCol} to bind the target table asset alias securely.
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
@@ -1383,9 +1390,6 @@ app.get("/users/destination", async (req, res) => {
     let fromCol = 'from_place';
     let toCol = 'to_place';
     let statusFilter = "tp.status = 'Trip Active'";
-    
-    // Determine the specific datetime column token inside JavaScript 
-    // to prevent MySQL from evaluating missing fields across table boundaries
     let dbTimeField = 'time';
 
     if (commuteType === 'Cab') {
@@ -1407,7 +1411,6 @@ app.get("/users/destination", async (req, res) => {
         dbTimeField = 'travel_time';
         statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
     } else {
-        // Standard Rickshaw / travel_plans structure filtering
         statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
         if (rideCategory) {
             statusFilter += ` AND tp.ride_category = ${db.escape(rideCategory)}`;
@@ -1415,8 +1418,6 @@ app.get("/users/destination", async (req, res) => {
     }
 
     try {
-        // Safely isolate structural query selections per table profile
-        // Added dynamic mobileSelection mappings across individual table endpoints
         let categorySelection, providerSelection, vehicleSelection, fareSelection, mobileSelection;
 
         if (commuteType === 'Cab') {
@@ -1428,16 +1429,17 @@ app.get("/users/destination", async (req, res) => {
         } else if (commuteType === 'Own') {
             categorySelection = "'Planned'";
             providerSelection = "'Own Vehicle'";
-            vehicleSelection  = "NULL";
-            fareSelection     = "0.00";
-            mobileSelection   = "NULL";       // Provide fallback if travel_plans_own lacks explicit column tracking
+            
+            // Fixed lines to target live structural properties from your table description
+            vehicleSelection  = "tp.vehicle_number";
+            fareSelection     = "tp.estimated_fare";
+            mobileSelection   = "tp.mobile_number"; 
         } else {
-            // Standard Rickshaw table profile mapping parameters safely
             categorySelection = "tp.ride_category";
             providerSelection = "tp.service_provider";
             vehicleSelection  = "tp.vehicle_number";
             fareSelection     = "tp.instant_fare";
-            mobileSelection   = "tp.mobile_number"; // Pulls directly from core table configuration
+            mobileSelection   = "tp.mobile_number"; 
         }
 
         const query = `
@@ -1491,7 +1493,7 @@ app.get("/users/destination", async (req, res) => {
             service_provider: user.service_provider,
             vehicle_number: user.vehicle_number || "",
             fare: String(user.fare),
-            mobileNumber: user.mobile_number || null, // Bound safely to parse downstream on client Android models
+            mobileNumber: user.mobile_number || null, 
             profilePic: getVisibleProfilePic(user)
         }));
 
