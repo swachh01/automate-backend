@@ -3029,14 +3029,35 @@ app.delete('/deleteMessage/:messageId', async (req, res) => {
   }
 });
 
-app.get('/favorites/:userId', async (req, res) => {
+app.get('/favorites/:userId', authenticateToken, async (req, res) => {
     const { userId } = req.params;
-    if (!userId) return res.status(400).json({ success: false });
+    
+    if (!userId) {
+        return res.status(400).json({ success: false, message: "Missing required parameter" });
+    }
+
     try {
-        const [favorites] = await db.query(`SELECT id, user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng FROM favorites WHERE user_id = ? ORDER BY 
-routeName ASC`, [userId]);
+        const targetUserId = parseInt(userId);
+
+        // SECURE FIX: Prevent a user from requesting someone else's pinned favorites list
+        if (req.user.id !== targetUserId) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Access Denied: You cannot view another user's favorite routes." 
+            });
+        }
+
+        const [favorites] = await db.query(
+            `SELECT id, user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng 
+             FROM favorites 
+             WHERE user_id = ? 
+             ORDER BY routeName ASC`, 
+            [targetUserId]
+        );
+
         res.json({ success: true, favorites: favorites });
     } catch (error) {
+        console.error("Error fetching favorites:", error);
         res.status(500).json({ success: false });
     }
 });
@@ -3114,13 +3135,25 @@ app.delete('/favorites/:userId/:favoriteId', async (req, res) => {
     }
 });
 
-app.put('/settings/visibility', async (req, res) => {
-    const { userId, visibility } = req.body;
-    if (!userId || !visibility) return res.status(400).json({ success: false });
+app.put('/settings/visibility', authenticateToken, async (req, res) => {
+    const { visibility } = req.body;
+    
+    if (!visibility) {
+        return res.status(400).json({ success: false, message: "Missing visibility parameter" });
+    }
+
     try {
-        await db.query('UPDATE users SET profile_visibility = ? WHERE id = ?', [visibility, userId]);
-        res.json({ success: true });
+        // SECURE FIX: Enforce user identity directly from the verified token
+        const authenticatedUserId = req.user.id;
+
+        await db.query(
+            'UPDATE users SET profile_visibility = ? WHERE id = ?', 
+            [visibility, authenticatedUserId]
+        );
+
+        res.json({ success: true, message: "Visibility settings updated successfully." });
     } catch (error) {
+        console.error("Error updating visibility settings:", error);
         res.status(500).json({ success: false });
     }
 });
