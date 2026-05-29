@@ -1489,11 +1489,6 @@ app.get("/users/destination", async (req, res) => {
 
         const [users] = await db.query(query, [destinationName, userId]);
 
-        const getVisibleProfilePic = (userRecord) => {
-            if (!userRecord.profile_pic) return null;
-            if (userRecord.profile_visibility === 'Everyone') return userRecord.profile_pic;
-            return null; 
-        };
 
         const responseUsers = users.map(user => ({
             id: user.id,
@@ -1512,7 +1507,7 @@ app.get("/users/destination", async (req, res) => {
             vehicle_number: user.vehicle_number || "",
             fare: String(user.fare),
             mobileNumber: user.mobile_number || null, 
-            profilePic: getVisibleProfilePic(user)
+            profilePic: getVisibleProfilePic(user, parseInt(userId), new Set())
         }));
 
         res.json({ success: true, users: responseUsers });
