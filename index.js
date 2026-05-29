@@ -3692,7 +3692,8 @@ app.get('/group/:groupId/members', async (req, res) => {
                 u.id, 
                 u.id as userId, 
                 CONCAT(u.first_name, ' ', u.last_name) as name, 
-                u.profile_pic as profilePic 
+                u.profile_pic as profilePic,
+                u.gender 
             FROM users u 
             WHERE u.id IN (
                 SELECT DISTINCT user_id 
