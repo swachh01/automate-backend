@@ -3207,15 +3207,56 @@ app.get('/api/user-status/:userId', async (req, res) => {
   }
 });
 
-app.get('/group-members/:groupId', async (req, res) => {
+app.get('/group-members/:groupId', authenticateToken, async (req, res) => {
     const { groupId } = req.params;
+    
+    if (!groupId || isNaN(groupId)) {
+        return res.status(400).json({ success: false, message: "Valid Group ID is required" });
+    }
+
     try {
-        const [groupRows] = await db.execute('SELECT group_icon, group_name FROM group_table WHERE group_id = ?', [groupId]);
-        const [members] = await db.execute(`SELECT u.id AS user_id, CONCAT(u.first_name, ' ', u.last_name) as name, u.phone, u.profile_pic FROM group_members gm JOIN users u ON gm.user_id = u.id 
-WHERE gm.group_id = ? ORDER BY u.first_name ASC`, [groupId]);
-        res.json({ success: true, group_icon: groupRows[0]?.group_icon, group_name: groupRows[0]?.group_name, members: members });
+        const targetGroupId = parseInt(groupId);
+        const authenticatedUserId = req.user.id;
+
+        // SECURE FIX: Verify that the requesting user is actually a member of this group
+        const [membershipCheck] = await db.execute(
+            'SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?',
+            [targetGroupId, authenticatedUserId]
+        );
+
+        if (membershipCheck.length === 0) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Access Denied: You are not a member of this group channel." 
+            });
+        }
+
+        // 1. Fetch group meta details safely
+        const [groupRows] = await db.execute(
+            'SELECT group_icon, group_name FROM group_table WHERE group_id = ?', 
+            [targetGroupId]
+        );
+
+        // 2. Fetch members list (including u.gender as implemented for your default PFP feature logic)
+        const [members] = await db.execute(
+            `SELECT u.id AS user_id, CONCAT(u.first_name, ' ', u.last_name) as name, u.phone, u.profile_pic, u.gender 
+             FROM group_members gm 
+             JOIN users u ON gm.user_id = u.id 
+             WHERE gm.group_id = ? 
+             ORDER BY u.first_name ASC`, 
+            [targetGroupId]
+        );
+
+        res.json({ 
+            success: true, 
+            group_icon: groupRows[0]?.group_icon || null, 
+            group_name: groupRows[0]?.group_name || "Group", 
+            members: members 
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false });
+        console.error("Error inside secured /group-members route handler:", error);
+        res.status(500).json({ success: false, message: "Internal server error" });
     }
 });
 
