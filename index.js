@@ -1592,38 +1592,47 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
   }   
 });
 
-app.get('/getMessages', authenticateToken, async (req, res) => { ... }
-try {
-const { receiver_id } = req.query;
-const sender_id = req.user.id;
+// CHANGE THIS:
+// app.get('/getMessages', authenticateToken, async (req, res) => { ... }
 
-if ( !receiver_id) {
-return res.status(400).json({ success: false, message: 'Required fields missing' });
-}
+// TO THIS FULL CORRECT VERSION:
+app.get('/getMessages', authenticateToken, async (req, res) => {
+  try {
+    const { receiver_id } = req.query;
+    
+    // Enforced from your cryptographically verified JWT token
+    const sender_id = req.user.id;
 
-const sql = `
-SELECT * FROM messages
-WHERE (sender_id = ? AND receiver_id = ?)
-OR (sender_id = ? AND receiver_id = ?)
-ORDER BY timestamp ASC
-`;
-const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
-const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
-const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
-const hiddenIds = hiddenMessages.map(h => h.message_id);
-const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
-const decryptedMessages = visibleMessages.map(msg => {
-return {
-...msg,
-message: decrypt(msg.message)
-};
+    if (!receiver_id) {
+      return res.status(400).json({ success: false, message: 'Required fields missing' });
+    }
+
+    const sql = `
+      SELECT * FROM messages
+      WHERE (sender_id = ? AND receiver_id = ?)
+         OR (sender_id = ? AND receiver_id = ?)
+      ORDER BY timestamp ASC
+    `;
+    const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
+    
+    const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
+    const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
+    const hiddenIds = hiddenMessages.map(h => h.message_id);
+    
+    const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
+    const decryptedMessages = visibleMessages.map(msg => {
+      return {
+        ...msg,
+        message: decrypt(msg.message)
+      };
+    });
+
+    res.json({ success: true, messages: decryptedMessages });
+  } catch (error) {
+    console.error("Error in /getMessages:", error);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
 });
-
-res.json({ success: true, messages: decryptedMessages });
-} catch (error) {
-res.status(500).json({ success: false, message: 'Database error' });
-}
-}); 
 
 app.post('/messages/delivered', async (req, res) => {
   try {
