@@ -872,16 +872,19 @@ app.post("/updateProfile", authenticateToken, upload.single("profile_pic"), asyn
 
 //==============================================ADD TRAVEL PLAN=========================================================
 
-app.post("/addTravelPlan", async (req, res) => {
+app.post("/addTravelPlan", authenticateToken, async (req, res) => {
     const TAG = "/addTravelPlan"; 
     let connection; 
 
     try {
         console.log(TAG, "Incoming payload details received:", req.body);
 
+        // SECURE FIX: Force the identity to be the authenticated user from JWT
+        const userId = req.user.id;
+
         // Destructure core required location tracking values safely
         const { 
-            userId, fromPlace, toPlace, time, 
+            fromPlace, toPlace, time, 
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng, 
             landmark 
         } = req.body;
@@ -1032,17 +1035,17 @@ app.post("/addTravelPlan", async (req, res) => {
     }
 });
 
-// ================= UPDATE WITHIN /addCabTravelPlan =================
-
-app.post("/addCabTravelPlan", async (req, res) => {
+app.post("/addCabTravelPlan", authenticateToken, async (req, res) => {
     const TAG = "/addCabTravelPlan";
     let connection;
 
     try {
         console.log(TAG, "Incoming payload details received:", req.body);
 
+        // SECURE FIX: Force the identity to be the authenticated user from JWT
+        const userId = req.user.id;
+        
         // Safely extract properties by handling both backend-preferred and Android payload formats
-        const userId = req.body.userId;
         const fromPlace = req.body.fromPlace;
         const toPlace = req.body.toPlace;
         const landmark = req.body.landmark;
@@ -1204,15 +1207,15 @@ app.post("/addCabTravelPlan", async (req, res) => {
     }
 });
 
-//==========================================================================OWN VEHICLE PLAN=========================================================================================
-
-app.post("/addOwnVehiclePlan", async (req, res) => {
+app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
     const TAG = "/addOwnVehiclePlan";
     let connection;
 
     try {
-        // 1. ADD mobileNumber HERE to the destructured body properties
-        const { userId, vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare, mobileNumber } = req.body;
+        // SECURE FIX: Enforce the identity from the authenticated JWT token instead of req.body
+        const userId = req.user.id;
+
+        const { vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare, mobileNumber } = req.body;
 
         if (!userId || !destination || !time || !vehicleNumber || !vehicleType) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -1229,11 +1232,9 @@ app.post("/addOwnVehiclePlan", async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 2. UPDATE SQL QUERY string block to register the new column context
         const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, estimated_fare, mobile_number, status) 
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
 
-        // 3. APPEND mobileNumber to the target value array assignments safely
         const [ownResult] = await connection.query(query, [
             userId, 
             vehicleType, 
@@ -1560,12 +1561,15 @@ app.post('/user/save-vehicle', async (req, res) => {
     }
 });
 
-app.get("/getUserTravelPlan/:userId", async (req, res) => {
+app.get("/getUserTravelPlan/:userId", authenticateToken, async (req, res) => {
   try {
-    const userId = req.params.userId;
-    if (!userId) {
-      return res.status(400).json({ success: false, message: "User ID required" });
+    const targetUserId = parseInt(req.params.userId);
+    
+    // SECURE FIX: Enforce that the user can only fetch their own travel plans
+    if (!targetUserId || req.user.id !== targetUserId) {
+      return res.status(403).json({ success: false, message: "Unauthorized data access request." });
     }
+
     const [results] = await db.query(
       `SELECT
         tp.id,
@@ -1582,7 +1586,7 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
         AND tp.time > UTC_TIMESTAMP() 
         AND tp.status = 'Trip Active'
       ORDER BY tp.time ASC`,
-      [userId]
+      [targetUserId]
     );
 
     res.json({ success: true, users: results || [] });
@@ -1592,10 +1596,6 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
   }   
 });
 
-// CHANGE THIS:
-// app.get('/getMessages', authenticateToken, async (req, res) => { ... }
-
-// TO THIS FULL CORRECT VERSION:
 app.get('/getMessages', authenticateToken, async (req, res) => {
   try {
     const { receiver_id } = req.query;
