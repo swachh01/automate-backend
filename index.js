@@ -6,6 +6,8 @@ const bcrypt = require('bcryptjs');
 const admin = require("firebase-admin");
 const axios = require('axios');
 const { parsePhoneNumberFromString } = require('libphonenumber-js');
+const jwt = require('jsonwebtoken');
+const authenticateToken = require('./authMiddleware');
 
 let serviceAccount;
 
@@ -367,7 +369,8 @@ socket.on('update_live_location_group', (data) => {
         type: type || 'live_update'
     });
 });
-}); 
+});
+
 
 async function getUserByPhone(phone) {
   try {
@@ -730,7 +733,21 @@ app.post("/login", async (req, res) => {
 
     delete user.password;
 
-    res.json({ success: true, message: "Login successful", user: user });
+    const tokenPayload = {
+    id: user.id,
+    user_id: user.user_id
+  };
+
+  // Sign the token with an expiration timeframe (e.g., 7 days)
+  const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+  // Return both the user details and the token back to the client application
+  res.json({ 
+    success: true, 
+    message: "Login successful", 
+    token: token, // Client must save this token (e.g., in secure storage)
+    user: user 
+  });
 
   } catch (err) {
     console.error("/login error:", err);
@@ -739,11 +756,11 @@ app.post("/login", async (req, res) => {
 });
 
 // Replace your existing app.post("/updateProfile", ...) with this:
-app.post("/updateProfile", upload.single("profile_pic"), async (req, res) => {
+app.post("/updateProfile", authenticateToken, upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request (Stage 4 Complete) ===");
+    const userId = req.user.id;
     const { 
-      userId, 
       dob, 
       bio, 
       home_location, 
@@ -1577,8 +1594,10 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
 
 app.get('/getMessages', async (req, res) => {
 try {
-const { sender_id, receiver_id } = req.query;
-if (!sender_id || !receiver_id) {
+const { receiver_id } = req.query;
+const sender_id = req.user.id;
+
+if ( !receiver_id) {
 return res.status(400).json({ success: false, message: 'Required fields missing' });
 }
 
@@ -1621,12 +1640,11 @@ app.post('/messages/delivered', async (req, res) => {
   }
 });
 
-app.post('/sendMessage', async (req, res) => {
+app.post('/sendMessage', authenticateToken, async (req, res) => {
   const TAG = "/sendMessage";
 
   try {
     const { 
-      sender_id, 
       receiver_id, 
       message, 
       message_type, 
@@ -1637,6 +1655,9 @@ app.post('/sendMessage', async (req, res) => {
       quoted_message,
       quoted_user_name
     } = req.body;
+
+    // SECURE FIX: Force the sender_id to be the authenticated user from JWT
+    const sender_id = req.user.id;
 
     console.log(TAG, 'Received message:', {
       sender_id,
@@ -1669,15 +1690,16 @@ app.post('/sendMessage', async (req, res) => {
     let expiresAt = null;
 
     if ((type === 'location' || type === 'live_location') && duration) {
-    if (parseInt(duration) === -1) {
-        expiresAt = '2099-12-31 23:59:59';
-    } else if (parseInt(duration) > 0) {
-        const date = new Date();
-        date.setMinutes(date.getMinutes() + parseInt(duration));
-        expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
+        if (parseInt(duration) === -1) {
+            expiresAt = '2099-12-31 23:59:59';
+        } else if (parseInt(duration) > 0) {
+            const date = new Date();
+            date.setMinutes(date.getMinutes() + parseInt(duration));
+            expiresAt = date.toISOString().slice(0, 19).replace('T', ' ');
+        }
+        console.log(TAG, 'Set expires_at to:', expiresAt);
     }
-    console.log(TAG, 'Set expires_at to:', expiresAt);
-}
+    
     const hasReplyData = reply_to_id && 
                          reply_to_id !== 0 && 
                          quoted_message && 
@@ -1754,76 +1776,70 @@ app.post('/sendMessage', async (req, res) => {
 
     io.to(`chat_${receiver_id}`).emit('new_message_received', messageToEmit);
 
-try {
-  const receiverIdStr = receiver_id.toString();
+    try {
+      const receiverIdStr = receiver_id.toString();
 
-  const activeSession = activeChatSessions.get(receiverIdStr);
-  const isLookingAtThisChat = activeSession === `user_${sender_id}`;
+      const activeSession = activeChatSessions.get(receiverIdStr);
+      const isLookingAtThisChat = activeSession === `user_${sender_id}`;
 
-  if (!isLookingAtThisChat) {
-    const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
-    const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
+      if (!isLookingAtThisChat) {
+        const [userRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
+        const [senderRows] = await db.query("SELECT CONCAT(first_name, ' ', last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
 
-    if (userRows.length > 0 && userRows[0].fcm_token) {
-      const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
-      const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
-      const notificationBody = (type === 'location' || type === 'live_location') ? 'Shared a location' : message;
+        if (userRows.length > 0 && userRows[0].fcm_token) {
+          const senderName = senderRows.length > 0 ? senderRows[0].name : "New Message";
+          const senderPic = senderRows.length > 0 ? senderRows[0].profile_pic : "";
+          
+          const messagePayload = {
+            token: userRows[0].fcm_token,
+            notification: { 
+              title: senderName,
+              body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
+            },
+            data: {
+              type: "chat",
+              senderId: sender_id.toString(),
+              senderName: senderName,
+              senderProfilePic: senderPic || "",
+              chatPartnerId: sender_id.toString(),
+              title: senderName,
+              body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message,
+              groupKey: "com.swarajyadav.CHAT_GROUP_" + sender_id.toString()
+            }, 
+            android: {
+              priority: "high",
+              notification: {
+                channelId: "channel_custom_sound_v3",
+                priority: "high",
+                sound: "custom_notification",
+                tag: sender_id.toString()
+              }
+            }
+          };
 
-const messagePayload = {
-  token: userRows[0].fcm_token,
-  notification: { // Add this back for background reliability
-    title: senderName,
-    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
-  },
-  data: {
-    type: "chat",
-    senderId: sender_id.toString(),
-    senderName: senderName,
-    senderProfilePic: senderPic || "",
-    chatPartnerId: sender_id.toString(),
-    title: senderName,
-    body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message,
-    // Add groupKey so the Android app knows which stack to put this message in
-    groupKey: "com.swarajyadav.CHAT_GROUP_" + sender_id.toString()
-  }, 
-  android: {
-    priority: "high",
-    notification: {
-      channelId: "channel_custom_sound_v3",
-      priority: "high",
-      sound: "custom_notification",
-      // Add tag so that only ONE icon appears in the status bar per sender
-      tag: sender_id.toString()
+          await admin.messaging().send(messagePayload);
+          console.log(`DATA-ONLY FCM Sent to ${receiverIdStr} (Partner was not in chat)`);
+        }
+      } else {
+        console.log(`FCM Skipped: User ${receiverIdStr} is currently viewing this chat.`);
+      }
+    } catch (fcmError) {
+      console.error("CRITICAL FCM ERROR:", fcmError.message);
     }
-  }
-};
-
-      await admin.messaging().send(messagePayload);
-      console.log(`DATA-ONLY FCM Sent to ${receiverIdStr} (Partner was not in chat)`);
-    }
-  } else {
-    console.log(`FCM Skipped: User ${receiverIdStr} is currently viewing this chat.`);
-  }
-} catch (fcmError) {
-  console.error("CRITICAL FCM ERROR:", fcmError.message);
-}
+    
     res.json({ success: true, message: 'Message sent', messageId: newMessageId });
 
   } catch (error) {
     console.error(TAG, 'CRITICAL ERROR in /sendMessage:', error);
-    console.error(TAG, 'Error stack:', error.stack);
     res.status(500).json({ success: false, message: 'Failed to send message', error: error.message });
   }
 });
 
-app.get('/getChatUsers', async (req, res) => {
+app.get('/getChatUsers', authenticateToken, async (req, res) => {
     const TAG = "/getChatUsers";
     try {
-        const { userId } = req.query;
-        if (!userId) {
-            return res.status(400).json({ success: false, message: 'userId required' });
-        }
-        const currentUserId = parseInt(userId);
+        // SECURE FIX: Override client query configuration with confirmed token identification
+        const currentUserId = req.user.id;
 
         const friendsQuery = `
             SELECT DISTINCT
@@ -1851,7 +1867,7 @@ app.get('/getChatUsers', async (req, res) => {
                 LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
                 WHERE
                     (m.sender_id = ? OR m.receiver_id = ?)
-                    AND m.sender_id != m.receiver_id -- GUARD 1: Subquery filter
+                    AND m.sender_id != m.receiver_id
                     AND hm.message_id IS NULL
                     AND NOT EXISTS (
                         SELECT 1 FROM chat_requests cr 
@@ -1913,7 +1929,7 @@ app.get('/getChatUsers', async (req, res) => {
             LEFT JOIN \`group_table\` gt ON lc.chat_type = 'group' AND lc.chat_id = gt.group_id
             LEFT JOIN users u_sender ON lc.last_sender_id = u_sender.id
             WHERE lc.rn = 1 
-              AND lc.chat_id != ? -- GUARD 2: Final query filter
+              AND lc.chat_id != ?
             ORDER BY lc.last_timestamp DESC;
         `;
 
@@ -1924,7 +1940,7 @@ app.get('/getChatUsers', async (req, res) => {
             currentUserId, currentUserId, 
             currentUserId, 
             currentUserId, currentUserId,
-            currentUserId // Extra param for Guard 2
+            currentUserId
         ];
 
         const [rows] = await db.query(combinedQuery, params);
@@ -3233,40 +3249,38 @@ app.post('/remove-group-icon', async (req, res) => {
     }
 });
 
-app.get('/group/:groupId/messages', async (req, res) => {
+app.get('/group/:groupId/messages', authenticateToken, async (req, res) => {
     const { groupId } = req.params;
-    const { userId } = req.query;
-
-    if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
+    
+    // SECURE FIX: Grab verified identity from payload token context
+    const userId = req.user.id;
 
     try {
-
         const [memberCheck] = await db.query(
             `SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`,
             [groupId, userId]
         );
 
         if (memberCheck.length === 0) {
-                if (memberCheck.length === 0) {
-    await db.query(
-        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
-        [groupId, userId]
-    );
-    const [userRows] = await db.query(
-        "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", 
-        [userId]
-    );
-    if (userRows.length > 0) {
-        const { encrypt } = require('./cryptoHelper');
-        const systemMsg = encrypt(`${userRows[0].name} joined the group`);
-        await db.query(
-            `INSERT INTO group_messages (group_id, sender_id, message_content, timestamp, message_type) 
-             VALUES (?, ?, ?, NOW(), 'system')`,
-            [groupId, userId, systemMsg]
-        );
-    }
-}
+            await db.query(
+                `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
+                [groupId, userId]
+            );
+            const [userRows] = await db.query(
+                "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", 
+                [userId]
+            );
+            if (userRows.length > 0) {
+                const { encrypt } = require('./cryptoHelper');
+                const systemMsg = encrypt(`${userRows[0].name} joined the group`);
+                await db.query(
+                    `INSERT INTO group_messages (group_id, sender_id, message_content, timestamp, message_type) 
+                     VALUES (?, ?, ?, NOW(), 'system')`,
+                    [groupId, userId, systemMsg]
+                );
+            }
         }
+        
         const query = `
             SELECT
                 gm.message_id as id,
@@ -3277,8 +3291,8 @@ app.get('/group/:groupId/messages', async (req, res) => {
                 gm.latitude,
                 gm.longitude,
                 gm.reply_to_id,
-                gm.quoted_message, -- NEW
-                gm.quoted_user_name, -- NEW
+                gm.quoted_message,
+                gm.quoted_user_name,
                 DATE_FORMAT(gm.expires_at, '%Y-%m-%dT%H:%i:%s.000Z') as expires_at,
                 gm.duration,
                 CONCAT(u.first_name, ' ', u.last_name) as sender_name,
@@ -3357,10 +3371,9 @@ app.get('/group/by-name', async (req, res) => {
     }
 });
 
-app.post('/group/send', async (req, res) => {
+app.post('/group/send', authenticateToken, async (req, res) => {
     const TAG = "/group/send";
     const { 
-        sender_id, 
         group_id, 
         message_content, 
         message_type, 
@@ -3372,6 +3385,9 @@ app.post('/group/send', async (req, res) => {
         quoted_message,
         quoted_user_name
     } = req.body;
+
+    // SECURE FIX: Bind the message execution directly to the verified sender_id token variable
+    const sender_id = req.user.id;
 
     try {
         console.log(TAG, "Received request:", { sender_id, group_id, message_content, message_type, has_reply: !!reply_to_id });
@@ -3403,16 +3419,17 @@ app.post('/group/send', async (req, res) => {
         const groupName = groupCheck[0].group_name;
 
         const [memberCheck] = await db.query(
-    `SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`,
-    [group_id, sender_id]
-);
+            `SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?`,
+            [group_id, sender_id]
+        );
 
-if (memberCheck.length === 0) {
-await db.query(
-        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
-        [group_id, sender_id]
-    );
-}
+        if (memberCheck.length === 0) {
+            await db.query(
+                `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
+                [group_id, sender_id]
+            );
+        }
+        
         const encrypted = encrypt(message_content);
 
         let expiresAt = null;
