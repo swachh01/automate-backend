@@ -1592,7 +1592,7 @@ app.get("/getUserTravelPlan/:userId", async (req, res) => {
   }   
 });
 
-app.get('/getMessages', async (req, res) => {
+app.get('/getMessages', authenticateToken, async (req, res) => { ... }
 try {
 const { receiver_id } = req.query;
 const sender_id = req.user.id;
