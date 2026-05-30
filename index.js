@@ -1654,6 +1654,9 @@ app.get("/getUserTravelPlan/:userId", authenticateToken, async (req, res) => {
   }   
 });
 
+// ====================================================================
+// BUG 1 FIX: UNIFIED CHAT HISTORY STREAM (TEXT + UNEXPIRED shared_media)
+// ====================================================================
 app.get('/getMessages', authenticateToken, async (req, res) => {
   try {
     const { receiver_id } = req.query;
@@ -1665,7 +1668,7 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
-    // UNIFIED SQL: Gathers normal messages & unexpired media files simultaneously, ordered uniformly by time
+    // Unified SQL Query combining standard text messages and unexpired shared media entries
     const sql = `
       SELECT 
         id, 
@@ -1691,10 +1694,10 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
         id, 
         sender_id, 
         receiver_id, 
-        media_url AS message, -- Maps the Cloudinary URL directly into the message text variable slot for Glide
+        media_url AS message, -- Maps the Cloudinary URL straight into the message text slot for Glide
         send_at AS timestamp, 
         1 AS status, 
-        media_type AS message_type, -- Resolves to 'image' or 'video' to switch ViewHolders inside ChatAdapter
+        media_type AS message_type, -- Resolves exactly to 'image' or 'video'
         media_url, 
         expires_at, 
         NULL AS duration, 
@@ -1709,13 +1712,12 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
       ORDER BY timestamp ASC
     `;
 
-    // Execute query passing variables for both union blocks sequentially 
+    // Pass the query parameters for both the messages filters and the shared_media filters
     const [messages] = await db.query(sql, [
-      parseInt(sender_id), parseInt(receiver_id), parseInt(receiver_id), parseInt(sender_id), // messages params
-      parseInt(sender_id), parseInt(receiver_id), parseInt(receiver_id), parseInt(sender_id)  // shared_media params
+      parseInt(sender_id), parseInt(receiver_id), parseInt(receiver_id), parseInt(sender_id),
+      parseInt(sender_id), parseInt(receiver_id), parseInt(receiver_id), parseInt(sender_id)
     ]);
     
-    // Fetch hidden message markers configured by the local user instance
     const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
     const [hiddenMessages] = await db.query(hiddenSql, [parseInt(sender_id)]);
     const hiddenIds = hiddenMessages.map(h => h.message_id);
@@ -1725,17 +1727,15 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
     const decryptedMessages = visibleMessages.map(msg => {
       let processedContent = msg.message;
       
-      // CRITICAL FIX: Only decrypt standard text/location targets. 
-      // Cloudinary media URLs are raw strings and will crash the crypto helper if passed through decrypt().
+      // CRITICAL FIX: Only attempt decryption if it's a text/location type.
+      // Cloudinary media URLs are raw paths and will break your crypto helper if passed to decrypt().
       if (msg.message_type === 'text' || msg.message_type === 'location' || msg.message_type === 'live_location') {
          try {
              processedContent = decrypt(msg.message);
          } catch(e) {
-             console.error(`[Crypto Check] Decryption failed for message ID ${msg.id}, falling back to raw payload.`);
              processedContent = msg.message;
          }
       }
-
       return {
         ...msg,
         message: processedContent
@@ -1744,7 +1744,7 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
 
     res.json({ success: true, messages: decryptedMessages });
   } catch (error) {
-    console.error("Error in unified /getMessages stream processing:", error);
+    console.error("Error in unified /getMessages mapping:", error);
     res.status(500).json({ success: false, message: 'Database query distribution error' });
   }
 });
