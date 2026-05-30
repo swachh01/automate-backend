@@ -1671,8 +1671,8 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
     const sql = `
       SELECT
         id, sender_id, receiver_id, message, timestamp, status, message_type,
-        NULL AS media_url, expires_at, duration,
-        reply_to_id, quoted_message, quoted_user_name, quoted_sender_id
+        NULL AS media_url, expires_at,
+        reply_to_id, quoted_message, quoted_user_name
       FROM messages
       WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
       UNION ALL
@@ -1683,8 +1683,8 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
         1 AS status,
         media_type AS message_type,
         media_url, expires_at,
-        NULL AS duration, NULL AS reply_to_id,
-        NULL AS quoted_message, NULL AS quoted_user_name, NULL AS quoted_sender_id
+        NULL AS reply_to_id,
+        NULL AS quoted_message, NULL AS quoted_user_name
       FROM shared_media
       WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
         AND expires_at > NOW()
