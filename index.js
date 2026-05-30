@@ -559,9 +559,15 @@ app.post("/create-account", async (req, res) => {
 
         const newUser = userRows[0];
 
+        // FEATURE ENHANCEMENT: Generate a signed JWT token directly upon database insertion success
+        const tokenPayload = { id: newUser.id, phone: newUser.phone };
+        const authToken = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+        // FIXED: Return BOTH the user object details AND the authenticating token string mapping parameter
         res.status(201).json({
             success: true,
             message: "Account created successfully. Please complete your profile.",
+            token: authToken,
             user: newUser
         });
 
