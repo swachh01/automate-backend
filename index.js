@@ -113,6 +113,23 @@ const storage = new CloudinaryStorage({
 });
 const upload = multer({ storage: storage });
 
+const sharedMediaStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: async (req, file) => {
+    const isVideo = file.mimetype.startsWith('video');
+    return {
+      folder: 'automate_now_shared_media',
+      resource_type: isVideo ? 'video' : 'image',
+      // On-the-fly conversion parameters standardizing images and videos down to 720p maximum boundaries
+      transformation: isVideo 
+        ? [{ width: 1280, height: 720, crop: 'limit', quality: 'auto' }]
+        : [{ width: 1280, height: 720, crop: 'limit', quality: '80', format: 'jpg' }]
+    };
+  }
+});
+
+const uploadSharedMedia = multer({ storage: sharedMediaStorage });
+
 async function updateUserPresence(userId, isOnline) {
   try {
     const query = `
@@ -3990,6 +4007,117 @@ app.get('/chatRequests/count', async (req, res) => {
         res.json({ success: true, count: rows[0].count });
     } catch (err) {
         res.status(500).json({ success: false });
+    }
+});
+
+// ================= SHARABLE EPHEMERAL MEDIA ROUTES =================
+
+/**
+ * 1. Endpoint to process user upload, run 720p scaling transformations, 
+ * and compute the explicit 3-hour expiry execution parameter inside TiDB.
+ */
+app.post("/api/media/send", uploadSharedMedia.single("media_file"), async (req, res) => {
+    const TAG = "/api/media/send";
+    try {
+        const { sender_id, receiver_id, media_type } = req.body;
+
+        if (!sender_id || !receiver_id || !media_type || !req.file) {
+            return res.status(400).json({ success: false, message: "Required parameter variables are missing." });
+        }
+
+        const mediaUrl = req.file.path;
+        // Cloudinary properties map back to req.file.filename or req.file.public_id depending on driver updates
+        const cloudinaryPublicId = req.file.filename || req.file.public_id || "raw_id";
+
+        // TiDB computing timestamp metrics safely synchronized with database cluster operational clock
+        const insertQuery = `
+            INSERT INTO shared_media 
+            (sender_id, receiver_id, media_type, media_url, cloudinary_public_id, send_at, expires_at) 
+            VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 3 HOUR))
+        `;
+
+        const [result] = await db.execute(insertQuery, [
+            parseInt(sender_id),
+            parseInt(receiver_id),
+            media_type, // 'image' or 'video'
+            mediaUrl,
+            cloudinaryPublicId
+        ]);
+
+        // Construct standard notification structures to emit down the socket pipeline if online
+        const payloadToEmit = {
+            id: result.insertId,
+            sender_id: parseInt(sender_id),
+            receiver_id: parseInt(receiver_id),
+            media_type: media_type,
+            media_url: mediaUrl,
+            send_at: new Date().toISOString()
+        };
+
+        io.to(`chat_${receiver_id}`).emit('new_media_received', payloadToEmit);
+
+        res.status(201).json({
+            success: true,
+            message: "Media transmitted and entry logged successfully.",
+            data: payloadToEmit
+        });
+
+    } catch (err) {
+        console.error(TAG, "Transaction processing exception:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+/**
+ * 2. Endpoint for Android application clients to sync unexpired historical data matches.
+ */
+app.get("/api/media/fetch/:userId", async (req, res) => {
+    const { userId } = req.params;
+    try {
+        // Enforce strict expiration boundaries matching baseline current timestamp boundaries
+        const query = `
+            SELECT id, sender_id, media_type, media_url, send_at, expires_at 
+            FROM shared_media 
+            WHERE receiver_id = ? AND expires_at > NOW() 
+            ORDER BY send_at ASC
+        `;
+        const [rows] = await db.execute(query, [parseInt(userId)]);
+        res.json({ success: true, media: rows });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+/**
+ * 3. Scheduled Cloudinary Storage / TiDB Hard Deletion Free-Tier Housekeeper Endpoint.
+ * Invoke this endpoint via an external webhook or serverless cron engine every hour.
+ */
+app.post("/api/media/housekeeper-cleanup", async (req, res) => {
+    const TAG = "/api/media/housekeeper-cleanup";
+    try {
+        // Identify files that passed expiration threshold validation checkpoints
+        const [expiredItems] = await db.execute(
+            "SELECT cloudinary_public_id, media_type FROM shared_media WHERE expires_at <= NOW()"
+        );
+
+        if (expiredItems.length === 0) {
+            return res.json({ success: true, message: "Storage baseline sanitized. Zero targets detected." });
+        }
+
+        // Loop array values to strip file chunks from Cloudinary cloud structures
+        for (let item of expiredItems) {
+            const resourceType = item.media_type === 'video' ? 'video' : 'image';
+            await cloudinary.uploader.destroy(item.cloudinary_public_id, { resource_type: resourceType });
+        }
+
+        // Wipe historical schema references inside TiDB database atomically
+        await db.execute("DELETE FROM shared_media WHERE expires_at <= NOW()");
+        
+        console.log(TAG, `Sanitization successfully executed for ${expiredItems.length} elements.`);
+        res.json({ success: true, wipedCount: expiredItems.length });
+    } catch (err) {
+        console.error(TAG, "Cleanup processing loop failures:", err);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
