@@ -1668,47 +1668,26 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
-    // Unified SQL Query combining standard text messages and unexpired shared media entries
     const sql = `
-      SELECT 
-        id, 
-        sender_id, 
-        receiver_id, 
-        message, 
-        timestamp, 
-        status, 
-        message_type,
-        NULL AS media_url, 
-        expires_at, 
-        duration, 
-        reply_to_id, 
-        quoted_message, 
-        quoted_user_name, 
-        quoted_sender_id
+      SELECT
+        id, sender_id, receiver_id, message, timestamp, status, message_type,
+        NULL AS media_url, expires_at, duration,
+        reply_to_id, quoted_message, quoted_user_name, quoted_sender_id
       FROM messages
       WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
-
       UNION ALL
-
-      SELECT 
-        id, 
-        sender_id, 
-        receiver_id, 
-        media_url AS message, -- Maps the Cloudinary URL straight into the message text slot for Glide
-        send_at AS timestamp, 
-        1 AS status, 
-        media_type AS message_type, -- Resolves exactly to 'image' or 'video'
-        media_url, 
-        expires_at, 
-        NULL AS duration, 
-        NULL AS reply_to_id, 
-        NULL AS quoted_message, 
-        NULL AS quoted_user_name, 
-        NULL AS quoted_sender_id
+      SELECT
+        id, sender_id, receiver_id,
+        media_url AS message,
+        send_at AS timestamp,
+        1 AS status,
+        media_type AS message_type,
+        media_url, expires_at,
+        NULL AS duration, NULL AS reply_to_id,
+        NULL AS quoted_message, NULL AS quoted_user_name, NULL AS quoted_sender_id
       FROM shared_media
       WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
         AND expires_at > NOW()
-
       ORDER BY timestamp ASC
     `;
 
@@ -4109,17 +4088,10 @@ app.get('/chatRequests/count', async (req, res) => {
 
 // ================= SHARABLE EPHEMERAL MEDIA ROUTES =================
 
-// authenticateToken added: sender identity is now enforced from the verified JWT payload,
-// not from req.body — consistent with /sendMessage and all other secured routes.
-// The Android client already sends the Bearer token via RetrofitClient's auth interceptor,
-// so no changes are needed on the Android side.
 app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_file"), async (req, res) => {
     const TAG = "/api/media/send";
     try {
         const { receiver_id, media_type } = req.body;
-
-        // sender_id is now pulled from the verified JWT token, not from req.body.
-        // This prevents any user from spoofing a different sender_id in the request.
         const sender_id = req.user.id;
 
         if (!sender_id || !receiver_id || !media_type || !req.file) {
