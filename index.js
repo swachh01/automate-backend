@@ -1654,9 +1654,6 @@ app.get("/getUserTravelPlan/:userId", authenticateToken, async (req, res) => {
   }   
 });
 
-// ====================================================================
-// BUG 1 FIX: UNIFIED CHAT HISTORY STREAM (TEXT + UNEXPIRED shared_media)
-// ====================================================================
 app.get('/getMessages', authenticateToken, async (req, res) => {
   try {
     const { receiver_id } = req.query;
@@ -1706,12 +1703,12 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
     const decryptedMessages = visibleMessages.map(msg => {
       let processedContent = msg.message;
       
-      // CRITICAL FIX: Only attempt decryption if it's a text/location type.
-      // Cloudinary media URLs are raw paths and will break your crypto helper if passed to decrypt().
-      if (msg.message_type === 'text' || msg.message_type === 'location' || msg.message_type === 'live_location') {
+      // REPAIRED: Evaluates decryption if message_type is explicit text, location, OR implicitly null/empty
+      if (!msg.message_type || msg.message_type === 'text' || msg.message_type === 'location' || msg.message_type === 'live_location') {
          try {
              processedContent = decrypt(msg.message);
          } catch(e) {
+             console.error("Crypto fallback parsing message block frame context: ", e.message);
              processedContent = msg.message;
          }
       }
