@@ -1665,30 +1665,87 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
+    // UNIFIED SQL: Gathers normal messages & unexpired media files simultaneously, ordered uniformly by time
     const sql = `
-      SELECT * FROM messages
-      WHERE (sender_id = ? AND receiver_id = ?)
-         OR (sender_id = ? AND receiver_id = ?)
+      SELECT 
+        id, 
+        sender_id, 
+        receiver_id, 
+        message, 
+        timestamp, 
+        status, 
+        message_type,
+        NULL AS media_url, 
+        expires_at, 
+        duration, 
+        reply_to_id, 
+        quoted_message, 
+        quoted_user_name, 
+        quoted_sender_id
+      FROM messages
+      WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
+
+      UNION ALL
+
+      SELECT 
+        id, 
+        sender_id, 
+        receiver_id, 
+        media_url AS message, -- Maps the Cloudinary URL directly into the message text variable slot for Glide
+        send_at AS timestamp, 
+        1 AS status, 
+        media_type AS message_type, -- Resolves to 'image' or 'video' to switch ViewHolders inside ChatAdapter
+        media_url, 
+        expires_at, 
+        NULL AS duration, 
+        NULL AS reply_to_id, 
+        NULL AS quoted_message, 
+        NULL AS quoted_user_name, 
+        NULL AS quoted_sender_id
+      FROM shared_media
+      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+        AND expires_at > NOW()
+
       ORDER BY timestamp ASC
     `;
-    const [messages] = await db.query(sql, [sender_id, receiver_id, receiver_id, sender_id]);
+
+    // Execute query passing variables for both union blocks sequentially 
+    const [messages] = await db.query(sql, [
+      parseInt(sender_id), parseInt(receiver_id), parseInt(receiver_id), parseInt(sender_id), // messages params
+      parseInt(sender_id), parseInt(receiver_id), parseInt(receiver_id), parseInt(sender_id)  // shared_media params
+    ]);
     
+    // Fetch hidden message markers configured by the local user instance
     const hiddenSql = `SELECT message_id FROM hidden_messages WHERE user_id = ?`;
-    const [hiddenMessages] = await db.query(hiddenSql, [sender_id]);
+    const [hiddenMessages] = await db.query(hiddenSql, [parseInt(sender_id)]);
     const hiddenIds = hiddenMessages.map(h => h.message_id);
     
     const visibleMessages = messages.filter(msg => !hiddenIds.includes(msg.id));
+    
     const decryptedMessages = visibleMessages.map(msg => {
+      let processedContent = msg.message;
+      
+      // CRITICAL FIX: Only decrypt standard text/location targets. 
+      // Cloudinary media URLs are raw strings and will crash the crypto helper if passed through decrypt().
+      if (msg.message_type === 'text' || msg.message_type === 'location' || msg.message_type === 'live_location') {
+         try {
+             processedContent = decrypt(msg.message);
+         } catch(e) {
+             console.error(`[Crypto Check] Decryption failed for message ID ${msg.id}, falling back to raw payload.`);
+             processedContent = msg.message;
+         }
+      }
+
       return {
         ...msg,
-        message: decrypt(msg.message)
+        message: processedContent
       };
     });
 
     res.json({ success: true, messages: decryptedMessages });
   } catch (error) {
-    console.error("Error in /getMessages:", error);
-    res.status(500).json({ success: false, message: 'Database error' });
+    console.error("Error in unified /getMessages stream processing:", error);
+    res.status(500).json({ success: false, message: 'Database query distribution error' });
   }
 });
 
@@ -4052,10 +4109,6 @@ app.get('/chatRequests/count', async (req, res) => {
 
 // ================= SHARABLE EPHEMERAL MEDIA ROUTES =================
 
-/**
- * 1. Endpoint to process user upload, run 720p scaling transformations, 
- * and compute the explicit 3-hour expiry execution parameter inside TiDB.
- */
 app.post("/api/media/send", uploadSharedMedia.single("media_file"), async (req, res) => {
     const TAG = "/api/media/send";
     try {
@@ -4066,10 +4119,9 @@ app.post("/api/media/send", uploadSharedMedia.single("media_file"), async (req, 
         }
 
         const mediaUrl = req.file.path;
-        // Cloudinary properties map back to req.file.filename or req.file.public_id depending on driver updates
         const cloudinaryPublicId = req.file.filename || req.file.public_id || "raw_id";
 
-        // TiDB computing timestamp metrics safely synchronized with database cluster operational clock
+        // TiDB execution saves the baseline entry and calculates the explicit 3-hour expiry timestamp parameters
         const insertQuery = `
             INSERT INTO shared_media 
             (sender_id, receiver_id, media_type, media_url, cloudinary_public_id, send_at, expires_at) 
@@ -4079,38 +4131,45 @@ app.post("/api/media/send", uploadSharedMedia.single("media_file"), async (req, 
         const [result] = await db.execute(insertQuery, [
             parseInt(sender_id),
             parseInt(receiver_id),
-            media_type, // 'image' or 'video'
+            media_type,
             mediaUrl,
             cloudinaryPublicId
         ]);
 
-        // Construct standard notification structures to emit down the socket pipeline if online
+        // CALCULATE 3 HOURS FROM NOW IN ISO EXPLICITLY FOR MOBILE RE-SYNC TIMERS
+        const expiryDate = new Date();
+        expiryDate.setHours(expiryDate.getHours() + 3);
+
+        // WHATSAPP-LIKE LOGIC: Formats the Socket payload to match your Room entity layout schemas perfectly
         const payloadToEmit = {
             id: result.insertId,
             sender_id: parseInt(sender_id),
             receiver_id: parseInt(receiver_id),
-            media_type: media_type,
+            message_type: media_type, // "image" or "video" -> Triggers immediate layout view changes on client app
+            message: mediaUrl,        // Injects image link straight as text parameter to satisfy msg.getMessage()
             media_url: mediaUrl,
-            send_at: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            expires_at: expiryDate.toISOString(),
+            status: 1, // Received status flag
+            group_id: 0
         };
 
-        io.to(`chat_${receiver_id}`).emit('new_media_received', payloadToEmit);
+        // Broadcast down the socket rooms to render the message bubble instantly on both chat screens
+        io.to(`chat_${receiver_id}`).emit('new_message_received', payloadToEmit);
+        io.to(`chat_${sender_id}`).emit('new_message_received', payloadToEmit);
 
         res.status(201).json({
             success: true,
-            message: "Media transmitted and entry logged successfully.",
+            message: "Media transmitted and entries logged successfully.",
             data: payloadToEmit
         });
 
     } catch (err) {
-        console.error(TAG, "Transaction processing exception:", err);
+        console.error(TAG, "Transaction processing exception error loop:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-/**
- * 2. Endpoint for Android application clients to sync unexpired historical data matches.
- */
 app.get("/api/media/fetch/:userId", async (req, res) => {
     const { userId } = req.params;
     try {
