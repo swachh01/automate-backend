@@ -4109,10 +4109,18 @@ app.get('/chatRequests/count', async (req, res) => {
 
 // ================= SHARABLE EPHEMERAL MEDIA ROUTES =================
 
-app.post("/api/media/send", uploadSharedMedia.single("media_file"), async (req, res) => {
+// authenticateToken added: sender identity is now enforced from the verified JWT payload,
+// not from req.body — consistent with /sendMessage and all other secured routes.
+// The Android client already sends the Bearer token via RetrofitClient's auth interceptor,
+// so no changes are needed on the Android side.
+app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_file"), async (req, res) => {
     const TAG = "/api/media/send";
     try {
-        const { sender_id, receiver_id, media_type } = req.body;
+        const { receiver_id, media_type } = req.body;
+
+        // sender_id is now pulled from the verified JWT token, not from req.body.
+        // This prevents any user from spoofing a different sender_id in the request.
+        const sender_id = req.user.id;
 
         if (!sender_id || !receiver_id || !media_type || !req.file) {
             return res.status(400).json({ success: false, message: "Required parameter variables are missing." });
