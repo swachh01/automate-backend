@@ -450,6 +450,46 @@ async function generateUniqueUserId(firstName) {
     return finalUserId;
 }
 
+async function executeMediaHardDeletionCleanup() {
+    console.log("[Housekeeper] Commencing evaluation sequence for expired shared media components...");
+    try {
+        // Query rows where the current clock time has run past the assigned expires_at timestamp parameters
+        const selectQuery = "SELECT id, cloudinary_public_id, media_type FROM shared_media WHERE expires_at <= NOW()";
+        const [expiredRows] = await db.execute(selectQuery);
+
+        if (expiredRows.length === 0) {
+            console.log("[Housekeeper] Sanitization complete. Zero expired records detected.");
+            return;
+        }
+
+        console.log(`[Housekeeper] Target matches locked. Purging ${expiredRows.length} elements from cloud storage clusters...`);
+
+        // Iterate through array items to pull asset tracking properties
+        for (let item of expiredRows) {
+            const publicId = item.cloudinary_public_id;
+            const resourceType = item.media_type === 'video' ? 'video' : 'image';
+
+            // Explicitly delete asset from Cloudinary storage infrastructure completely
+            await cloudinary.uploader.destroy(publicId, { resource_type: resourceType })
+                .then(res => console.log(`[Cloudinary] Successfully shredded asset chunk: ${publicId} | Status:`, res.result))
+                .catch(err => console.error(`[Cloudinary] Failed to shred asset: ${publicId}`, err.message));
+        }
+
+        // Execute hard removal delete from your TiDB shared_media table matching identical expired intervals
+        const deleteQuery = "DELETE FROM shared_media WHERE expires_at <= NOW()";
+        const [deleteResult] = await db.execute(deleteQuery);
+
+        console.log(`[Housekeeper] Database sanitation execution wrapped up completely. Affected rows inside TiDB: ${deleteResult.affectedRows}`);
+
+    } catch (error) {
+        console.error("[Housekeeper Exception Error Handler] Routine failure:", error.message);
+    }
+}
+
+// Kick off the execution background worker tracking routine loop every 15 minutes automatically
+const FIFTEEN_MINUTES = 15 * 60 * 1000;
+setInterval(executeMediaHardDeletionCleanup, FIFTEEN_MINUTES);
+
 app.get("/health", async (_req, res) => {
   try {
     await db.query('SELECT 1');
