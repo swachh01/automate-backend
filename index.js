@@ -4161,13 +4161,13 @@ app.post("/api/media/download-complete", authenticateToken, async (req, res) => 
     const TAG = "/api/media/download-complete";
     try {
         const { message_id } = req.body;
-        const current_user_id = req.user.id;
+        const current_user_id = req.user.id.toString(); // FIXED: Cast to String to accurately match table's VARCHAR types
 
         if (!message_id) {
             return res.status(400).json({ success: false, message: "Missing required message_id param." });
         }
 
-        // Verify that the user requesting the delete is the receiver of the shared media asset
+        // FIXED: Explicitly target the primary key 'id' column matching your database schema layout
         const [rows] = await db.execute(
             "SELECT cloudinary_public_id, media_type, receiver_id FROM shared_media WHERE id = ?",
             [parseInt(message_id)]
@@ -4178,7 +4178,9 @@ app.post("/api/media/download-complete", authenticateToken, async (req, res) => 
         }
 
         const asset = rows[0];
-        if (asset.receiver_id !== current_user_id) {
+        
+        // FIXED: String boundary check comparing standard token properties with Table VARCHAR signatures safely
+        if (String(asset.receiver_id) !== current_user_id) {
             return res.status(403).json({ success: false, message: "Unauthorized data destruction request." });
         }
 
@@ -4187,9 +4189,9 @@ app.post("/api/media/download-complete", authenticateToken, async (req, res) => 
         await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
         console.log(TAG, `Cloudinary source sanitized completely: ${asset.cloudinary_public_id}`);
 
-        // 2. Erase the file metadata logs out of the TiDB shared_media table atomically
+        // 2. Erase the file metadata logs out of the database table atomically using the PRI 'id' key
         await db.execute("DELETE FROM shared_media WHERE id = ?", [parseInt(message_id)]);
-        console.log(TAG, `TiDB ledger record wiped for message ID: ${message_id}`);
+        console.log(TAG, `Database record wiped for message ID: ${message_id}`);
 
         res.json({ success: true, message: "Media payload safely purged from server structures permanently." });
 
