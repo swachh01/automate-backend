@@ -482,10 +482,6 @@ async function executeMediaHardDeletionCleanup() {
     }
 }
 
-// Kick off the execution background worker tracking routine loop every 15 minutes automatically
-const FIFTEEN_MINUTES = 15 * 60 * 1000;
-setInterval(executeMediaHardDeletionCleanup, FIFTEEN_MINUTES);
-
 app.get("/health", async (_req, res) => {
   try {
     await db.query('SELECT 1');
@@ -4160,10 +4156,49 @@ app.get("/api/media/fetch/:userId", async (req, res) => {
     }
 });
 
-/**
- * 3. Scheduled Cloudinary Storage / TiDB Hard Deletion Free-Tier Housekeeper Endpoint.
- * Invoke this endpoint via an external webhook or serverless cron engine every hour.
- */
+// ================= ATOMIC DOWNLOADING PURGE HANDLER =================
+app.post("/api/media/download-complete", authenticateToken, async (req, res) => {
+    const TAG = "/api/media/download-complete";
+    try {
+        const { message_id } = req.body;
+        const current_user_id = req.user.id;
+
+        if (!message_id) {
+            return res.status(400).json({ success: false, message: "Missing required message_id param." });
+        }
+
+        // Verify that the user requesting the delete is the receiver of the shared media asset
+        const [rows] = await db.execute(
+            "SELECT cloudinary_public_id, media_type, receiver_id FROM shared_media WHERE id = ?",
+            [parseInt(message_id)]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Asset records already purged or non-existent." });
+        }
+
+        const asset = rows[0];
+        if (asset.receiver_id !== current_user_id) {
+            return res.status(403).json({ success: false, message: "Unauthorized data destruction request." });
+        }
+
+        // 1. Instantly shred file contents from Cloudinary storage clusters
+        const resourceType = asset.media_type === 'video' ? 'video' : 'image';
+        await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
+        console.log(TAG, `Cloudinary source sanitized completely: ${asset.cloudinary_public_id}`);
+
+        // 2. Erase the file metadata logs out of the TiDB shared_media table atomically
+        await db.execute("DELETE FROM shared_media WHERE id = ?", [parseInt(message_id)]);
+        console.log(TAG, `TiDB ledger record wiped for message ID: ${message_id}`);
+
+        res.json({ success: true, message: "Media payload safely purged from server structures permanently." });
+
+    } catch (err) {
+        console.error(TAG, "Shredding loop exception thrown: ", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.post("/api/media/housekeeper-cleanup", async (req, res) => {
     const TAG = "/api/media/housekeeper-cleanup";
     try {
