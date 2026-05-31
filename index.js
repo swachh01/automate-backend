@@ -1886,7 +1886,10 @@ app.post('/sendMessage', authenticateToken, async (req, res) => {
             token: userRows[0].fcm_token,
             notification: { 
               title: senderName,
-              body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message
+              body: (type === 'location' || type === 'live_location') ? 'Shared a location'
+                  : (type === 'image') ? '📷 Photo'
+                  : (type === 'video') ? '🎥 Video'
+                  : message
             },
             data: {
               type: "chat",
@@ -1895,7 +1898,10 @@ app.post('/sendMessage', authenticateToken, async (req, res) => {
               senderProfilePic: senderPic || "",
               chatPartnerId: sender_id.toString(),
               title: senderName,
-              body: (type === 'location' || type === 'live_location') ? 'Shared a location' : message,
+              body: (type === 'location' || type === 'live_location') ? 'Shared a location'
+                  : (type === 'image') ? '📷 Photo'
+                  : (type === 'video') ? '🎥 Video'
+                  : message,
               groupKey: "com.swarajyadav.CHAT_GROUP_" + sender_id.toString()
             }, 
             android: {
@@ -1951,6 +1957,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                     m.timestamp AS last_timestamp,
                     m.sender_id AS last_sender_id,
                     m.status AS last_message_status,
+                    m.message_type AS last_message_type,
                     ROW_NUMBER() OVER (
                         PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
                         ORDER BY m.timestamp DESC
@@ -1975,6 +1982,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                     gm.timestamp AS last_timestamp,
                     gm.sender_id AS last_sender_id,
                     -1 AS last_message_status,
+                    gm.message_type AS last_message_type,
                     ROW_NUMBER() OVER (
                         PARTITION BY gm.group_id
                         ORDER BY gm.timestamp DESC
@@ -1988,6 +1996,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                 lc.chat_type,
                 lc.chat_id,
                 lc.last_message_content,
+                lc.last_message_type,
                 lc.last_timestamp,
                 lc.last_sender_id,
                 lc.last_message_status,
@@ -1998,11 +2007,19 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.gender ELSE NULL END AS gender,
                 CASE WHEN lc.chat_type = 'individual' THEN u_partner.profile_visibility ELSE NULL END AS profile_visibility,
                 CASE WHEN lc.chat_type = 'group' THEN gt.group_name ELSE NULL END AS group_name,
-                 (SELECT COUNT(*) FROM messages m_unread
-                  WHERE lc.chat_type = 'individual'
-                    AND m_unread.receiver_id = ?
-                    AND m_unread.sender_id = lc.chat_id
-                    AND m_unread.status < 2
+                 (
+                    (SELECT COUNT(*) FROM messages m_unread
+                     WHERE lc.chat_type = 'individual'
+                       AND m_unread.receiver_id = ?
+                       AND m_unread.sender_id = lc.chat_id
+                       AND m_unread.status < 2)
+                    +
+                    (SELECT COUNT(*) FROM shared_media sm_unread
+                     WHERE lc.chat_type = 'individual'
+                       AND sm_unread.receiver_id = ?
+                       AND sm_unread.sender_id = lc.chat_id
+                       AND sm_unread.expires_at > NOW()
+                       AND sm_unread.downloaded_at IS NULL)
                  ) AS individual_unread_count,
                  (SELECT COUNT(*) 
                   FROM group_messages gm_unread
@@ -2026,13 +2043,14 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
         `;
 
         const params = [
-            currentUserId, currentUserId, currentUserId, 
-            currentUserId, currentUserId, 
-            currentUserId, 
-            currentUserId, currentUserId, 
-            currentUserId, 
-            currentUserId, currentUserId,
-            currentUserId
+            currentUserId, currentUserId, currentUserId,   // CTE individual: chat_id, sender_id, hidden join
+            currentUserId, currentUserId,                  // CTE individual: WHERE sender_id/receiver_id
+            currentUserId,                                 // CTE individual: chat_requests check
+            currentUserId, currentUserId,                  // CTE group: gmem join + WHERE
+            currentUserId,                                 // individual unread: m_unread.receiver_id
+            currentUserId,                                 // shared_media unread: sm_unread.receiver_id
+            currentUserId, currentUserId,                  // group unread: sender_id != ?, gmrs.user_id = ?
+            currentUserId                                  // WHERE chat_id != currentUserId
         ];
 
         const [rows] = await db.query(combinedQuery, params);
@@ -2041,7 +2059,15 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
             let lastMessage = "";
             try { 
                 const { decrypt } = require('./cryptoHelper');
-                lastMessage = row.last_message_content ? decrypt(row.last_message_content) : ""; 
+                const rawDecrypted = row.last_message_content ? decrypt(row.last_message_content) : "";
+                const msgType = (row.last_message_type || '').toLowerCase();
+                if (msgType === 'image') {
+                    lastMessage = '📷 Photo';
+                } else if (msgType === 'video') {
+                    lastMessage = '🎥 Video';
+                } else {
+                    lastMessage = rawDecrypted;
+                }
             } catch (e) { 
                 lastMessage = "[Encrypted Message]"; 
             }
@@ -3485,10 +3511,18 @@ app.get('/group/:groupId/messages', authenticateToken, async (req, res) => {
 
         const [messages] = await db.execute(query, [groupId, groupId, userId]);
 
-        const decrypted = messages.map(msg => ({
-            ...msg,
-            message: decrypt(msg.message)
-        }));
+        const decrypted = messages.map(msg => {
+            const msgType = (msg.message_type || '').toLowerCase();
+            // image/video messages store the raw Cloudinary URL — do not decrypt them
+            if (msgType === 'image' || msgType === 'video') {
+                return { ...msg, media_url: msg.message };
+            }
+            try {
+                return { ...msg, message: decrypt(msg.message) };
+            } catch (e) {
+                return { ...msg, message: msg.message };
+            }
+        });
 
         res.json({ success: true, messages: decrypted });
     } catch (error) { 
@@ -4127,6 +4161,44 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         io.to(`chat_${receiver_id}`).emit('new_message_received', payloadToEmit);
         io.to(`chat_${sender_id}`).emit('new_message_received', payloadToEmit);
 
+        // Send FCM push notification to the receiver if they are not currently in this chat
+        try {
+            const receiverIdStr = receiver_id.toString();
+            const activeSession = activeChatSessions.get(receiverIdStr);
+            const isLookingAtThisChat = activeSession === `user_${sender_id}`;
+
+            if (!isLookingAtThisChat) {
+                const [rcvRows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [receiver_id]);
+                const [sndRows] = await db.query("SELECT CONCAT(first_name,' ',last_name) as name, profile_pic FROM users WHERE id = ?", [sender_id]);
+
+                if (rcvRows.length > 0 && rcvRows[0].fcm_token) {
+                    const sndName = sndRows.length > 0 ? sndRows[0].name : "New Message";
+                    const sndPic  = sndRows.length > 0 ? sndRows[0].profile_pic : "";
+                    const notifBody = media_type === 'video' ? '🎥 Video' : '📷 Photo';
+                    await admin.messaging().send({
+                        token: rcvRows[0].fcm_token,
+                        notification: { title: sndName, body: notifBody },
+                        data: {
+                            type: "chat",
+                            senderId: sender_id.toString(),
+                            senderName: sndName,
+                            senderProfilePic: sndPic || "",
+                            chatPartnerId: sender_id.toString(),
+                            title: sndName,
+                            body: notifBody,
+                            groupKey: "com.swarajyadav.CHAT_GROUP_" + sender_id.toString()
+                        },
+                        android: {
+                            priority: "high",
+                            notification: { channelId: "channel_custom_sound_v3", sound: "custom_notification", tag: sender_id.toString() }
+                        }
+                    });
+                }
+            }
+        } catch (fcmErr) {
+            console.error("/api/media/send-media FCM error:", fcmErr.message);
+        }
+
         res.status(201).json({
             success: true,
             message: "Media transmitted and entries logged successfully.",
@@ -4144,12 +4216,12 @@ app.post("/api/media/send-group", authenticateToken, uploadSharedMedia.single("m
     try {
         const { group_id, media_type } = req.body;
         const sender_id = req.user.id;
- 
+
         if (!sender_id || !group_id || !media_type || !req.file) {
             return res.status(400).json({ success: false, message: "Required fields missing." });
         }
- 
-        // Verify the sender is actually a member of this group
+
+        // Verify membership
         const [memberCheck] = await db.query(
             "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
             [parseInt(group_id), sender_id]
@@ -4157,50 +4229,106 @@ app.post("/api/media/send-group", authenticateToken, uploadSharedMedia.single("m
         if (memberCheck.length === 0) {
             return res.status(403).json({ success: false, message: "Not a group member." });
         }
- 
+
         const mediaUrl        = req.file.path;
         const cloudinaryPubId = req.file.filename || req.file.public_id || "raw_id";
- 
-        // 1. Persist to shared_media with group_id populated so the download-complete
-        //    handler can do the "all-members-downloaded?" check correctly.
-        //    receiver_id is explicitly NULL for group media (it's a 1-to-1 concept).
-        const [result] = await db.execute(
-            `INSERT INTO shared_media
-             (sender_id, receiver_id, group_id, media_type, media_url, cloudinary_public_id, send_at, expires_at)
-             VALUES (?, NULL, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 72 HOUR))`,
-            [sender_id, parseInt(group_id), media_type, mediaUrl, cloudinaryPubId]
-        );
-        const newMediaId = result.insertId;
- 
-        // 2. Fetch sender name for the socket payload
+
+        // 1. Fetch sender name and group name for socket payload + FCM
         const [userRows] = await db.query(
             "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?",
             [sender_id]
         );
         const senderName = userRows.length > 0 ? userRows[0].name : "Member";
- 
-        // 3. Build socket payload — mirrors the shape GroupChatAdapter expects
+
+        const [groupRows] = await db.query(
+            "SELECT group_name FROM `group_table` WHERE group_id = ?",
+            [parseInt(group_id)]
+        );
+        const groupName = groupRows.length > 0 ? groupRows[0].group_name : "Group";
+
+        // 2. Persist to shared_media for Cloudinary download-complete tracking ledger
+        const [smResult] = await db.execute(
+            `INSERT INTO shared_media
+             (sender_id, receiver_id, group_id, media_type, media_url, cloudinary_public_id, send_at, expires_at)
+             VALUES (?, NULL, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 72 HOUR))`,
+            [sender_id, parseInt(group_id), media_type, mediaUrl, cloudinaryPubId]
+        );
+        const sharedMediaId = smResult.insertId;
+
+        // 3. Insert into group_messages so it appears in chat history, getChatUsers
+        //    last-message preview, unread counts, and mark-as-read all function correctly.
+        //    Media URL is stored as plain text (no encryption) — the group messages
+        //    endpoint already skips decryption for image/video types.
+        const [gmResult] = await db.execute(
+            `INSERT INTO group_messages
+             (group_id, sender_id, message_content, timestamp, message_type,
+              latitude, longitude, reply_to_id, quoted_sender_id, quoted_message,
+              quoted_user_name, expires_at, duration)
+             VALUES (?, ?, ?, NOW(), ?, NULL, NULL, NULL, NULL, NULL, NULL,
+                     DATE_ADD(NOW(), INTERVAL 72 HOUR), 0)`,
+            [parseInt(group_id), sender_id, mediaUrl, media_type]
+        );
+        const newMessageId = gmResult.insertId;
+
+        // 4. Build socket payload
         const payloadToEmit = {
-            id:           newMediaId,
+            id:           newMessageId,
             group_id:     parseInt(group_id),
             sender_id:    sender_id,
             sender_name:  senderName,
-            message_type: media_type,   // "image" or "video"
-            message:      mediaUrl,     // msg.getMessage() used in adapter
+            message_type: media_type,
+            message:      mediaUrl,
             media_url:    mediaUrl,
             timestamp:    new Date().toISOString(),
             status:       1
         };
- 
-        // 4. Broadcast to every member currently in the group socket room
+
+        // 5. Broadcast to all group members in the socket room
         io.to(`group_${group_id}`).emit("new_group_message", payloadToEmit);
- 
+
+        // 6. FCM push notification to offline members
+        try {
+            const [members] = await db.query(`
+                SELECT u.id, u.fcm_token
+                FROM group_members gm
+                JOIN users u ON gm.user_id = u.id
+                WHERE gm.group_id = ? AND gm.user_id != ?
+                  AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
+            `, [parseInt(group_id), sender_id]);
+
+            const tokensToNotify = members
+                .filter(m => activeChatSessions.get(m.id.toString()) !== `group_${group_id}`)
+                .map(m => m.fcm_token);
+
+            if (tokensToNotify.length > 0) {
+                const notifBody = media_type === 'video'
+                    ? `${senderName}: 🎥 Video`
+                    : `${senderName}: 📷 Photo`;
+                await admin.messaging().sendEachForMulticast({
+                    tokens: tokensToNotify,
+                    notification: { title: groupName, body: notifBody },
+                    android: {
+                        priority: "high",
+                        notification: { channelId: "chat_channel_id", sound: "default" }
+                    },
+                    data: {
+                        type: "group_chat",
+                        groupId: String(group_id),
+                        groupName: groupName,
+                        senderId: String(sender_id)
+                    }
+                });
+            }
+        } catch (fcmError) {
+            console.error(TAG, "FCM Error for group media:", fcmError.message);
+        }
+
         res.status(201).json({
             success:   true,
-            messageId: newMediaId,
+            messageId: newMessageId,
             data:      payloadToEmit
         });
- 
+
     } catch (err) {
         console.error(TAG, err);
         res.status(500).json({ success: false, error: err.message });
