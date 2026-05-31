@@ -4163,10 +4163,11 @@ app.post("/api/media/send-group", authenticateToken, uploadSharedMedia.single("m
  
         // 1. Persist to shared_media with group_id populated so the download-complete
         //    handler can do the "all-members-downloaded?" check correctly.
+        //    receiver_id is explicitly NULL for group media (it's a 1-to-1 concept).
         const [result] = await db.execute(
             `INSERT INTO shared_media
-             (sender_id, group_id, media_type, media_url, cloudinary_public_id, send_at, expires_at)
-             VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 72 HOUR))`,
+             (sender_id, receiver_id, group_id, media_type, media_url, cloudinary_public_id, send_at, expires_at)
+             VALUES (?, NULL, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 72 HOUR))`,
             [sender_id, parseInt(group_id), media_type, mediaUrl, cloudinaryPubId]
         );
         const newMediaId = result.insertId;
