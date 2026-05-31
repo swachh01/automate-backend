@@ -4139,6 +4139,73 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
     }
 });
 
+app.post("/api/media/send-group", authenticateToken, uploadSharedMedia.single("media_file"), async (req, res) => {
+    const TAG = "/api/media/send-group";
+    try {
+        const { group_id, media_type } = req.body;
+        const sender_id = req.user.id;
+ 
+        if (!sender_id || !group_id || !media_type || !req.file) {
+            return res.status(400).json({ success: false, message: "Required fields missing." });
+        }
+ 
+        // Verify the sender is actually a member of this group
+        const [memberCheck] = await db.query(
+            "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+            [parseInt(group_id), sender_id]
+        );
+        if (memberCheck.length === 0) {
+            return res.status(403).json({ success: false, message: "Not a group member." });
+        }
+ 
+        const mediaUrl        = req.file.path;
+        const cloudinaryPubId = req.file.filename || req.file.public_id || "raw_id";
+ 
+        // 1. Persist to shared_media with group_id populated so the download-complete
+        //    handler can do the "all-members-downloaded?" check correctly.
+        const [result] = await db.execute(
+            `INSERT INTO shared_media
+             (sender_id, group_id, media_type, media_url, cloudinary_public_id, send_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 72 HOUR))`,
+            [sender_id, parseInt(group_id), media_type, mediaUrl, cloudinaryPubId]
+        );
+        const newMediaId = result.insertId;
+ 
+        // 2. Fetch sender name for the socket payload
+        const [userRows] = await db.query(
+            "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?",
+            [sender_id]
+        );
+        const senderName = userRows.length > 0 ? userRows[0].name : "Member";
+ 
+        // 3. Build socket payload — mirrors the shape GroupChatAdapter expects
+        const payloadToEmit = {
+            id:           newMediaId,
+            group_id:     parseInt(group_id),
+            sender_id:    sender_id,
+            sender_name:  senderName,
+            message_type: media_type,   // "image" or "video"
+            message:      mediaUrl,     // msg.getMessage() used in adapter
+            media_url:    mediaUrl,
+            timestamp:    new Date().toISOString(),
+            status:       1
+        };
+ 
+        // 4. Broadcast to every member currently in the group socket room
+        io.to(`group_${group_id}`).emit("new_group_message", payloadToEmit);
+ 
+        res.status(201).json({
+            success:   true,
+            messageId: newMediaId,
+            data:      payloadToEmit
+        });
+ 
+    } catch (err) {
+        console.error(TAG, err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.get("/api/media/fetch/:userId", async (req, res) => {
     const { userId } = req.params;
     try {
@@ -4156,47 +4223,74 @@ app.get("/api/media/fetch/:userId", async (req, res) => {
     }
 });
 
-// ================= ATOMIC DOWNLOADING PURGE HANDLER =================
+// ================= FIXED GROUP/INDIVIDUAL PURGE HANDLER =================
 app.post("/api/media/download-complete", authenticateToken, async (req, res) => {
     const TAG = "/api/media/download-complete";
     try {
-        const { message_id } = req.body;
-        const current_user_id = req.user.id.toString(); // FIXED: Cast to String to accurately match table's VARCHAR types
+        const { message_id, group_id } = req.body;
+        const current_user_id = req.user.id;
 
         if (!message_id) {
-            return res.status(400).json({ success: false, message: "Missing required message_id param." });
+            return res.status(400).json({ success: false, message: "Missing message_id param." });
         }
 
-        // FIXED: Explicitly target the primary key 'id' column matching your database schema layout
-        const [rows] = await db.execute(
-            "SELECT cloudinary_public_id, media_type, receiver_id FROM shared_media WHERE id = ?",
-            [parseInt(message_id)]
-        );
+        // SCENARIO 1: Handle Group Chat Download & Purge
+        if (group_id && parseInt(group_id) > 0) {
+            const gId = parseInt(group_id);
+            const mId = parseInt(message_id);
 
-        if (rows.length === 0) {
-            return res.status(404).json({ success: false, message: "Asset records already purged or non-existent." });
-        }
+            // Log that this specific user has successfully downloaded the file locally
+            await db.execute(
+                "INSERT IGNORE INTO group_media_download_status (message_id, group_id, user_id) VALUES (?, ?, ?)",
+                [mId, gId, current_user_id]
+            );
 
-        const asset = rows[0];
+            // Fetch the total number of downloaded members vs total active group members
+            const [memberCountRows] = await db.query(
+                "SELECT COUNT(*) as total FROM group_members WHERE group_id = ?", [gId]
+            );
+            const [downloadCountRows] = await db.query(
+                "SELECT COUNT(DISTINCT user_id) as downloaded FROM group_media_download_status WHERE message_id = ?", [mId]
+            );
+
+            const totalMembers = memberCountRows[0]?.total || 0;
+            const totalDownloaded = downloadCountRows[0]?.downloaded || 0;
+
+            // Delete permanently from the server ONLY when every single group member has saved it locally
+            if (totalDownloaded >= totalMembers) {
+                const [rows] = await db.execute("SELECT cloudinary_public_id, media_type FROM shared_media WHERE id = ?", [mId]);
+                if (rows.length > 0) {
+                    const asset = rows[0];
+                    const resourceType = asset.media_type === 'video' ? 'video' : 'image';
+                    await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
+                    
+                    await db.execute("DELETE FROM shared_media WHERE id = ?", [mId]);
+                    await db.execute("DELETE FROM group_media_download_status WHERE message_id = ?", [mId]);
+                    console.log(TAG, `Group media ID ${mId} permanently erased as all members downloaded it.`);
+                }
+            }
+            return res.json({ success: true, message: "Group download tracked successfully." });
+        } 
         
-        // FIXED: String boundary check comparing standard token properties with Table VARCHAR signatures safely
-        if (String(asset.receiver_id) !== current_user_id) {
-            return res.status(403).json({ success: false, message: "Unauthorized data destruction request." });
+        // SCENARIO 2: Handle Individual Chat Purge (Keeps your current 1-to-1 logic intact)
+        else {
+            const [rows] = await db.execute("SELECT cloudinary_public_id, media_type, receiver_id FROM shared_media WHERE id = ?", [parseInt(message_id)]);
+            if (rows.length === 0) return res.status(404).json({ success: false, message: "Asset records non-existent." });
+
+            const asset = rows[0];
+            if (String(asset.receiver_id) !== req.user.id.toString()) {
+                return res.status(403).json({ success: false, message: "Unauthorized data destruction request." });
+            }
+
+            const resourceType = asset.media_type === 'video' ? 'video' : 'image';
+            await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
+            await db.execute("DELETE FROM shared_media WHERE id = ?", [parseInt(message_id)]);
+            
+            return res.json({ success: true, message: "Individual media purged permanently." });
         }
-
-        // 1. Instantly shred file contents from Cloudinary storage clusters
-        const resourceType = asset.media_type === 'video' ? 'video' : 'image';
-        await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
-        console.log(TAG, `Cloudinary source sanitized completely: ${asset.cloudinary_public_id}`);
-
-        // 2. Erase the file metadata logs out of the database table atomically using the PRI 'id' key
-        await db.execute("DELETE FROM shared_media WHERE id = ?", [parseInt(message_id)]);
-        console.log(TAG, `Database record wiped for message ID: ${message_id}`);
-
-        res.json({ success: true, message: "Media payload safely purged from server structures permanently." });
 
     } catch (err) {
-        console.error(TAG, "Shredding loop exception thrown: ", err);
+        console.error(TAG, "Purge pipeline error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
