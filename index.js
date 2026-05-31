@@ -120,10 +120,6 @@ const sharedMediaStorage = new CloudinaryStorage({
     return {
       folder: 'automate_now_shared_media',
       resource_type: isVideo ? 'video' : 'image',
-      // On-the-fly conversion parameters standardizing images and videos down to 720p maximum boundaries
-      transformation: isVideo 
-        ? [{ width: 1280, height: 720, crop: 'limit', quality: 'auto' }]
-        : [{ width: 1280, height: 720, crop: 'limit', quality: '80', format: 'jpg' }]
     };
   }
 });
