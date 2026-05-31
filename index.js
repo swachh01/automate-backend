@@ -4157,11 +4157,21 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
             group_id: 0
         };
 
-        // Broadcast down the socket rooms to render the message bubble instantly on both chat screens
-        io.to(`chat_${receiver_id}`).emit('new_message_received', payloadToEmit);
-        io.to(`chat_${sender_id}`).emit('new_message_received', payloadToEmit);
+            io.to(`chat_${receiver_id}`).emit('new_media_received', {
+    sender_id:    parseInt(sender_id),
+    receiver_id:  parseInt(receiver_id),
+    message_type: media_type,
+    timestamp:    payloadToEmit.timestamp
+});
+ 
+// Notify sender's other socket instances (e.g. home screen) for badge update
+io.to(`user_${receiver_id}`).emit('new_media_received', {
+    sender_id:    parseInt(sender_id),
+    receiver_id:  parseInt(receiver_id),
+    message_type: media_type,
+    timestamp:    payloadToEmit.timestamp
+});
 
-        // Send FCM push notification to the receiver if they are not currently in this chat
         try {
             const receiverIdStr = receiver_id.toString();
             const activeSession = activeChatSessions.get(receiverIdStr);
@@ -4207,6 +4217,34 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
 
     } catch (err) {
         console.error(TAG, "Transaction processing exception error loop:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post('/api/media/mark-read', authenticateToken, async (req, res) => {
+    const TAG = '/api/media/mark-read';
+    try {
+        // receiver calls this; sender_id = the person who sent media TO the receiver
+        const { sender_id, receiver_id } = req.body;
+        const callerId = req.user.id;          // the authenticated user (receiver)
+ 
+        // Safety: only the actual receiver may mark their own media as read
+        if (parseInt(receiver_id) !== callerId) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
+        }
+ 
+        await db.execute(
+            `UPDATE shared_media
+                SET downloaded_at = NOW()
+              WHERE sender_id = ?
+                AND receiver_id = ?
+                AND downloaded_at IS NULL`,
+            [parseInt(sender_id), callerId]
+        );
+ 
+        res.json({ success: true });
+    } catch (err) {
+        console.error(TAG, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
