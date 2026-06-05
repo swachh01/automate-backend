@@ -236,13 +236,13 @@ socket.on('chat_closed', (data) => {
 
 socket.on('i_delivered_messages', (data) => {
     socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages', {
-        userId: data.partnerId 
+        userId: data.partnerId || data.userId 
     });
   });
 
 socket.on('i_read_messages', (data) => {
     socket.to(`chat_${data.partnerId}`).emit('partner_read_messages', {
-        userId: data.partnerId
+        userId: data.partnerId || data.userId
     });
 });  
 
