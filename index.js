@@ -234,17 +234,21 @@ socket.on('chat_closed', (data) => {
     });
   });
 
+// Inside your index.js socket connections logic, update your properties:
+
 socket.on('i_delivered_messages', (data) => {
+    // Ensure data.senderId or data.userId maps downstream gracefully
     socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages', {
-        userId: data.partnerId || data.userId 
+        userId: data.senderId || data.userId || data.partnerId
     });
-  });
+});
 
 socket.on('i_read_messages', (data) => {
+    // Forward the actual reader parameter layout inside the broadcast loop
     socket.to(`chat_${data.partnerId}`).emit('partner_read_messages', {
-        userId: data.partnerId || data.userId
+        userId: data.senderId || data.userId || data.partnerId
     });
-});  
+});
 
 socket.on('join_group', (groupId) => {
     try {
