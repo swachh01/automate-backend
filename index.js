@@ -59,8 +59,8 @@ app.use(cors({
   origin: '*',
   credentials: true
 }));
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "200mb" }));
+app.use(express.urlencoded({ limit: "200mb",extended: true }));
 
 cloudinary.config({
   secure: true,
@@ -120,11 +120,15 @@ const sharedMediaStorage = new CloudinaryStorage({
     return {
       folder: 'automate_now_shared_media',
       resource_type: isVideo ? 'video' : 'image',
+      timeout: 200000
     };
   }
 });
 
-const uploadSharedMedia = multer({ storage: sharedMediaStorage });
+const uploadSharedMedia = multer({ 
+  storage: sharedMediaStorage,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit rule allocation
+});
 
 async function updateUserPresence(userId, isOnline) {
   try {
@@ -4483,3 +4487,5 @@ const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
 });
+
+server.timeout = 300000;
