@@ -4218,6 +4218,14 @@ io.to(`user_${receiver_id}`).emit('new_media_received', {
     timestamp:    payloadToEmit.timestamp
 });
 
+// ─── ADD THIS EMISSION SO YOUR OWN CHAT LIST UPDATES IMMEDIATELY WHEN YOU SEND MEDIA ───
+io.to(`chat_${sender_id}`).emit('new_media_received', {
+    sender_id:    parseInt(sender_id),
+    receiver_id:  parseInt(receiver_id),
+    message_type: media_type,
+    timestamp:    payloadToEmit.timestamp
+});
+
         try {
             const receiverIdStr = receiver_id.toString();
             const activeSession = activeChatSessions.get(receiverIdStr);
