@@ -236,17 +236,21 @@ socket.on('chat_closed', (data) => {
 
 // Inside your index.js socket connections logic, update your properties:
 
+// Locate these listeners in index.js and update them:
+
 socket.on('i_delivered_messages', (data) => {
-    // Ensure data.senderId or data.userId maps downstream gracefully
+    const senderOfStatus = data.senderId || data.userId;
     socket.to(`chat_${data.partnerId}`).emit('partner_delivered_messages', {
-        userId: data.senderId || data.userId || data.partnerId
+        partnerId: parseInt(senderOfStatus),
+        userId: parseInt(senderOfStatus)
     });
 });
 
 socket.on('i_read_messages', (data) => {
-    // Forward the actual reader parameter layout inside the broadcast loop
+    const senderOfStatus = data.senderId || data.userId;
     socket.to(`chat_${data.partnerId}`).emit('partner_read_messages', {
-        userId: data.senderId || data.userId || data.partnerId
+        partnerId: parseInt(senderOfStatus),
+        userId: parseInt(senderOfStatus)
     });
 });
 
@@ -2991,22 +2995,25 @@ app.get("/getUserByPhone", async (req, res) => {
 });
 
 app.post('/markMessagesRead', async (req, res) => {
-  try {
-    const { userId, otherUserId } = req.body;
-    if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
+    try {
+        const { userId, otherUserId } = req.body;
+        if (!userId || !otherUserId) {
+            return res.status(400).json({ success: false, message: 'Missing parameters' });
+        }
+
+        // 1. Mark traditional chat rows as read
+        const queryMessages = `UPDATE messages SET status = 2 WHERE sender_id = ? AND receiver_id = ? AND status < 2`;
+        await db.execute(queryMessages, [otherUserId, userId]);
+
+        // 2. Mark ephemeral shared media rows as downloaded/read 
+        const queryMedia = `UPDATE shared_media SET downloaded_at = NOW() WHERE sender_id = ? AND receiver_id = ? AND downloaded_at IS NULL`;
+        await db.execute(queryMedia, [otherUserId, userId]);
+
+        res.json({ success: true, message: 'All target parameters marked clean.' });
+    } catch (error) {
+        console.error('Error executing markMessagesRead database update:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
-    const query = `
-      UPDATE messages 
-      SET status = 2 
-      WHERE sender_id = ? AND receiver_id = ? AND status < 2
-    `;
-    const [result] = await db.execute(query, [otherUserId, userId]);  
-    res.json({ success: true, message: 'Messages marked as read', markedCount: result.affectedRows });
-  } catch (error) {
-    console.error('Error marking messages as read:', error);
-    res.status(500).json({ success: false, message: 'Failed to mark messages as read' });
-  }
 });
 
 app.get('/getUnreadCount', async (req, res) => {
