@@ -1952,7 +1952,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-        const combinedQuery = `
+            const combinedQuery = `
             WITH LatestChats AS (
                 SELECT
                     'individual' AS chat_type,
@@ -1978,6 +1978,25 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                           AND cr.receiver_id = ? 
                           AND cr.status = 'pending'
                     )
+                UNION ALL
+                -- ─── ADDED: INDIVIDUAL SHARED MEDIA PREVIEWS TO THE LEDGER ───
+                SELECT
+                    'individual' AS chat_type,
+                    CASE WHEN sm.sender_id = ? THEN sm.receiver_id ELSE sm.sender_id END AS chat_id,
+                    sm.media_url AS last_message_content,
+                    sm.send_at AS last_timestamp,
+                    sm.sender_id AS last_sender_id,
+                    IF(sm.downloaded_at IS NOT NULL, 2, 1) AS last_message_status,
+                    sm.media_type AS last_message_type,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CASE WHEN sm.sender_id = ? THEN sm.receiver_id ELSE sm.sender_id END
+                        ORDER BY sm.send_at DESC
+                    ) as rn
+                FROM shared_media sm
+                WHERE
+                    (sm.sender_id = ? OR sm.receiver_id = ?)
+                    AND sm.group_id IS NULL
+                    AND sm.expires_at > NOW()
                 UNION ALL
                 SELECT
                     'group' AS chat_type,
@@ -2046,15 +2065,18 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
             ORDER BY lc.last_timestamp DESC;
         `;
 
+        // ─── CRITICAL: REMAPPED CORRESPONDING QUERY BINDING PARAMETERS ARRAY ───
         const params = [
-            currentUserId, currentUserId, currentUserId,   // CTE individual: chat_id, sender_id, hidden join
-            currentUserId, currentUserId,                  // CTE individual: WHERE sender_id/receiver_id
-            currentUserId,                                 // CTE individual: chat_requests check
-            currentUserId, currentUserId,                  // CTE group: gmem join + WHERE
-            currentUserId,                                 // individual unread: m_unread.receiver_id
-            currentUserId,                                 // shared_media unread: sm_unread.receiver_id
-            currentUserId, currentUserId,                  // group unread: sender_id != ?, gmrs.user_id = ?
-            currentUserId                                  // WHERE chat_id != currentUserId
+            currentUserId, currentUserId, currentUserId,   // CTE individual text: chat_id, sender_id, hidden join
+            currentUserId, currentUserId,                  // CTE individual text: WHERE sender_id/receiver_id
+            currentUserId,                                 // CTE individual text: chat_requests check
+            currentUserId, currentUserId, currentUserId,   // CTE individual media: chat_id splits, sender_id loop
+            currentUserId,                                 // CTE individual media: WHERE receiver_id check
+            currentUserId, currentUserId,                  // CTE group text/media message: gmem join + WHERE
+            currentUserId,                                 // individual unread calculation: m_unread.receiver_id
+            currentUserId,                                 // shared_media unread calculation: sm_unread.receiver_id
+            currentUserId, currentUserId,                  // group unread counter properties configuration
+            currentUserId                                  // global trailing layout filter: WHERE chat_id != currentUserId
         ];
 
         const [rows] = await db.query(combinedQuery, params);
