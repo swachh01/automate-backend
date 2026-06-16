@@ -3066,14 +3066,21 @@ app.get('/getUnreadCount', async (req, res) => {
   }
 });
 
+
 app.get('/getTotalUnreadCount', async (req, res) => {
     const TAG = "/getTotalUnreadCount"; 
     const { userId } = req.query;
     if (!userId) return res.status(400).json({ success: false, message: 'userId is required' });
     const currentUserId = parseInt(userId);
     try {
-        const individualQuery = `SELECT COUNT(*) as totalUnreadCount FROM messages WHERE receiver_id = ? AND status < 2`;
-        const [individualRows] = await db.execute(individualQuery, [currentUserId]);
+        // ─── OPTIMIZED: COUNTS TEXT MESSAGES AND LIVE SHARED MEDIA ASSETS SIMULTANEOUSLY ───
+        const individualQuery = `
+            SELECT 
+                (SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND status < 2) +
+                (SELECT COUNT(*) FROM shared_media WHERE receiver_id = ? AND expires_at > NOW() AND downloaded_at IS NULL) 
+            as totalUnreadCount`;
+        
+        const [individualRows] = await db.execute(individualQuery, [currentUserId, currentUserId]);
 
         const groupQuery = `SELECT COUNT(*) as totalUnreadCount FROM group_messages gm WHERE gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?) AND gm.sender_id != ? AND NOT 
 EXISTS (SELECT 1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.message_id AND gmrs.user_id = ?)`;
