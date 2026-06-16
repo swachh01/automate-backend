@@ -1953,7 +1953,8 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
             const combinedQuery = `
-            WITH LatestChats AS (
+            WITH RawMergedChats AS (
+                -- 1. Collect baseline text messages
                 SELECT
                     'individual' AS chat_type,
                     CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END AS chat_id,
@@ -1961,11 +1962,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                     m.timestamp AS last_timestamp,
                     m.sender_id AS last_sender_id,
                     m.status AS last_message_status,
-                    m.message_type AS last_message_type,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
-                        ORDER BY m.timestamp DESC
-                    ) as rn
+                    m.message_type AS last_message_type
                 FROM messages m
                 LEFT JOIN hidden_messages hm ON m.id = hm.message_id AND hm.user_id = ?
                 WHERE
@@ -1978,8 +1975,10 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                           AND cr.receiver_id = ? 
                           AND cr.status = 'pending'
                     )
+
                 UNION ALL
-                -- ─── ADDED: INDIVIDUAL SHARED MEDIA PREVIEWS TO THE LEDGER ───
+
+                -- 2. Collect shared media objects within the exact same ledger boundaries
                 SELECT
                     'individual' AS chat_type,
                     CASE WHEN sm.sender_id = ? THEN sm.receiver_id ELSE sm.sender_id END AS chat_id,
@@ -1987,17 +1986,16 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                     sm.send_at AS last_timestamp,
                     sm.sender_id AS last_sender_id,
                     IF(sm.downloaded_at IS NOT NULL, 2, 1) AS last_message_status,
-                    sm.media_type AS last_message_type,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY CASE WHEN sm.sender_id = ? THEN sm.receiver_id ELSE sm.sender_id END
-                        ORDER BY sm.send_at DESC
-                    ) as rn
+                    sm.media_type AS last_message_type
                 FROM shared_media sm
                 WHERE
                     (sm.sender_id = ? OR sm.receiver_id = ?)
                     AND sm.group_id IS NULL
                     AND sm.expires_at > NOW()
+
                 UNION ALL
+
+                -- 3. Collect active group messages standard history rows
                 SELECT
                     'group' AS chat_type,
                     gm.group_id AS chat_id,
@@ -2005,15 +2003,20 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                     gm.timestamp AS last_timestamp,
                     gm.sender_id AS last_sender_id,
                     -1 AS last_message_status,
-                    gm.message_type AS last_message_type,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY gm.group_id
-                        ORDER BY gm.timestamp DESC
-                    ) as rn
+                    gm.message_type AS last_message_type
                 FROM group_messages gm
                 JOIN group_members gmem ON gm.group_id = gmem.group_id AND gmem.user_id = ?
                 WHERE
                     gmem.user_id = ?
+            ),
+            LatestChats AS (
+                SELECT 
+                    rmc.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY rmc.chat_type, rmc.chat_id
+                        ORDER BY rmc.last_timestamp DESC
+                    ) as rn
+                FROM RawMergedChats rmc
             )
             SELECT
                 lc.chat_type,
@@ -2057,13 +2060,14 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                     )
                  ) AS group_unread_count
             FROM LatestChats lc
-            LEFT JOIN users u_partner ON lc.chat_type = 'individual' AND lc.chat_id = u_partner.id
-            LEFT JOIN \`group_table\` gt ON lc.chat_type = 'group' AND lc.chat_id = gt.group_id
+            LEFT JOIN users u_partner ON lc.chat_type = 'individual' AND CAST(lc.chat_id AS SIGNED) = u_partner.id
+            LEFT JOIN \`group_table\` gt ON lc.chat_type = 'group' AND CAST(lc.chat_id AS SIGNED) = gt.group_id
             LEFT JOIN users u_sender ON lc.last_sender_id = u_sender.id
             WHERE lc.rn = 1 
               AND lc.chat_id != ?
             ORDER BY lc.last_timestamp DESC;
         `;
+
 
         // ─── CRITICAL: REMAPPED CORRESPONDING QUERY BINDING PARAMETERS ARRAY ───
         const params = [
