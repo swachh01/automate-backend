@@ -4186,37 +4186,37 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. TiDB execution saves the baseline ephemeral entry
+        // 1. TiDB execution saves the baseline entry inside shared_media table
         const insertQuery = `
             INSERT INTO shared_media 
             (sender_id, receiver_id, media_type, media_url, cloudinary_public_id, send_at, expires_at) 
             VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 3 HOUR))
         `;
         const [result] = await connection.execute(insertQuery, [
-            parseInt(sender_id),
+            sender_id.toString(), // shared_media expects varchar(255) for sender_id
             parseInt(receiver_id),
             media_type,
             mediaUrl,
             cloudinaryPublicId
         ]);
 
-        // 2. ─── FIXED PREVIEW FLIP: INSERT A SHADOW ENTRY INTO PERMANENT MESSAGES TABLE ───
-        // This acts as a persistent placeholder so /getChatUsers won't fall back to older texts after ephemeral cleanup
+        // 2. ─── FIXED CRASH & FLIP: RECORD PERMANENT TRAILING ENTRY IN ENUM BOUNDS ───
+        // We write to the permanent table using 'text' as the type, so it satisfies the ENUM constraint.
+        // We store the plain media URL or an encoded string inside 'message'.
         const permanentMessageQuery = `
             INSERT INTO messages 
             (sender_id, receiver_id, message, timestamp, status, message_type) 
-            VALUES (?, ?, ?, UTC_TIMESTAMP(), 1, ?)
+            VALUES (?, ?, ?, UTC_TIMESTAMP(), 1, 'text')
         `;
         const { encrypt } = require('./cryptoHelper');
         const encryptedMediaUrl = encrypt(mediaUrl);
         await connection.execute(permanentMessageQuery, [
-            parseInt(sender_id),
+            parseInt(sender_id), // messages table expects an integer
             parseInt(receiver_id),
             encryptedMediaUrl,
-            media_type
         ]);
 
-        // Commit database updates safely
+        // Commit database updates safely now that all schema restrictions are satisfied
         await connection.commit();
 
         // CALCULATE 3 HOURS FROM NOW IN ISO EXPLICITLY FOR MOBILE RE-SYNC TIMERS
@@ -4247,7 +4247,7 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         // Notify our own socket instances so our local chat list updates immediately to "You sent an image"
         io.to(`chat_${sender_id}`).emit('new_media_received', payloadToEmit);
 
-        // Background FCM task loop
+        // Background FCM notification task layer
         try {
             const receiverIdStr = receiver_id.toString();
             const activeSession = activeChatSessions.get(receiverIdStr);
