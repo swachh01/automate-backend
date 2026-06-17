@@ -4473,39 +4473,47 @@ app.post("/api/media/download-complete", authenticateToken, async (req, res) => 
             );
 
             // 2. Fetch the current download/read count vs total group size
-            const [countRows] = await db.execute(
-                `SELECT 
-                    (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status WHERE message_id = ?) as downloadedCount,
-                    (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalMembers`,
-                [parsedMsgId, parsedGroupId]
-            );
 
-            if (countRows.length > 0) {
-                const { downloadedCount, totalMembers } = countRows[0];
-                console.log(TAG, `Group Media ${parsedMsgId}: Downloaded by ${downloadedCount}/${totalMembers} members.`);
+            // 2. Fetch the current download/read count vs total group size (excluding the sender)
+const [countRows] = await db.execute(
+    `SELECT 
+        (SELECT COUNT(DISTINCT gmrs.user_id) 
+         FROM group_message_read_status gmrs
+         JOIN group_messages gm ON gmrs.message_id = gm.message_id
+         WHERE gmrs.message_id = ? AND gmrs.user_id != gm.sender_id) as downloadedCount,
+        
+        (SELECT COUNT(*) 
+         FROM group_members gmem
+         JOIN group_messages gm ON gmem.group_id = gm.group_id
+         WHERE gm.message_id = ? AND gmem.user_id != gm.sender_id) as totalReceivers`,
+    [parsedMsgId, parsedMsgId]
+);
 
-                // 3. Purge if everyone has downloaded it
-                if (downloadedCount >= totalMembers) {
-                    // Look up Cloudinary public ID from shared_media or group_messages reference map
-                    const [mediaRows] = await db.execute(
-                        "SELECT cloudinary_public_id, media_type FROM shared_media WHERE group_id = ? AND media_url = (SELECT message_content FROM group_messages WHERE message_id = ?)",
-                        [parsedGroupId, parsedMsgId]
-                    );
+if (countRows.length > 0) {
+    const { downloadedCount, totalReceivers } = countRows[0];
+    console.log(TAG, `Group Media ${parsedMsgId}: Downloaded by ${downloadedCount}/${totalReceivers} target receivers.`);
 
-                    if (mediaRows.length > 0) {
-                        const asset = mediaRows[0];
-                        const resourceType = asset.media_type === 'video' ? 'video' : 'image';
-                        
-                        // Wipe from Cloudinary storage
-                        await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
-                        
-                        // Clean records from tables
-                        await db.execute("DELETE FROM shared_media WHERE group_id = ? AND media_url = (SELECT message_content FROM group_messages WHERE message_id = ?)", [parsedGroupId, 
-parsedMsgId]);
-                        console.log(TAG, `Permanently purged group asset ${parsedMsgId} from Cloudinary—all members downloaded it.`);
-                    }
-                }
-            }
+    // 3. Purge if everyone except the sender has downloaded it
+    if (downloadedCount >= totalReceivers && totalReceivers > 0) {
+        // Look up Cloudinary public ID from shared_media or group_messages reference map
+        const [mediaRows] = await db.execute(
+            "SELECT cloudinary_public_id, media_type FROM shared_media WHERE group_id = ? AND media_url = (SELECT message_content FROM group_messages WHERE message_id = ?)",
+            [parsedGroupId, parsedMsgId]
+        );
+
+        if (mediaRows.length > 0) {
+            const asset = mediaRows[0];
+            const resourceType = asset.media_type === 'video' ? 'video' : 'image';
+            
+            // Wipe from Cloudinary storage
+            await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
+            
+            // Clean records from tables
+            await db.execute("DELETE FROM shared_media WHERE group_id = ? AND media_url = (SELECT message_content FROM group_messages WHERE message_id = ?)", [parsedGroupId, parsedMsgId]);
+            console.log(TAG, `Permanently purged group asset ${parsedMsgId} from Cloudinary—all recipients downloaded it.`);
+        }
+    }
+}
             return res.json({ success: true, message: "Group download tracked successfully." });
         } 
         else {
