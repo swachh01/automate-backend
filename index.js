@@ -4354,10 +4354,7 @@ app.post("/api/media/send-group", authenticateToken, uploadSharedMedia.single("m
         );
         const sharedMediaId = smResult.insertId;
 
-        // 3. Insert into group_messages so it appears in chat history, getChatUsers
-        //    last-message preview, unread counts, and mark-as-read all function correctly.
-        //    Media URL is stored as plain text (no encryption) — the group messages
-        //    endpoint already skips decryption for image/video types.
+
         const [gmResult] = await db.execute(
             `INSERT INTO group_messages
              (group_id, sender_id, message_content, timestamp, message_type,
