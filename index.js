@@ -4449,6 +4449,7 @@ app.get("/api/media/fetch/:userId", async (req, res) => {
 });
 
 // ================= FIXED GROUP/INDIVIDUAL PURGE HANDLER =================
+
 app.post("/api/media/download-complete", authenticateToken, async (req, res) => {
     const TAG = "/api/media/download-complete";
     try {
@@ -4459,11 +4460,56 @@ app.post("/api/media/download-complete", authenticateToken, async (req, res) => 
             return res.status(400).json({ success: false, message: "Missing message_id param." });
         }
 
+        // ─── NEW GROUP MEDIA TRACK-AND-PURGE LOGIC ───
         if (group_id && parseInt(group_id) > 0) {
-            // ... Keep your existing group media download logic unchanged
+            const parsedGroupId = parseInt(group_id);
+            const parsedMsgId = parseInt(message_id);
+
+            // 1. Log that this user has successfully downloaded/read this message
+            await db.execute(
+                `INSERT IGNORE INTO group_message_read_status (message_id, user_id, group_id) 
+                 VALUES (?, ?, ?)`,
+                [parsedMsgId, current_user_id, parsedGroupId]
+            );
+
+            // 2. Fetch the current download/read count vs total group size
+            const [countRows] = await db.execute(
+                `SELECT 
+                    (SELECT COUNT(DISTINCT user_id) FROM group_message_read_status WHERE message_id = ?) as downloadedCount,
+                    (SELECT COUNT(*) FROM group_members WHERE group_id = ?) as totalMembers`,
+                [parsedMsgId, parsedGroupId]
+            );
+
+            if (countRows.length > 0) {
+                const { downloadedCount, totalMembers } = countRows[0];
+                console.log(TAG, `Group Media ${parsedMsgId}: Downloaded by ${downloadedCount}/${totalMembers} members.`);
+
+                // 3. Purge if everyone has downloaded it
+                if (downloadedCount >= totalMembers) {
+                    // Look up Cloudinary public ID from shared_media or group_messages reference map
+                    const [mediaRows] = await db.execute(
+                        "SELECT cloudinary_public_id, media_type FROM shared_media WHERE group_id = ? AND media_url = (SELECT message_content FROM group_messages WHERE message_id = ?)",
+                        [parsedGroupId, parsedMsgId]
+                    );
+
+                    if (mediaRows.length > 0) {
+                        const asset = mediaRows[0];
+                        const resourceType = asset.media_type === 'video' ? 'video' : 'image';
+                        
+                        // Wipe from Cloudinary storage
+                        await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
+                        
+                        // Clean records from tables
+                        await db.execute("DELETE FROM shared_media WHERE group_id = ? AND media_url = (SELECT message_content FROM group_messages WHERE message_id = ?)", [parsedGroupId, 
+parsedMsgId]);
+                        console.log(TAG, `Permanently purged group asset ${parsedMsgId} from Cloudinary—all members downloaded it.`);
+                    }
+                }
+            }
             return res.json({ success: true, message: "Group download tracked successfully." });
         } 
         else {
+            // Existing individual chat media purge logic remains unchanged
             const [rows] = await db.execute("SELECT cloudinary_public_id, media_type, sender_id, receiver_id FROM shared_media WHERE id = ?", [parseInt(message_id)]);
             if (rows.length === 0) return res.status(404).json({ success: false, message: "Asset records non-existent." });
 
@@ -4472,13 +4518,11 @@ app.post("/api/media/download-complete", authenticateToken, async (req, res) => 
                 return res.status(403).json({ success: false, message: "Unauthorized request." });
             }
 
-            // Broadcast read status directly to the sender via socket before purging
             io.to(`chat_${asset.sender_id}`).emit('partner_read_messages', {
                 partnerId: parseInt(current_user_id),
                 userId: parseInt(current_user_id)
             });
 
-            // Destroy cloud resource and wipe table row
             const resourceType = asset.media_type === 'video' ? 'video' : 'image';
             await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType });
             await db.execute("DELETE FROM shared_media WHERE id = ?", [parseInt(message_id)]);
