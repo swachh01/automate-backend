@@ -284,6 +284,10 @@ socket.on('leave_group', (groupId) => {
     socket.to(`group_${data.groupId}`).emit('new_group_message', data.messageObject);
 });
 
+  socket.on('new_group_message', (data) => {
+  socket.to(`group_${data.groupId}`).emit('new_group_message', data);
+});
+
 socket.on('group_typing_start', async (data) => {
   try {
     const { userId, groupId } = data;
@@ -4197,6 +4201,8 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         expiryDate.setHours(expiryDate.getHours() + 3);
 
         // WHATSAPP-LIKE LOGIC: Formats the Socket payload to match your Room entity layout schemas perfectly
+        
+        // WHATSAPP-LIKE LOGIC: Formats the Socket payload to match your Room entity layout schemas perfectly
         const payloadToEmit = {
             id: result.insertId,
             sender_id: parseInt(sender_id),
@@ -4210,28 +4216,15 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
             group_id: 0
         };
 
-            io.to(`chat_${receiver_id}`).emit('new_media_received', {
-    sender_id:    parseInt(sender_id),
-    receiver_id:  parseInt(receiver_id),
-    message_type: media_type,
-    timestamp:    payloadToEmit.timestamp
-});
+        // ─── OPTIMIZED FULL PAYLOAD EMISSIONS ───
+        // Pass the entire payloadToEmit object so ChatListActivity can read sender_id and message properties instantly
+        io.to(`chat_${receiver_id}`).emit('new_media_received', payloadToEmit);
  
-// Notify sender's other socket instances (e.g. home screen) for badge update
-io.to(`user_${receiver_id}`).emit('new_media_received', {
-    sender_id:    parseInt(sender_id),
-    receiver_id:  parseInt(receiver_id),
-    message_type: media_type,
-    timestamp:    payloadToEmit.timestamp
-});
+        // Notify receiver's other socket instances (e.g. home screen) for badge update
+        io.to(`user_${receiver_id}`).emit('new_media_received', payloadToEmit);
 
-// ─── ADD THIS EMISSION SO YOUR OWN CHAT LIST UPDATES IMMEDIATELY WHEN YOU SEND MEDIA ───
-io.to(`chat_${sender_id}`).emit('new_media_received', {
-    sender_id:    parseInt(sender_id),
-    receiver_id:  parseInt(receiver_id),
-    message_type: media_type,
-    timestamp:    payloadToEmit.timestamp
-});
+        // Notify our own socket instances so our local chat list updates immediately to "You sent an image"
+        io.to(`chat_${sender_id}`).emit('new_media_received', payloadToEmit);
 
         try {
             const receiverIdStr = receiver_id.toString();
