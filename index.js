@@ -1956,7 +1956,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
         const [friendRows] = await db.query(friendsQuery, [currentUserId, currentUserId, currentUserId]);
         const friendIds = new Set(friendRows.map(row => row.friend_id));
 
-            const combinedQuery = `
+        const combinedQuery = `
             WITH RawMergedChats AS (
                 -- 1. Collect baseline text messages
                 SELECT
@@ -1982,20 +1982,20 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
 
                 UNION ALL
 
-                -- 2. Collect shared media objects within the exact same ledger boundaries
+                -- 2. Collect shared media entries (Optimized to stay persistent even after shared_media cleanup)
                 SELECT
                     'individual' AS chat_type,
-                    CASE WHEN sm.sender_id = ? THEN sm.receiver_id ELSE sm.sender_id END AS chat_id,
-                    sm.media_url AS last_message_content,
-                    sm.send_at AS last_timestamp,
-                    sm.sender_id AS last_sender_id,
-                    IF(sm.downloaded_at IS NOT NULL, 2, 1) AS last_message_status,
-                    sm.media_type AS last_message_type
-                FROM shared_media sm
+                    CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END AS chat_id,
+                    m.message AS last_message_content,
+                    m.timestamp AS last_timestamp,
+                    m.sender_id AS last_sender_id,
+                    m.status AS last_message_status,
+                    m.message_type AS last_message_type
+                FROM messages m
                 WHERE
-                    (sm.sender_id = ? OR sm.receiver_id = ?)
-                    AND sm.group_id IS NULL
-                    AND sm.expires_at > NOW()
+                    (m.sender_id = ? OR m.receiver_id = ?)
+                    AND m.message_type IN ('image', 'video')
+                    AND m.sender_id != m.receiver_id
 
                 UNION ALL
 
@@ -2047,7 +2047,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                     (SELECT COUNT(*) FROM shared_media sm_unread
                      WHERE lc.chat_type = 'individual'
                        AND sm_unread.receiver_id = ?
-                       AND sm_unread.sender_id = lc.chat_id
+                       AND sm_unread.sender_id = CAST(lc.chat_id AS SIGNED)
                        AND sm_unread.expires_at > NOW()
                        AND sm_unread.downloaded_at IS NULL)
                  ) AS individual_unread_count,
@@ -2072,15 +2072,13 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
             ORDER BY lc.last_timestamp DESC;
         `;
 
-
-        // ─── CRITICAL: REMAPPED CORRESPONDING QUERY BINDING PARAMETERS ARRAY ───
+        // ─── REMAPPED CORRESPONDING QUERY BINDING PARAMETERS ARRAY ───
         const params = [
-            currentUserId, currentUserId, currentUserId,   // CTE individual text: chat_id, sender_id, hidden join
-            currentUserId, currentUserId,                  // CTE individual text: WHERE sender_id/receiver_id
-            currentUserId,                                 // CTE individual text: chat_requests check
-            currentUserId, currentUserId, currentUserId,   // CTE individual media: chat_id splits, sender_id loop
-            currentUserId,                                 // CTE individual media: WHERE receiver_id check
-            currentUserId, currentUserId,                  // CTE group text/media message: gmem join + WHERE
+            currentUserId, currentUserId, currentUserId,   // CTE Section 1 text: chat_id, sender_id, hidden join
+            currentUserId, currentUserId,                  // CTE Section 1 text: WHERE sender_id/receiver_id
+            currentUserId,                                 // CTE Section 1 text: chat_requests check
+            currentUserId, currentUserId, currentUserId,   // CTE Section 2 media: chat_id splits, WHERE params
+            currentUserId, currentUserId,                  // CTE Section 3 group text/media message
             currentUserId,                                 // individual unread calculation: m_unread.receiver_id
             currentUserId,                                 // shared_media unread calculation: sm_unread.receiver_id
             currentUserId, currentUserId,                  // group unread counter properties configuration
@@ -2091,19 +2089,19 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
 
         const chatListItems = rows.map(row => {
             let lastMessage = "";
-            try { 
-                const { decrypt } = require('./cryptoHelper');
-                const rawDecrypted = row.last_message_content ? decrypt(row.last_message_content) : "";
-                const msgType = (row.last_message_type || '').toLowerCase();
-                if (msgType === 'image') {
-                    lastMessage = '📷 Photo';
-                } else if (msgType === 'video') {
-                    lastMessage = '🎥 Video';
-                } else {
-                    lastMessage = rawDecrypted;
+            const msgType = (row.last_message_type || '').toLowerCase();
+            
+            if (msgType === 'image') {
+                lastMessage = '📷 Photo';
+            } else if (msgType === 'video') {
+                lastMessage = '🎥 Video';
+            } else {
+                try { 
+                    const { decrypt } = require('./cryptoHelper');
+                    lastMessage = row.last_message_content ? decrypt(row.last_message_content) : "";
+                } catch (e) { 
+                    lastMessage = "[Encrypted Message]"; 
                 }
-            } catch (e) { 
-                lastMessage = "[Encrypted Message]"; 
             }
 
             const isGroup = row.chat_type === 'group';
@@ -2137,7 +2135,7 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                 profilePicUrl: profilePicUrl,
                 gender: row.gender,
                 lastSenderId: row.last_sender_id,
-                lastSenderName: isGroup? row.last_sender_name : null,
+                lastSenderName: isGroup ? row.last_sender_name : null,
                 lastMessageStatus: row.last_message_status,
                 user_id: isGroup ? null : row.user_handle 
             };
@@ -4170,7 +4168,6 @@ app.get('/chatRequests/count', async (req, res) => {
 
 app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_file"), async (req, res) => {
     const TAG = "/api/media/send";
-    let connection;
     try {
         const { receiver_id, media_type } = req.body;
         const sender_id = req.user.id;
@@ -4182,42 +4179,20 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         const mediaUrl = req.file.path;
         const cloudinaryPublicId = req.file.filename || req.file.public_id || "raw_id";
 
-        // Get a pool connection for a secure transaction split
-        connection = await db.getConnection();
-        await connection.beginTransaction();
-
-        // 1. TiDB execution saves the baseline entry inside shared_media table
+        // TiDB execution saves the baseline entry inside shared_media table
         const insertQuery = `
             INSERT INTO shared_media 
             (sender_id, receiver_id, media_type, media_url, cloudinary_public_id, send_at, expires_at) 
             VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 3 HOUR))
         `;
-        const [result] = await connection.execute(insertQuery, [
-            sender_id.toString(), // shared_media expects varchar(255) for sender_id
+
+        const [result] = await db.execute(insertQuery, [
+            sender_id.toString(), // varchar(255) match
             parseInt(receiver_id),
             media_type,
             mediaUrl,
             cloudinaryPublicId
         ]);
-
-        // 2. ─── FIXED CRASH & FLIP: RECORD PERMANENT TRAILING ENTRY IN ENUM BOUNDS ───
-        // We write to the permanent table using 'text' as the type, so it satisfies the ENUM constraint.
-        // We store the plain media URL or an encoded string inside 'message'.
-        const permanentMessageQuery = `
-            INSERT INTO messages 
-            (sender_id, receiver_id, message, timestamp, status, message_type) 
-            VALUES (?, ?, ?, UTC_TIMESTAMP(), 1, 'text')
-        `;
-        const { encrypt } = require('./cryptoHelper');
-        const encryptedMediaUrl = encrypt(mediaUrl);
-        await connection.execute(permanentMessageQuery, [
-            parseInt(sender_id), // messages table expects an integer
-            parseInt(receiver_id),
-            encryptedMediaUrl,
-        ]);
-
-        // Commit database updates safely now that all schema restrictions are satisfied
-        await connection.commit();
 
         // CALCULATE 3 HOURS FROM NOW IN ISO EXPLICITLY FOR MOBILE RE-SYNC TIMERS
         const expiryDate = new Date();
@@ -4228,26 +4203,20 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
             id: result.insertId,
             sender_id: parseInt(sender_id),
             receiver_id: parseInt(receiver_id),
-            message_type: media_type, // "image" or "video" -> Triggers immediate layout view changes on client app
-            message: mediaUrl,        // Injects image link straight as text parameter to satisfy msg.getMessage()
+            message_type: media_type, // "image" or "video"
+            message: mediaUrl,        
             media_url: mediaUrl,
             timestamp: new Date().toISOString(),
             expires_at: expiryDate.toISOString(),
-            status: 1, // Received status flag
+            status: 1, 
             group_id: 0
         };
 
-        // ─── OPTIMIZED FULL PAYLOAD EMISSIONS ───
-        // Pass the entire payloadToEmit object so ChatListActivity can read sender_id and message properties instantly
+        // Pass the entire payload object so ChatListActivity can read properties instantly
         io.to(`chat_${receiver_id}`).emit('new_media_received', payloadToEmit);
- 
-        // Notify receiver's other socket instances (e.g. home screen) for badge update
         io.to(`user_${receiver_id}`).emit('new_media_received', payloadToEmit);
-
-        // Notify our own socket instances so our local chat list updates immediately to "You sent an image"
         io.to(`chat_${sender_id}`).emit('new_media_received', payloadToEmit);
 
-        // Background FCM notification task layer
         try {
             const receiverIdStr = receiver_id.toString();
             const activeSession = activeChatSessions.get(receiverIdStr);
@@ -4259,7 +4228,7 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
 
                 if (rcvRows.length > 0 && rcvRows[0].fcm_token) {
                     const sndName = sndRows.length > 0 ? sndRows[0].name : "New Message";
-                    const sndPic  = sndRows.length > 0 ? sndRows[0].profile_pic : "";
+                    const rPic  = sndRows.length > 0 ? sndRows[0].profile_pic : "";
                     const notifBody = media_type === 'video' ? '🎥 Video' : '📷 Photo';
                     await admin.messaging().send({
                         token: rcvRows[0].fcm_token,
@@ -4268,7 +4237,7 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
                             type: "chat",
                             senderId: sender_id.toString(),
                             senderName: sndName,
-                            senderProfilePic: sndPic || "",
+                            senderProfilePic: rPic || "",
                             chatPartnerId: sender_id.toString(),
                             title: sndName,
                             body: notifBody,
@@ -4292,13 +4261,8 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         });
 
     } catch (err) {
-        if (connection) {
-            try { await connection.rollback(); } catch (txErr) {}
-        }
-        console.error(TAG, "Transaction processing exception error loop:", err);
+        console.error(TAG, "Transaction exception loop error:", err);
         res.status(500).json({ success: false, error: err.message });
-    } finally {
-        if (connection) connection.release();
     }
 });
 
