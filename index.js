@@ -4170,6 +4170,7 @@ app.get('/chatRequests/count', async (req, res) => {
 
 app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_file"), async (req, res) => {
     const TAG = "/api/media/send";
+    let connection;
     try {
         const { receiver_id, media_type } = req.body;
         const sender_id = req.user.id;
@@ -4181,14 +4182,17 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         const mediaUrl = req.file.path;
         const cloudinaryPublicId = req.file.filename || req.file.public_id || "raw_id";
 
-        // TiDB execution saves the baseline entry and calculates the explicit 3-hour expiry timestamp parameters
+        // Get a pool connection for a secure transaction split
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        // 1. TiDB execution saves the baseline ephemeral entry
         const insertQuery = `
             INSERT INTO shared_media 
             (sender_id, receiver_id, media_type, media_url, cloudinary_public_id, send_at, expires_at) 
             VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 3 HOUR))
         `;
-
-        const [result] = await db.execute(insertQuery, [
+        const [result] = await connection.execute(insertQuery, [
             parseInt(sender_id),
             parseInt(receiver_id),
             media_type,
@@ -4196,12 +4200,29 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
             cloudinaryPublicId
         ]);
 
+        // 2. ─── FIXED PREVIEW FLIP: INSERT A SHADOW ENTRY INTO PERMANENT MESSAGES TABLE ───
+        // This acts as a persistent placeholder so /getChatUsers won't fall back to older texts after ephemeral cleanup
+        const permanentMessageQuery = `
+            INSERT INTO messages 
+            (sender_id, receiver_id, message, timestamp, status, message_type) 
+            VALUES (?, ?, ?, UTC_TIMESTAMP(), 1, ?)
+        `;
+        const { encrypt } = require('./cryptoHelper');
+        const encryptedMediaUrl = encrypt(mediaUrl);
+        await connection.execute(permanentMessageQuery, [
+            parseInt(sender_id),
+            parseInt(receiver_id),
+            encryptedMediaUrl,
+            media_type
+        ]);
+
+        // Commit database updates safely
+        await connection.commit();
+
         // CALCULATE 3 HOURS FROM NOW IN ISO EXPLICITLY FOR MOBILE RE-SYNC TIMERS
         const expiryDate = new Date();
         expiryDate.setHours(expiryDate.getHours() + 3);
 
-        // WHATSAPP-LIKE LOGIC: Formats the Socket payload to match your Room entity layout schemas perfectly
-        
         // WHATSAPP-LIKE LOGIC: Formats the Socket payload to match your Room entity layout schemas perfectly
         const payloadToEmit = {
             id: result.insertId,
@@ -4226,6 +4247,7 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         // Notify our own socket instances so our local chat list updates immediately to "You sent an image"
         io.to(`chat_${sender_id}`).emit('new_media_received', payloadToEmit);
 
+        // Background FCM task loop
         try {
             const receiverIdStr = receiver_id.toString();
             const activeSession = activeChatSessions.get(receiverIdStr);
@@ -4270,8 +4292,13 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         });
 
     } catch (err) {
+        if (connection) {
+            try { await connection.rollback(); } catch (txErr) {}
+        }
         console.error(TAG, "Transaction processing exception error loop:", err);
         res.status(500).json({ success: false, error: err.message });
+    } finally {
+        if (connection) connection.release();
     }
 });
 
