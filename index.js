@@ -4567,7 +4567,7 @@ app.post("/api/media/delete", authenticateToken, async (req, res) => {
     const TAG = "/api/media/delete";
     try {
         const { messageId, actionType } = req.body;
-        const current_user_id = req.user.id; // Sender identity verification
+        const current_user_id = parseInt(req.user.id, 10); // Enforce reliable integer comparisons
 
         if (!messageId || !actionType) {
             return res.status(400).json({ success: false, message: "Missing required fields." });
@@ -4575,46 +4575,58 @@ app.post("/api/media/delete", authenticateToken, async (req, res) => {
 
         const msgId = parseInt(messageId, 10);
 
-        // Fetch message to verify ownership
+        // Fetch message details from the database
         const [msgRows] = await db.query("SELECT sender_id, receiver_id, message_type, message FROM messages WHERE id = ?", [msgId]);
         if (msgRows.length === 0) {
-            return res.status(404).json({ success: false, message: "Message tracking index reference not found." });
+            return res.status(404).json({ success: false, message: "Message reference not found." });
         }
 
         const message = msgRows[0];
-        if (parseInt(message.sender_id) !== current_user_id) {
-            return res.status(403).json({ success: false, message: "Unauthorized action. You can only manage your own sent media." });
-        }
+        const msgSenderId = parseInt(message.sender_id, 10);
+        const msgReceiverId = parseInt(message.receiver_id, 10);
 
+        // ================= ACTION: DELETE FOR EVERYONE =================
         if (actionType === "everyone") {
-            // 1. DELETE FOR EVERYONE: Purge Cloudinary storage and wipe completely from DB tables
+            // Security Check: Only the original sender can delete a message for everyone
+            if (msgSenderId !== current_user_id) {
+                return res.status(403).json({ success: false, message: "Unauthorized action. You can only delete your own sent media for everyone." });
+            }
+
+            // Fetch asset parameters from shared_media to shred from cloud storage
             const [mediaRows] = await db.query("SELECT cloudinary_public_id, media_type FROM shared_media WHERE id = ?", [msgId]);
             
             if (mediaRows.length > 0) {
                 const asset = mediaRows[0];
                 const resourceType = asset.media_type === 'video' ? 'video' : 'image';
                 
-                // Shred file chunks directly from Cloudinary storage clusters
+                // Shred physical file binaries out of Cloudinary buckets entirely
                 await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType })
                     .catch(err => console.error(`[Cloudinary Shred Failure] ${asset.cloudinary_public_id}:`, err.message));
             }
 
-            // Wipe history rows from active schema boundaries
+            // Atomic drop sweep across all primary context tables
             await db.query("DELETE FROM messages WHERE id = ?", [msgId]);
             await db.query("DELETE FROM shared_media WHERE id = ?", [msgId]);
             await db.query("DELETE FROM hidden_messages WHERE message_id = ?", [msgId]);
 
-            // Broadcast real-time socket events to remove media from layout boxes immediately
-            io.to(`chat_${message.receiver_id}`).emit('message_deleted', { messageId: msgId });
-            io.to(`chat_${message.sender_id}`).emit('message_deleted', { messageId: msgId });
+            // Broadcast socket notifications immediately to shred display cells on active screens
+            io.to(`chat_${msgReceiverId}`).emit('message_deleted', { messageId: msgId });
+            io.to(`chat_${msgSenderId}`).emit('message_deleted', { messageId: msgId });
 
             return res.json({ success: true, message: "Media purged globally from cloud structural nodes." });
+        } 
 
-        } else if (actionType === "me") {
-            // 2. DELETE FOR ME: Hide from sender screen layout but keep in server cloud clusters for the receiver
+        // ================= ACTION: DELETE FOR ME =================
+        else if (actionType === "me") {
+            // Security Check: Ensure the applicant is a valid conversational participant
+            if (current_user_id !== msgSenderId && current_user_id !== msgReceiverId) {
+                return res.status(403).json({ success: false, message: "Unauthorized conversation modification." });
+            }
+
+            // Insert tracking placeholder to hide this layout context for the specific caller
             await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, [msgId, current_user_id]);
             
-            // Check if both users have hidden it. If yes, run housekeeper cascade cleanup automatically
+            // Garbage Collection Cascade: If both participants have hidden it, drop the file completely
             const [fullyHidden] = await db.query(`SELECT message_id FROM hidden_messages WHERE message_id = ? GROUP BY message_id HAVING COUNT(DISTINCT user_id) >= 2`, [msgId]);
             if (fullyHidden.length > 0) {
                 const [mediaRows] = await db.query("SELECT cloudinary_public_id, media_type FROM shared_media WHERE id = ?", [msgId]);
@@ -4628,7 +4640,7 @@ app.post("/api/media/delete", authenticateToken, async (req, res) => {
                 await db.query(`DELETE FROM shared_media WHERE id = ?`, [msgId]);
             }
 
-            return res.json({ success: true, message: "Media hidden successfully for sender." });
+            return res.json({ success: true, message: "Media hidden successfully for this user." });
         }
 
         res.status(400).json({ success: false, message: "Invalid delete configuration operation." });
