@@ -2042,7 +2042,8 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
                      WHERE lc.chat_type = 'individual'
                        AND m_unread.receiver_id = ?
                        AND m_unread.sender_id = lc.chat_id
-                       AND m_unread.status < 2)
+                       AND m_unread.status < 2
+                       AND m_unread.message_type NOT IN ('image', 'video'))
                     +
                     (SELECT COUNT(*) FROM shared_media sm_unread
                      WHERE lc.chat_type = 'individual'
@@ -3068,7 +3069,6 @@ app.get('/getUnreadCount', async (req, res) => {
   }
 });
 
-
 app.get('/getTotalUnreadCount', async (req, res) => {
     const TAG = "/getTotalUnreadCount"; 
     const { userId } = req.query;
@@ -3078,7 +3078,7 @@ app.get('/getTotalUnreadCount', async (req, res) => {
         // ─── OPTIMIZED: COUNTS TEXT MESSAGES AND LIVE SHARED MEDIA ASSETS SIMULTANEOUSLY ───
         const individualQuery = `
             SELECT 
-                (SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND status < 2) +
+                (SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND status < 2 AND message_type NOT IN ('image', 'video')) +
                 (SELECT COUNT(*) FROM shared_media WHERE receiver_id = ? AND expires_at > NOW() AND downloaded_at IS NULL) 
             as totalUnreadCount`;
         
