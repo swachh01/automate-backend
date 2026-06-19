@@ -4179,28 +4179,34 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
         const mediaUrl = req.file.path;
         const cloudinaryPublicId = req.file.filename || req.file.public_id || "raw_id";
 
-        // TiDB execution saves the baseline entry inside shared_media table
+        // 1. Insert into core messages table first to get a permanent message history ID
+        const [msgResult] = await db.execute(
+            `INSERT INTO messages (sender_id, receiver_id, message, timestamp, status, message_type) 
+             VALUES (?, ?, ?, NOW(), 1, ?)`,
+            [sender_id.toString(), parseInt(receiver_id), mediaUrl, media_type]
+        );
+        const permanentMessageId = msgResult.insertId;
+
+        // 2. TiDB execution saves the baseline entry inside shared_media table using the same shared ID
         const insertQuery = `
             INSERT INTO shared_media 
-            (sender_id, receiver_id, media_type, media_url, cloudinary_public_id, send_at, expires_at) 
-            VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 3 HOUR))
+            (id, sender_id, receiver_id, media_type, media_url, cloudinary_public_id, send_at, expires_at) 
+            VALUES (?, ?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 3 HOUR))
         `;
-
-        const [result] = await db.execute(insertQuery, [
-            sender_id.toString(), // varchar(255) match
+        await db.execute(insertQuery, [
+            permanentMessageId,
+            sender_id.toString(),
             parseInt(receiver_id),
             media_type,
             mediaUrl,
             cloudinaryPublicId
         ]);
 
-        // CALCULATE 3 HOURS FROM NOW IN ISO EXPLICITLY FOR MOBILE RE-SYNC TIMERS
         const expiryDate = new Date();
         expiryDate.setHours(expiryDate.getHours() + 3);
 
-        // WHATSAPP-LIKE LOGIC: Formats the Socket payload to match your Room entity layout schemas perfectly
         const payloadToEmit = {
-            id: result.insertId,
+            id: permanentMessageId,
             sender_id: parseInt(sender_id),
             receiver_id: parseInt(receiver_id),
             message_type: media_type, // "image" or "video"
@@ -4212,7 +4218,7 @@ app.post("/api/media/send", authenticateToken, uploadSharedMedia.single("media_f
             group_id: 0
         };
 
-        // Pass the entire payload object so ChatListActivity can read properties instantly
+        // Broadcast out to listeners
         io.to(`chat_${receiver_id}`).emit('new_media_received', payloadToEmit);
         io.to(`user_${receiver_id}`).emit('new_media_received', payloadToEmit);
         io.to(`chat_${sender_id}`).emit('new_media_received', payloadToEmit);
