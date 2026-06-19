@@ -4650,6 +4650,78 @@ app.post("/api/media/delete", authenticateToken, async (req, res) => {
     }
 });
 
+// ================= DELETE MEDIA FOR SENDER/RECEIVER (GROUP CHAT) =================
+app.post("/api/group-media/delete", authenticateToken, async (req, res) => {
+    const TAG = "/api/group-media/delete";
+    try {
+        const { messageId, actionType } = req.body;
+        const current_user_id = parseInt(req.user.id, 10);
+
+        if (!messageId || !actionType) {
+            return res.status(400).json({ success: false, message: "Missing fields." });
+        }
+
+        const msgId = parseInt(messageId, 10);
+
+        // Verify the message block layout exists inside table rows
+        const [msgRows] = await db.query("SELECT sender_id, group_id, message_type, message FROM messages WHERE id = ?", [msgId]);
+        if (msgRows.length === 0) {
+            return res.status(404).json({ success: false, message: "Group message tracking reference not found." });
+        }
+
+        const message = msgRows[0];
+        const msgSenderId = parseInt(message.sender_id, 10);
+        const targetGroupId = parseInt(message.group_id, 10);
+
+        // ─── ACTION: DELETE FOR EVERYONE ───
+        if (actionType === "everyone") {
+            if (msgSenderId !== current_user_id) {
+                return res.status(403).json({ success: false, message: "Unauthorized. Only the original sender can delete for everyone." });
+            }
+
+            // Fetch file properties out of shared_media table boundaries
+            const [mediaRows] = await db.query("SELECT cloudinary_public_id, media_type FROM shared_media WHERE id = ?", [msgId]);
+            if (mediaRows.length > 0) {
+                const asset = mediaRows[0];
+                const resourceType = asset.media_type === 'video' ? 'video' : 'image';
+                
+                // Shred file binaries globally out of Cloudinary buckets
+                await cloudinary.uploader.destroy(asset.cloudinary_public_id, { resource_type: resourceType })
+                    .catch(err => console.error(`[Group Cloudinary Shred Error] ${asset.cloudinary_public_id}:`, err.message));
+            }
+
+            // Wipe database references entirely
+            await db.query("DELETE FROM messages WHERE id = ?", [msgId]);
+            await db.query("DELETE FROM shared_media WHERE id = ?", [msgId]);
+            await db.query("DELETE FROM hidden_messages WHERE message_id = ?", [msgId]);
+
+            // Broadcast real-time Socket event to all room participants immediately
+            io.to(`group_${targetGroupId}`).emit('message_deleted', { messageId: msgId });
+
+            return res.json({ success: true, message: "Group media purged globally from cloud storage structural nodes." });
+        } 
+
+        // ─── ACTION: DELETE FOR ME ───
+        else if (actionType === "me") {
+            // Verify caller is a verified member of this target group conversation
+            const [membership] = await db.query("SELECT id FROM group_members WHERE group_id = ? AND user_id = ? AND status = 'active'", [targetGroupId, current_user_id]);
+            if (membership.length === 0) {
+                return res.status(403).json({ success: false, message: "Unauthorized group operation." });
+            }
+
+            // Add an exclusion filter mapping row into hidden_messages table
+            await db.query(`INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, [msgId, current_user_id]);
+
+            return res.json({ success: true, message: "Media hidden successfully for user." });
+        }
+
+        res.status(400).json({ success: false, message: "Invalid delete configuration operation." });
+    } catch (error) {
+        console.error(TAG, error);
+        res.status(500).json({ success: false, message: "Server transaction execution failure." });
+    }
+});
+
 app.use(router);
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
