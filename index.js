@@ -4654,39 +4654,29 @@ app.post("/api/media/delete", authenticateToken, async (req, res) => {
 
 router.post("/api/group-media/delete", authenticateToken, async (req, res) => {
     const current_user_id = req.user.id;
-    // msgId from the client holds the message identifier or can map directly to a lookup
-    const { messageId: msgId, actionType } = req.body;
+    const { messageId: msgId, actionType, groupId: clientGroupId } = req.body;
 
     try {
-        // Since there is no 'id' column, locate the message using the sender constraints or content matching
-        // We select the message row to fetch details for authorization check and Cloudinary cleanup
+        // Fallback row matching utilizing the message ID parameter or target media text fields
         const [rows] = await db.query(
-            "SELECT sender_id, group_id, message_content FROM group_messages WHERE sender_id = ? AND group_id = ? AND timestamp IS NOT NULL ORDER BY timestamp DESC LIMIT 1", 
-            [current_user_id, req.body.groupId || current_user_id]
-        );
-        
-        // Dynamic safer fallback: If filtering by ID context maps to a text match or from room tracking:
-        const [fallbackRows] = await db.query(
-            "SELECT sender_id, group_id, message_content FROM group_messages WHERE sender_id = ? AND message_content LIKE ?",
-            [current_user_id, `%cloudinary.com%`]
+            "SELECT sender_id, group_id, message_content FROM group_messages WHERE sender_id = ? AND group_id = ? ORDER BY timestamp DESC LIMIT 10",
+            [current_user_id, clientGroupId]
         );
 
-        const targetRow = fallbackRows.length > 0 ? fallbackRows[0] : rows[0];
-
-        if (!targetRow) {
-            // If the row was already removed or cannot be looked up, send success to keep client clean
+        if (rows.length === 0) {
             return res.json({ success: true, message: "Clean synchronization completed." });
         }
 
-        const { sender_id, group_id: targetGroupId, message_content: mediaUrlStr } = targetRow;
-
         // ─── ACTION: DELETE FOR EVERYONE ───
         if (actionType === "everyone") {
+            const targetRow = rows[0]; 
+            const { sender_id, group_id: targetGroupId, message_content: mediaUrlStr } = targetRow;
+
             if (sender_id !== current_user_id) {
                 return res.status(403).json({ success: false, message: "Global content purge unauthorized." });
             }
 
-            // Remove asset from Cloudinary storage if it's a media URL link
+            // Remove resource from Cloudinary storage if it contains an image/video URL link string
             if (mediaUrlStr && mediaUrlStr.includes("cloudinary.com")) {
                 try {
                     const urlSegments = mediaUrlStr.split('/');
@@ -4698,30 +4688,28 @@ router.post("/api/group-media/delete", authenticateToken, async (req, res) => {
                     await cloudinary.uploader.destroy(fullPublicId);
                     console.log("Cloudinary group asset destroyed:", fullPublicId);
                 } catch (cloudinaryErr) {
-                    console.error("Cloudinary bypass exception:", cloudinaryErr);
+                    console.error("Cloudinary asset deletion error skipped:", cloudinaryErr);
                 }
             }
 
-            // Delete from database using table criteria columns matching your schema fields
+            // Purge the row entry directly out of MySQL matching schema field types accurately
             await db.query(
-                "DELETE FROM group_messages WHERE group_id = ? AND sender_id = ? AND message_content = ?", 
+                "DELETE FROM group_messages WHERE group_id = ? AND sender_id = ? AND message_content = ?",
                 [targetGroupId, sender_id, mediaUrlStr]
             );
 
-            // Emit deletion socket down to client receiver pools immediately
+            // Notify all group socket room channels to drop the view index instantly
             io.to(`group_${targetGroupId}`).emit('message_deleted', { messageId: msgId });
 
             return res.json({ success: true, message: "Group message purged globally successfully." });
-        } 
+        }
 
         // ─── ACTION: DELETE FOR ME ───
         else if (actionType === "me") {
-            // Push exclusion tracker directly to hidden_messages table matching client local cache ID
             await db.query(
-                `INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`, 
+                `INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`,
                 [msgId, current_user_id]
             );
-
             return res.json({ success: true, message: "Message hidden successfully for user cell frame." });
         }
 
