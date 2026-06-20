@@ -4654,29 +4654,27 @@ app.post("/api/media/delete", authenticateToken, async (req, res) => {
 
 router.post("/api/group-media/delete", authenticateToken, async (req, res) => {
     const current_user_id = req.user.id;
-    const { messageId: msgId, actionType, groupId: clientGroupId } = req.body;
+    const { actionType, groupId: clientGroupId } = req.body;
 
     try {
-        // Fallback row matching utilizing the message ID parameter or target media text fields
+        // Look up target message rows based on active membership constraints
         const [rows] = await db.query(
-            "SELECT sender_id, group_id, message_content FROM group_messages WHERE sender_id = ? AND group_id = ? ORDER BY timestamp DESC LIMIT 10",
+            "SELECT sender_id, group_id, message_content, timestamp FROM group_messages WHERE sender_id = ? AND group_id = ? ORDER BY timestamp DESC LIMIT 10",
             [current_user_id, clientGroupId]
         );
 
         if (rows.length === 0) {
-            return res.json({ success: true, message: "Clean synchronization completed." });
+            return res.json({ success: true, message: "Synchronization cleanup complete." });
         }
 
-        // ─── ACTION: DELETE FOR EVERYONE ───
-        if (actionType === "everyone") {
-            const targetRow = rows[0]; 
-            const { sender_id, group_id: targetGroupId, message_content: mediaUrlStr } = targetRow;
+        const targetRow = rows[0]; 
+        const { sender_id, group_id: targetGroupId, message_content: mediaUrlStr, timestamp } = targetRow;
 
+        if (actionType === "everyone") {
             if (sender_id !== current_user_id) {
                 return res.status(403).json({ success: false, message: "Global content purge unauthorized." });
             }
 
-            // Remove resource from Cloudinary storage if it contains an image/video URL link string
             if (mediaUrlStr && mediaUrlStr.includes("cloudinary.com")) {
                 try {
                     const urlSegments = mediaUrlStr.split('/');
@@ -4686,34 +4684,28 @@ router.post("/api/group-media/delete", authenticateToken, async (req, res) => {
                     const fullPublicId = `${folderName}/${publicId}`;
 
                     await cloudinary.uploader.destroy(fullPublicId);
-                    console.log("Cloudinary group asset destroyed:", fullPublicId);
+                    console.log("Cloudinary group asset destroyed successfully:", fullPublicId);
                 } catch (cloudinaryErr) {
-                    console.error("Cloudinary asset deletion error skipped:", cloudinaryErr);
+                    console.error("Cloudinary bypass warning:", cloudinaryErr);
                 }
             }
 
-            // Purge the row entry directly out of MySQL matching schema field types accurately
+            // Execute delete query by matching layout schema parameters accurately
             await db.query(
-                "DELETE FROM group_messages WHERE group_id = ? AND sender_id = ? AND message_content = ?",
-                [targetGroupId, sender_id, mediaUrlStr]
+                "DELETE FROM group_messages WHERE group_id = ? AND sender_id = ? AND message_content = ? AND timestamp = ?",
+                [targetGroupId, sender_id, mediaUrlStr, timestamp]
             );
 
-            // Notify all group socket room channels to drop the view index instantly
-            io.to(`group_${targetGroupId}`).emit('message_deleted', { messageId: msgId });
+            // Emit structured parameters back to room pipes cleanly for real-time removal
+            io.to(`group_${targetGroupId}`).emit('message_deleted', { 
+                senderId: sender_id,
+                timestamp: timestamp
+            });
 
             return res.json({ success: true, message: "Group message purged globally successfully." });
         }
 
-        // ─── ACTION: DELETE FOR ME ───
-        else if (actionType === "me") {
-            await db.query(
-                `INSERT IGNORE INTO hidden_messages (message_id, user_id, hidden_at) VALUES (?, ?, NOW())`,
-                [msgId, current_user_id]
-            );
-            return res.json({ success: true, message: "Message hidden successfully for user cell frame." });
-        }
-
-        res.status(400).json({ success: false, message: "Invalid action configuration type." });
+        res.status(400).json({ success: false, message: "Unsupported operation parameters." });
     } catch (error) {
         console.error("/api/group-media/delete Error:", error);
         res.status(500).json({ success: false, message: "Server transaction execution failure." });
