@@ -2150,11 +2150,15 @@ app.get('/getChatUsers', authenticateToken, async (req, res) => {
     }
 });
 
-app.post("/deleteMessageForMe", async (req, res) => {
+
+// AFTER:
+app.post("/deleteMessageForMe", authenticateToken, async (req, res) => {
   try {
-    const { messageId, userId } = req.body;
+    const { messageId } = req.body;
+    const userId = req.user.id; // SECURE FIX
+
     if (!messageId || !userId) {
-      return res.status(400).json({ success: false, message: `messageId and userId are required` });
+      return res.status(400).json({ success: false, message: `messageId is required` });
     }
     const [messages] = await db.query(`SELECT sender_id, receiver_id FROM messages WHERE id = ?`, [messageId]);
     if (messages.length === 0) {
@@ -2173,11 +2177,15 @@ app.post("/deleteMessageForMe", async (req, res) => {
 });
 
 // ================= BLOCK USER =================
-app.post('/block', async (req, res) => {
+
+// AFTER:
+app.post('/block', authenticateToken, async (req, res) => {
   try {
-    const { blocker_id, blocked_id } = req.body;
+    const { blocked_id } = req.body;
+    const blocker_id = req.user.id; // SECURE FIX: Bind to token identity
+
     if (!blocker_id || !blocked_id) {
-      return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
+      return res.status(400).json({ success: false, message: 'Blocked ID is required.' });
     }
 
     await db.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)', [blocker_id, blocked_id]);
@@ -2194,12 +2202,13 @@ app.post('/block', async (req, res) => {
   }
 });
 
-// ================= UNBLOCK USER =================
-app.post('/unblock', async (req, res) => {
+app.post('/unblock', authenticateToken, async (req, res) => {
   try {
-    const { blocker_id, blocked_id } = req.body;
+    const { blocked_id } = req.body;
+    const blocker_id = req.user.id; // SECURE FIX: Bind to token identity
+
     if (!blocker_id || !blocked_id) {
-      return res.status(400).json({ success: false, message: 'Blocker and blocked IDs are required.' });
+      return res.status(400).json({ success: false, message: 'Blocked ID is required.' });
     }
 
     await db.query('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?', [blocker_id, blocked_id]);
@@ -3175,16 +3184,23 @@ app.post("/cleanupDeletedMessages", async (req, res) => {
     }
 });
 
-app.delete('/deleteMessage/:messageId', async (req, res) => {
+// BEFORE: app.delete('/deleteMessage/:messageId', async (req, res) => { ...
+// AFTER:
+app.delete('/deleteMessage/:messageId', authenticateToken, async (req, res) => {
   const TAG = "DELETE /deleteMessage";
   try {
     const { messageId } = req.params;
-    const { userId } = req.body;
+    // SECURE FIX: Enforce identity from JWT instead of body
+    const userId = req.user.id; 
+    
     if (!userId) return res.status(400).json({ success: false });
+    
     const [messages] = await db.execute('SELECT * FROM messages WHERE id = ?', [messageId]);
     if (messages.length === 0) return res.status(404).json({ success: false });
+    
     const msg = messages[0];
     if (msg.sender_id != userId) return res.status(403).json({ success: false });
+    
     const [result] = await db.execute('DELETE FROM messages WHERE id = ?', [messageId]);
     if (result.affectedRows > 0) {
       io.to(`chat_${msg.receiver_id}`).emit('message_deleted', { messageId: parseInt(messageId) });
@@ -3231,8 +3247,10 @@ app.get('/favorites/:userId', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/favorites', async (req, res) => {
-    const { userId, routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
+app.post('/favorites', authenticateToken, async (req, res) => {
+    const { routeName, fromPlace, toPlace, fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng } = req.body;
+    const userId = req.user.id; // SECURE FIX
+    
     if (!userId || !routeName || !fromPlace || !toPlace || fromPlaceLat === undefined) return res.status(400).json({ success: false });
     try {
         const query = `INSERT INTO favorites (user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -3294,8 +3312,14 @@ app.get("/user/:userId", async (req, res) => {
     }
 });
 
-app.delete('/favorites/:userId/:favoriteId', async (req, res) => {
+app.delete('/favorites/:userId/:favoriteId', authenticateToken, async (req, res) => {
     const { userId, favoriteId } = req.params;
+    
+    // SECURE FIX: Prevent modifying another user's choices
+    if (parseInt(userId) !== req.user.id) {
+        return res.status(403).json({ success: false, message: "Unauthorized action." });
+    }
+    
     try {
         const [result] = await db.query(`DELETE FROM favorites WHERE id = ? AND user_id = ?`, [favoriteId, userId]);
         res.json({ success: result.affectedRows > 0 });
@@ -3429,8 +3453,11 @@ app.get('/group-members/:groupId', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/leaveGroup', async (req, res) => {
-    const { userId, groupId } = req.body;
+// AFTER:
+app.post('/leaveGroup', authenticateToken, async (req, res) => {
+    const { groupId } = req.body;
+    const userId = req.user.id; // SECURE FIX
+    
     try {
         const [userRows] = await db.query(
             "SELECT CONCAT(first_name, ' ', last_name) as name FROM users WHERE id = ?", 
@@ -3887,9 +3914,26 @@ app.get('/group/:groupId/members', async (req, res) => {
     }
 });
 
-app.post('/group/read', async (req, res) => {
-    const { user_id, group_id } = req.body;
+// AFTER:
+app.post('/group/read', authenticateToken, async (req, res) => {
+    const { group_id } = req.body;
+    const user_id = req.user.id; // SECURE FIX: Bind strictly to verified token identity
+
+    if (!group_id) {
+        return res.status(400).json({ success: false, message: "Group ID is required" });
+    }
+
     try {
+        // Optional Security Check: Verify the user is actually a member of this group before updating status
+        const [membershipCheck] = await db.execute(
+            'SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?',
+            [group_id, user_id]
+        );
+
+        if (membershipCheck.length === 0) {
+            return res.status(403).json({ success: false, message: "Unauthorized: You are not a member of this group." });
+        }
+
         const query = `INSERT INTO group_message_read_status (message_id, user_id, group_id) 
                        SELECT gm.message_id, ?, gm.group_id 
                        FROM group_messages gm 
@@ -3898,13 +3942,14 @@ app.post('/group/read', async (req, res) => {
                            SELECT 1 FROM group_message_read_status gmrs 
                            WHERE gmrs.message_id = gm.message_id AND gmrs.user_id = ?
                        )`;
+                       
         const [result] = await db.execute(query, [user_id, group_id, user_id]);
         res.json({ success: true, newReadCount: result.affectedRows });
     } catch (error) {
+        console.error("Error in group/read:", error);
         res.status(500).json({ success: false });
     }
 });
-
 
 app.post('/group/stop-location', async (req, res) => {
     const TAG = "/group/stop-location";
