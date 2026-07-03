@@ -40,9 +40,30 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 
+const allowedOrigins = [
+  "https://reloaded-473118.web.app", // Your verified web app URL
+  "http://localhost:3000",           // For local development
+  "http://10.0.2.2:3000"             // For Android emulator testing
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error("Blocked by secure CORS architecture"));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  credentials: true
+};
+
+app.use(cors(corsOptions));
+
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -51,14 +72,7 @@ const io = new Server(server, {
   pingTimeout: 60000,
   pingInterval: 25000
 });
-const router = express.Router();
 
-const saltRounds = 12;
-
-app.use(cors({
-  origin: '*',
-  credentials: true
-}));
 app.use(express.json({ limit: "200mb" }));
 app.use(express.urlencoded({ limit: "200mb",extended: true }));
 
@@ -508,9 +522,11 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+// AFTER REFACTORING:
 app.get("/debug/stores", (req, res) => {
+  // SECURE FIX: Strict production enforcement environment verification check
   if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({ message: "Not available in production" });
+    return res.status(403).json({ success: false, message: "Not available in production" });
   }
   res.json({
     otpStore: "OTP is now stored in the database ('otp' table).",
@@ -519,6 +535,11 @@ app.get("/debug/stores", (req, res) => {
 });
 
 app.get('/debug/routes', (req, res) => {
+  // SECURE FIX: Completely block route structural mapping enumeration in production
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ success: false, message: "Not available in production" });
+  }
+
   const routes = [];
   app._router.stack.forEach((middleware) => {
     if (middleware.route) {
@@ -534,15 +555,14 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-
-router.get('/api/google-places-autocomplete', async (req, res) => {
+app.get('/api/google-places-autocomplete', async (req, res) => {
     const { input } = req.query;
-    const apiKey = process.env.GOOGLE_MAPS_API_KEY; // Ensure this is in your Cloud Run variables[cite: 2]
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY; // Ensure this is in your Cloud Run variables
     
     if (!input) return res.json({ predictions: [] });
 
     try {
-        // We filter by 'school' and 'university' types to keep results relevant to Reloaded Automate
+        // Filter by 'school' and 'university' types to keep results relevant to Reloaded Automate
         const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&types=school|university&key=${apiKey}`;
         const response = await axios.get(url);
         res.json(response.data);
@@ -551,7 +571,6 @@ router.get('/api/google-places-autocomplete', async (req, res) => {
         res.status(500).json({ success: false });
     }
 });
-
 
 // ================= CREATE ACCOUNT =================
 
@@ -1389,6 +1408,7 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
     }
 });
 
+// AFTER REFACTORING:
 app.get("/travel-plans/destinations-by-type", async (req, res) => {
     const { userId, commuteType, rideCategory } = req.query;
 
@@ -1396,6 +1416,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     let destinationCol;
     let statusFilter = "status = 'Trip Active'";
     let timeColumn = 'time';
+    const queryParams = [userId]; // Initialize with the global trailing layout filter parameter
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
@@ -1406,7 +1427,8 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         } else if (rideCategory === 'Planned') {
             statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW'";
+            // FIXED: Rectified the syntax typo from NOW' to NOW()
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
@@ -1419,8 +1441,10 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         timeColumn = 'time';
         statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
 
+        // SECURE FIX: Replace db.escape interpolation with standard parameterization binding
         if (rideCategory) {
-            statusFilter += ` AND tp.ride_category = ${db.escape(rideCategory)}`;
+            statusFilter += ` AND tp.ride_category = ?`;
+            queryParams.push(rideCategory);
         }
     }
 
@@ -1428,18 +1452,17 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
 
-        // Enabled vehicle_number lookup for 'Own' along with 'Rickshaw' and 'Cab'
         if (commuteType === 'Rickshaw' || commuteType === 'Cab' || commuteType === 'Own') {
             vehicleSelector = "tp.vehicle_number";
         }
         
-        // Maps instant_fare calculation blocks for hired rides, falls back to estimated_fare for personal vehicles
         if (commuteType === 'Rickshaw' || commuteType === 'Cab') {
             fareSelector = "tp.instant_fare";
         } else if (commuteType === 'Own') {
             fareSelector = "tp.estimated_fare";
         }
 
+        // Maintain the global trailing layout filter array parameter constraint rules
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
@@ -1454,7 +1477,11 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
             GROUP BY tp.${destinationCol}, g.group_id
             ORDER BY userCount DESC
         `;
-        const [destinations] = await db.query(query, [userId]);
+        
+        // Push the target validation mapping context check parameter to the first position
+        queryParams.unshift(userId);
+
+        const [destinations] = await db.query(query, queryParams);
         
         const formattedDestinations = destinations.map(d => ({
             groupId: d.group_id, 
@@ -2248,20 +2275,21 @@ app.get('/checkBlockStatus', async (req, res) => {
   }
 });
 
+// AFTER REFACTORING:
 app.post('/updateNotificationSettings', async (req, res) => {
     const { userId, type, enabled } = req.body;
     if (!userId || !type) {
         return res.status(400).json({ success: false, message: 'Missing fields' });
     }
     try {
-        let column = "";
-        if (type === "trip_alerts") column = "trip_alerts_enabled";
-        if (column) {
-            await db.query(`UPDATE users SET ${column} = ? WHERE id = ?`, [enabled, userId]);
-            res.json({ success: true, message: 'Settings updated' });
-        } else {
-            res.json({ success: true, message: 'No valid setting type found' });
-        }
+        // SECURE FIX: Avoid column string interpolation inside query execution entirely
+        if (type === "trip_alerts") {
+            await db.query(`UPDATE users SET trip_alerts_enabled = ? WHERE id = ?`, [enabled, userId]);
+            return res.json({ success: true, message: 'Settings updated' });
+        } 
+        
+        // Catch-all structural verification step for non-supported or missing criteria
+        res.json({ success: true, message: 'No valid setting type found' });
     } catch (error) {
         console.error('Error updating settings:', error);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -4697,7 +4725,7 @@ app.post("/api/media/delete", authenticateToken, async (req, res) => {
 
 // ================= DELETE MEDIA FOR SENDER/RECEIVER (GROUP CHAT) =================
 
-router.post("/api/group-media/delete", authenticateToken, async (req, res) => {
+app.post("/api/group-media/delete", authenticateToken, async (req, res) => {
     const current_user_id = req.user.id;
     const { actionType, groupId: clientGroupId } = req.body;
 
@@ -4757,7 +4785,6 @@ router.post("/api/group-media/delete", authenticateToken, async (req, res) => {
     }
 });
 
-app.use(router);
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
