@@ -48,7 +48,12 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
+    // SECURE & FLEXIBLE FIX: Allow mobile apps (no origin) OR browser origins on the whitelist
+    // Also checks for literal string variations of empty origins sent by some mobile drivers
+    if (!origin || origin === "null" || origin === "localhost") {
+      return callback(null, true);
+    }
+    
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -56,7 +61,8 @@ const corsOptions = {
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: true
+  credentials: true,
+  optionsSuccessStatus: 200
 };
 
 app.use(cors(corsOptions));
