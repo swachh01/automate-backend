@@ -1423,7 +1423,9 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     let destinationCol;
     let statusFilter = "status = 'Trip Active'";
     let timeColumn = 'time';
-    const queryParams = [userId]; // Initialize with the global trailing layout filter parameter
+    
+    // 1. Leave this empty initially to prevent array-ordering pollution
+    const queryParams = []; 
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
@@ -1434,7 +1436,6 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         } else if (rideCategory === 'Planned') {
             statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
         } else {
-            // FIXED: Rectified the syntax typo from NOW' to NOW()
             statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
         }
     } else if (commuteType === 'Own') {
@@ -1448,10 +1449,8 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
         timeColumn = 'time';
         statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
 
-        // SECURE FIX: Replace db.escape interpolation with standard parameterization binding
         if (rideCategory) {
             statusFilter += ` AND tp.ride_category = ?`;
-            queryParams.push(rideCategory);
         }
     }
 
@@ -1469,7 +1468,14 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
             fareSelector = "tp.estimated_fare";
         }
 
-        // Maintain the global trailing layout filter array parameter constraint rules
+        // 2. Add the first placeholder parameter for the SELECT clause (isCurrentUserGoing)
+        queryParams.push(userId);
+
+        // 3. Add the second placeholder parameter only if it's required by the WHERE clause
+        if (commuteType !== 'Cab' && commuteType !== 'Own' && rideCategory) {
+            queryParams.push(rideCategory);
+        }
+
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
@@ -1484,9 +1490,6 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
             GROUP BY tp.${destinationCol}, g.group_id
             ORDER BY userCount DESC
         `;
-        
-        // Push the target validation mapping context check parameter to the first position
-        queryParams.unshift(userId);
 
         const [destinations] = await db.query(query, queryParams);
         
