@@ -3,6 +3,7 @@ const activeChatSessions = new Map();
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const bcrypt = require('bcryptjs'); 
+const saltRounds = 10;
 const admin = require("firebase-admin");
 const axios = require('axios');
 const { parsePhoneNumberFromString } = require('libphonenumber-js');
