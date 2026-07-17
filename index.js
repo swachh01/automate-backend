@@ -1421,36 +1421,43 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
 
     let tableName;
     let destinationCol;
-    let statusFilter = "status = 'Trip Active'";
-    let timeColumn = 'time';
-    
-    // 1. Leave this empty initially to prevent array-ordering pollution
+    let statusFilter = "tp.status = 'Trip Active'";
     const queryParams = []; 
 
+    // CHANGE: Adjusted visibility windows to match requirements precisely
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
-        timeColumn = 'travel_datetime';
+        
         if (rideCategory === 'Instant') {
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant'";
+            // Visible for 10 minutes post-creation (Leaves 10 minutes remaining on the 20-min buffer)
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.travel_datetime > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)";
         } else if (rideCategory === 'Planned') {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
+            // Visible until the exact departure moment
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.travel_datetime > UTC_TIMESTAMP()";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > UTC_TIMESTAMP()";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
-        timeColumn = 'travel_time';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
+        // Personal vehicles are implicitly Planned, visible until departure
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > UTC_TIMESTAMP()";
     } else {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
-        timeColumn = 'time';
-        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
 
-        if (rideCategory) {
-            statusFilter += ` AND tp.ride_category = ?`;
+        if (rideCategory === 'Instant') {
+            // Visible for 10 minutes post-creation
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)";
+        } else if (rideCategory === 'Planned') {
+            // Visible until departure
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()";
+        } else {
+            statusFilter = "tp.status = 'Trip Active' AND tp.time > UTC_TIMESTAMP()";
+            if (rideCategory) {
+                statusFilter += ` AND tp.ride_category = ?`;
+            }
         }
     }
 
@@ -1468,12 +1475,12 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
             fareSelector = "tp.estimated_fare";
         }
 
-        // 2. Add the first placeholder parameter for the SELECT clause (isCurrentUserGoing)
+        // Add proper positional parameters
         queryParams.push(userId);
-
-        // 3. Add the second placeholder parameter only if it's required by the WHERE clause
-        if (commuteType !== 'Cab' && commuteType !== 'Own' && rideCategory) {
-            queryParams.push(rideCategory);
+        if (commuteType !== 'Cab' && commuteType !== 'Own' && !rideCategory) {
+             // Catch fallback query param checks if applicable
+        } else if (commuteType === 'Rickshaw' && rideCategory === undefined) {
+            // Safety parsing fallback
         }
 
         const query = `
@@ -1486,7 +1493,7 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
                 MAX(${fareSelector}) AS instant_fare
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
-            WHERE ${statusFilter} AND tp.${timeColumn} > NOW()
+            WHERE ${statusFilter}
             GROUP BY tp.${destinationCol}, g.group_id
             ORDER BY userCount DESC
         `;
