@@ -43,22 +43,26 @@ const server = http.createServer(app);
 
 const allowedOrigins = [
   "https://reloaded-473118.web.app", // Your verified web app URL
-  "http://localhost:3000",           // For local development
-  "http://10.0.2.2:3000"             // For Android emulator testing
+  ...(process.env.NODE_ENV !== 'production' ? [
+    "http://localhost:3000",           // For local development only
+    "http://10.0.2.2:3000"             // For Android emulator testing only
+  ] : [])
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // SECURE & FLEXIBLE FIX: Allow mobile apps (no origin) OR browser origins on the whitelist
-    // Also checks for literal string variations of empty origins sent by some mobile drivers
-    if (!origin || origin === "null" || origin === "localhost") {
+    // SECURITY FIX: Only requests with NO Origin header (native mobile HTTP clients,
+    // server-to-server calls) are trusted automatically. The literal strings "null" and
+    // "localhost" are attacker-controllable (e.g. sandboxed iframes, some webviews send
+    // Origin: null) and must NOT be auto-trusted, especially with credentials: true.
+    if (!origin) {
       return callback(null, true);
     }
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      callback(new Error("Blocked by secure CORS architecture"));
+      callback(new Error("Blocked by CORS policy"));
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -67,6 +71,27 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// SECURITY FIX: Basic rate limiting on auth / account-sensitive endpoints to prevent
+// brute-force credential guessing and phone-number enumeration.
+// npm install express-rate-limit
+const rateLimit = require("express-rate-limit");
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,                  // 20 requests per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many attempts. Please try again later." }
+});
+
+const otpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 5,                   // 5 OTP requests per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many OTP requests. Please try again later." }
+});
 
 const io = new Server(server, {
   cors: {
@@ -581,7 +606,7 @@ app.get('/api/google-places-autocomplete', async (req, res) => {
 
 // ================= CREATE ACCOUNT =================
 
-app.post("/create-account", async (req, res) => {
+app.post("/create-account", authLimiter, async (req, res) => {
     const TAG = "/create-account";
     try {
         const { first_name, last_name, work_category, work_detail, gender, phone, country_code, password } = req.body;
@@ -664,15 +689,15 @@ app.post("/create-account", async (req, res) => {
 
     } catch (err) {
         console.error(TAG, "Error in /create-account:", err);
+        // SECURITY FIX: don't leak err.message (DB/driver internals) to the client
         res.status(500).json({ 
             success: false, 
-            message: "Server error during account creation.",
-            error: err.message
+            message: "Server error during account creation."
         });
     }
 });
 
-app.get("/check-phone-availability", async (req, res) => {
+app.get("/check-phone-availability", authLimiter, async (req, res) => {
     const TAG = "/check-phone-availability";
     const { phone, country_code } = req.query;
 
@@ -699,7 +724,13 @@ app.get("/check-phone-availability", async (req, res) => {
     }
 });
 
-app.get("/debug/check-user", async (req, res) => {
+// SECURITY FIX: this route was a full account-enumeration oracle (any phone number ->
+// full row data) with NO production gate, unlike its sibling /debug/* routes, and NO auth.
+// It is now blocked in production and requires a valid session even in dev/staging.
+app.get("/debug/check-user", authenticateToken, async (req, res) => {
+    if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ success: false, message: "Not available in production" });
+    }
     const { phone, country_code } = req.query;
 
     try {
@@ -742,7 +773,7 @@ app.get("/debug/check-user", async (req, res) => {
 
 // ================= LOGIN =================
 
-app.post("/login", async (req, res) => {
+app.post("/login", authLimiter, async (req, res) => {
   const { phone, password, country_code } = req.body || {};
 
   if (!phone || !password) {
@@ -1416,8 +1447,10 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
 });
 
 // AFTER REFACTORING:
-app.get("/travel-plans/destinations-by-type", async (req, res) => {
-    const { userId, commuteType, rideCategory } = req.query;
+app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request query
+    const userId = req.user.id;
+    const { commuteType, rideCategory } = req.query;
 
     let tableName;
     let destinationCol;
@@ -1516,8 +1549,11 @@ app.get("/travel-plans/destinations-by-type", async (req, res) => {
     }
 });
 
-app.get("/users/destination", async (req, res) => {
-    const { groupId, userId, commuteType, destinationName, rideCategory } = req.query;
+app.get("/users/destination", authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request query — this excludes
+    // your own trips from the results and gates profile-picture visibility.
+    const userId = req.user.id;
+    const { groupId, commuteType, destinationName, rideCategory } = req.query;
 
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
@@ -1633,8 +1669,11 @@ app.get("/users/destination", async (req, res) => {
     }
 });
 
-app.post("/updateFcmToken", async (req, res) => {
-    const { userId, token } = req.body;
+app.post("/updateFcmToken", authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request body — otherwise
+    // anyone could redirect another user's push notifications to their own device token.
+    const userId = req.user.id;
+    const { token } = req.body;
     try {
         await db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [token, userId]);
         res.json({ success: true, message: "Token updated" });
@@ -1643,8 +1682,12 @@ app.post("/updateFcmToken", async (req, res) => {
     }
 });
 
-app.get('/user/vehicles/:userId/:type', async (req, res) => {
+app.get('/user/vehicles/:userId/:type', authenticateToken, async (req, res) => {
     const { userId, type } = req.params;
+    // SECURITY FIX: only allow a user to read their own saved vehicles
+    if (parseInt(userId) !== req.user.id) {
+        return res.status(403).json({ success: false, message: "Unauthorized." });
+    }
     try {
         const query = `SELECT * FROM user_vehicles WHERE userId = ? AND type = ?`;
         // Use await because 'db' is pool.promise()
@@ -1657,8 +1700,10 @@ app.get('/user/vehicles/:userId/:type', async (req, res) => {
     }
 });
 
-app.post('/user/save-vehicle', async (req, res) => {
-    const { userId, type, state, district, series, number } = req.body;
+app.post('/user/save-vehicle', authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request body
+    const userId = req.user.id;
+    const { type, state, district, series, number } = req.body;
     try {
         const query = `INSERT INTO user_vehicles (userId, type, state, district, series, number) 
                        VALUES (?, ?, ?, ?, ?, ?)`;
@@ -1769,10 +1814,13 @@ app.get('/getMessages', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/messages/delivered', async (req, res) => {
+app.post('/messages/delivered', authenticateToken, async (req, res) => {
   try {
-    const { userId, otherUserId } = req.body;
-    if (!userId || !otherUserId) {
+    // SECURITY FIX: only the authenticated recipient can mark messages addressed to them
+    // as delivered — identity comes from the token, not the body.
+    const userId = req.user.id;
+    const { otherUserId } = req.body;
+    if (!otherUserId) {
       return res.status(400).json({ success: false, message: 'Missing fields' });
     }
     const query = `UPDATE messages SET status = 1 WHERE sender_id = ? AND receiver_id = ? AND status = 0`;
@@ -2269,11 +2317,15 @@ app.post('/unblock', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/checkBlockStatus', async (req, res) => {
+app.get('/checkBlockStatus', authenticateToken, async (req, res) => {
   try {
     const { user1_id, user2_id } = req.query;
     if (!user1_id || !user2_id) {
       return res.status(400).json({ success: false, message: 'Both user IDs are required.' });
+    }
+    // SECURITY FIX: only allow checking block status for a pair you're actually part of
+    if (req.user.id !== parseInt(user1_id) && req.user.id !== parseInt(user2_id)) {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
     const query = `
       SELECT * FROM blocked_users
@@ -2293,9 +2345,11 @@ app.get('/checkBlockStatus', async (req, res) => {
 });
 
 // AFTER REFACTORING:
-app.post('/updateNotificationSettings', async (req, res) => {
-    const { userId, type, enabled } = req.body;
-    if (!userId || !type) {
+app.post('/updateNotificationSettings', authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request body
+    const userId = req.user.id;
+    const { type, enabled } = req.body;
+    if (!type) {
         return res.status(400).json({ success: false, message: 'Missing fields' });
     }
     try {
@@ -2313,8 +2367,11 @@ app.post('/updateNotificationSettings', async (req, res) => {
     }
 });
 
-app.post('/stopLiveLocation', async (req, res) => {
-  const { messageId, userId } = req.body;
+app.post('/stopLiveLocation', authenticateToken, async (req, res) => {
+  // SECURITY FIX: identity from the verified token, not the request body — otherwise
+  // any user could stop another user's live-location share.
+  const userId = req.user.id;
+  const { messageId } = req.body;
   try {
     const query = `UPDATE messages SET expires_at = UTC_TIMESTAMP() WHERE id = ? AND sender_id = ?`;
     const [result] = await db.execute(query, [messageId, userId]);
@@ -2326,11 +2383,10 @@ app.post('/stopLiveLocation', async (req, res) => {
   }
 });
 
-app.get("/getUsersGoing", async (req, res) => {
-    const { currentUserId } = req.query;
-    if (!currentUserId) {
-        return res.status(400).json({ success: false, message: 'Current user ID is required.' });
-    }
+app.get("/getUsersGoing", authenticateToken, async (req, res) => {
+    // SECURITY FIX: this ID gates profile-picture visibility (friends-only vs public), so it
+    // must come from the verified token, not a client-supplied query param.
+    const currentUserId = req.user.id;
     try {
         const friendsQuery = `
             SELECT DISTINCT
@@ -2427,15 +2483,10 @@ async function getAddressFromCoordinates(lat, lng) {
   }
 }
 
-app.get("/travel-plans/destinations", async (req, res) => {
+app.get("/travel-plans/destinations", authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Current user ID (userId) is required as a query parameter.' 
-      });
-    }
+    // SECURITY FIX: identity from the verified token, not the request query
+    const userId = req.user.id;
 
     const query = `
       SELECT
@@ -2480,10 +2531,13 @@ app.get("/travel-plans/destinations", async (req, res) => {
 });
 
 
-app.get('/travel-plans/by-destination', async (req, res) => {
-    const { destination, currentUserId } = req.query;
-    if (!destination || !currentUserId) {
-        return res.status(400).json({ success: false, message: 'Destination and currentUserId are required.' });
+app.get('/travel-plans/by-destination', authenticateToken, async (req, res) => {
+    // SECURITY FIX: this ID gates friend-only profile-picture visibility, so it must come
+    // from the verified token, not a client-supplied query param.
+    const currentUserId = req.user.id;
+    const { destination } = req.query;
+    if (!destination) {
+        return res.status(400).json({ success: false, message: 'Destination is required.' });
     }
     try {
         const friendsQuery = `
@@ -2549,12 +2603,16 @@ function getVisibleProfilePic(user, viewerId, friendIds) {
     return user.profile_pic;
 }
 
-app.delete("/user/profile/:userId", async (req, res) => {
+app.delete("/user/profile/:userId", authenticateToken, async (req, res) => {
     const TAG = "/user/profile/:userId (DELETE)";
     try {
         const { userId } = req.params;
         if (!userId || isNaN(userId)) {
             return res.status(400).json({ success: false, message: "User ID required" });
+        }
+        // SECURITY FIX: only the account owner can remove their own profile picture
+        if (parseInt(userId) !== req.user.id) {
+            return res.status(403).json({ success: false, message: "Unauthorized." });
         }
         await db.query("UPDATE users SET profile_pic = NULL WHERE id = ?", [parseInt(userId)]);
         res.json({ success: true, message: "Profile picture removed", user: { profilePic: null } });
@@ -2564,7 +2622,7 @@ app.delete("/user/profile/:userId", async (req, res) => {
     }
 });
 
-app.get('/tripHistory/:userId', async (req, res) => {
+app.get('/tripHistory/:userId', authenticateToken, async (req, res) => {
   const TAG = "GET /tripHistory/:userId";
   try {
     const { userId } = req.params;
@@ -2572,6 +2630,10 @@ app.get('/tripHistory/:userId', async (req, res) => {
 
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+    // SECURITY FIX: only the account owner can view their own trip history
+    if (parseInt(userId) !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
 
     const uId = parseInt(userId);
@@ -2652,11 +2714,11 @@ app.get('/tripHistory/:userId', async (req, res) => {
     });
   } catch (error) {
     console.error(TAG, 'Error fetching unified trip history:', error);
-    res.status(500).json({ success: false, message: 'Server Error', error: error.message });
+    res.status(500).json({ success: false, message: 'Server Error' });
   }
 });
 
-app.put('/trip/cancel/:tripId', async (req, res) => {
+app.put('/trip/cancel/:tripId', authenticateToken, async (req, res) => {
   try {
     const { tripId } = req.params;
     if (!tripId || isNaN(tripId)) {
@@ -2664,17 +2726,20 @@ app.put('/trip/cancel/:tripId', async (req, res) => {
     }
 
     const tId = parseInt(tripId);
+    // SECURITY FIX: identity from the verified token, and every UPDATE below is now scoped
+    // to user_id = ? so only the trip's owner can cancel it.
+    const uId = req.user.id;
 
-    const [rickshawRes] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
+    const [rickshawRes] = await db.query('UPDATE travel_plans SET status = ? WHERE id = ? AND user_id = ?', ['Trip Cancelled', tId, uId]);
 
     let cabRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0) {
-        [cabRes] = await db.query('UPDATE travel_plans_cab SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
+        [cabRes] = await db.query('UPDATE travel_plans_cab SET status = ? WHERE id = ? AND user_id = ?', ['Trip Cancelled', tId, uId]);
     }
 
     let ownRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
-        [ownRes] = await db.query('UPDATE travel_plans_own SET status = ? WHERE id = ?', ['Trip Cancelled', tId]);
+        [ownRes] = await db.query('UPDATE travel_plans_own SET status = ? WHERE id = ? AND user_id = ?', ['Trip Cancelled', tId, uId]);
     }
 
     if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
@@ -2689,7 +2754,12 @@ app.put('/trip/cancel/:tripId', async (req, res) => {
   }
 });
 
-app.get('/socket-status', (req, res) => {
+app.get('/socket-status', authenticateToken, (req, res) => {
+  // SECURITY FIX: this leaks internal socket IDs and the full online-user list; treat it
+  // like the other /debug/* routes.
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ success: false, message: "Not available in production" });
+  }
   const connectedSockets = [];
   io.sockets.sockets.forEach((socket) => {
     connectedSockets.push({
@@ -2705,7 +2775,7 @@ app.get('/socket-status', (req, res) => {
   });
 });
 
-app.put('/trip/complete/:tripId', async (req, res) => {
+app.put('/trip/complete/:tripId', authenticateToken, async (req, res) => {
     const TAG = "PUT /trip/complete/:tripId";
     let connection;
     try {
@@ -2725,6 +2795,9 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         }
 
         const tId = parseInt(tripId);
+        // SECURITY FIX: identity from the verified token, used below to scope every UPDATE
+        // to the caller's own trip so one user can't complete/set-fare on another's trip.
+        const uId = req.user.id;
         const isExecuted = (didGo === true || didGo === 'true' || didGo === 1 || didGo === '1');
         const targetStatus = isExecuted ? 'Fare Added' : 'Trip Cancelled';
         const tripFare = isExecuted ? (parseFloat(fare) || 0.00) : 0.00;
@@ -2743,8 +2816,8 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         // 1. Update primary tables gracefully
         try {
             const [rRes] = await connection.query(
-                'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-                [targetStatus, tripFare, tId]
+                'UPDATE travel_plans SET status = ?, fare = ?, added_fare = TRUE WHERE id = ? AND user_id = ?',
+                [targetStatus, tripFare, tId, uId]
             );
             affected += rRes.affectedRows;
         } catch (err) {
@@ -2754,8 +2827,8 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         if (affected === 0) {
             try {
                 const [cRes] = await connection.query(
-                    'UPDATE travel_plans_cab SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-                    [targetStatus, tripFare, tId]
+                    'UPDATE travel_plans_cab SET status = ?, fare = ?, added_fare = TRUE WHERE id = ? AND user_id = ?',
+                    [targetStatus, tripFare, tId, uId]
                 );
                 affected += cRes.affectedRows;
             } catch (err) {
@@ -2766,8 +2839,8 @@ app.put('/trip/complete/:tripId', async (req, res) => {
         if (affected === 0) {
             try {
                 const [oRes] = await connection.query(
-                    'UPDATE travel_plans_own SET status = ?, fare = ?, added_fare = TRUE WHERE id = ?',
-                    [targetStatus, tripFare, tId]
+                    'UPDATE travel_plans_own SET status = ?, fare = ?, added_fare = TRUE WHERE id = ? AND user_id = ?',
+                    [targetStatus, tripFare, tId, uId]
                 );
                 affected += oRes.affectedRows;
             } catch (err) {
@@ -2829,10 +2902,23 @@ app.put('/trip/complete/:tripId', async (req, res) => {
     }
 });
 
-app.get('/tripInformation/:tripId', async (req, res) => {
+app.get('/tripInformation/:tripId', authenticateToken, async (req, res) => {
     const TAG = "GET /tripInformation/:tripId";
     try {
         const { tripId } = req.params;
+        const tIdNum = parseInt(tripId);
+
+        // SECURITY FIX: verify the caller actually owns this trip in one of the three plan
+        // tables before returning any information about it.
+        const [ownsIt] = await db.query(
+            `SELECT 1 FROM travel_plans WHERE id = ? AND user_id = ?
+             UNION ALL SELECT 1 FROM travel_plans_cab WHERE id = ? AND user_id = ?
+             UNION ALL SELECT 1 FROM travel_plans_own WHERE id = ? AND user_id = ?`,
+            [tIdNum, req.user.id, tIdNum, req.user.id, tIdNum, req.user.id]
+        );
+        if (ownsIt.length === 0) {
+            return res.status(403).json({ success: false, message: "Unauthorized." });
+        }
         
         const infoQuery = `SELECT * FROM trip_information WHERE trip_id = ? ORDER BY id DESC LIMIT 1`;
         const [rows] = await db.query(infoQuery, [parseInt(tripId)]);
@@ -2880,7 +2966,7 @@ app.get('/tripInformation/:tripId', async (req, res) => {
     }
 });
 
-app.delete('/tripHistory/:tripId', async (req, res) => {
+app.delete('/tripHistory/:tripId', authenticateToken, async (req, res) => {
   try {
     const { tripId } = req.params;
     if (!tripId || isNaN(tripId)) {
@@ -2888,17 +2974,19 @@ app.delete('/tripHistory/:tripId', async (req, res) => {
     }
 
     const tId = parseInt(tripId);
+    // SECURITY FIX: identity from the verified token, scoping every DELETE to the caller
+    const uId = req.user.id;
 
-    const [rickshawRes] = await db.query('DELETE FROM travel_plans WHERE id = ?', [tId]);
+    const [rickshawRes] = await db.query('DELETE FROM travel_plans WHERE id = ? AND user_id = ?', [tId, uId]);
 
     let cabRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0) {
-        [cabRes] = await db.query('DELETE FROM travel_plans_cab WHERE id = ?', [tId]);
+        [cabRes] = await db.query('DELETE FROM travel_plans_cab WHERE id = ? AND user_id = ?', [tId, uId]);
     }
 
     let ownRes = { affectedRows: 0 };
     if (rickshawRes.affectedRows === 0 && cabRes.affectedRows === 0) {
-        [ownRes] = await db.query('DELETE FROM travel_plans_own WHERE id = ?', [tId]);
+        [ownRes] = await db.query('DELETE FROM travel_plans_own WHERE id = ? AND user_id = ?', [tId, uId]);
     }
 
     if (rickshawRes.affectedRows > 0 || cabRes.affectedRows > 0 || ownRes.affectedRows > 0) {
@@ -2913,11 +3001,15 @@ app.delete('/tripHistory/:tripId', async (req, res) => {
   }
 });
 
-app.get('/checkCompletedTrips/:userId', async (req, res) => {
+app.get('/checkCompletedTrips/:userId', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+    // SECURITY FIX: only the account owner can view their own completed-trips list
+    if (parseInt(userId) !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
     const query = `
       SELECT tp.id, tp.from_place, tp.to_place, tp.time, CONCAT(u.first_name, ' ', u.last_name) as user_name
@@ -2934,7 +3026,19 @@ app.get('/checkCompletedTrips/:userId', async (req, res) => {
   }
 });
 
-app.post('/autoUpdateCompletedTrips', async (req, res) => {
+// SECURITY FIX: this is a system-wide maintenance job meant to be triggered by an internal
+// scheduler (cron), not by end users, and should not be a freely-callable public endpoint.
+// Gate it behind a shared internal secret, set INTERNAL_JOB_SECRET in your environment and
+// have your scheduler send it as X-Internal-Job-Secret.
+function requireInternalJobSecret(req, res, next) {
+  const provided = req.get('X-Internal-Job-Secret');
+  if (!process.env.INTERNAL_JOB_SECRET || provided !== process.env.INTERNAL_JOB_SECRET) {
+    return res.status(403).json({ success: false, message: "Forbidden" });
+  }
+  next();
+}
+
+app.post('/autoUpdateCompletedTrips', requireInternalJobSecret, async (req, res) => {
   try {
     await db.query(`UPDATE travel_plans SET status = 'Trip Completed' WHERE status = 'Trip Active' AND time < NOW()`);
     await db.query(`UPDATE travel_plans_cab SET status = 'Trip Completed' WHERE status = 'Trip Active' AND time < NOW()`);
@@ -2945,11 +3049,15 @@ app.post('/autoUpdateCompletedTrips', async (req, res) => {
   }
 });
 
-app.get('/tripStats/:userId', async (req, res) => {
+app.get('/tripStats/:userId', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+    // SECURITY FIX: only the account owner can view their own trip statistics
+    if (parseInt(userId) !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
     const statsQuery = `
       SELECT
@@ -2980,15 +3088,54 @@ app.get('/tripStats/:userId', async (req, res) => {
   }
 });
 
-app.post('/reset-password', async (req, res) => {
+// SECURITY FIX: /reset-password previously required NOTHING but a phone number to take
+// over any account. It now requires a valid, freshly-verified OTP for that phone number.
+// This uses Twilio Verify (the `twilio` client is already configured above) and requires
+// a TWILIO_VERIFY_SERVICE_SID env var. If you already have your own OTP table/flow
+// elsewhere in the codebase, wire that verification check in here instead — the important
+// part is that SOME proof of phone ownership is checked before the UPDATE below runs.
+
+app.post('/request-password-reset-otp', otpLimiter, async (req, res) => {
+    const TAG = "/request-password-reset-otp";
+    try {
+        const { phone, country_code } = req.body;
+        if (!phone || !country_code) {
+            return res.status(400).json({ success: false, message: 'Phone and country code are required' });
+        }
+
+        const [userRows] = await db.query(
+            'SELECT id FROM users WHERE phone = ? AND country_code = ?',
+            [phone, country_code]
+        );
+
+        // Always respond with the same generic message whether or not the user exists,
+        // so this endpoint can't be used to enumerate registered phone numbers.
+        if (userRows.length > 0 && process.env.TWILIO_VERIFY_SERVICE_SID) {
+            try {
+                await client.verify.v2
+                    .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+                    .verifications.create({ to: `${country_code}${phone}`, channel: 'sms' });
+            } catch (twilioErr) {
+                console.error(TAG, "Twilio send error:", twilioErr.message);
+            }
+        }
+
+        res.json({ success: true, message: 'If this number is registered, a verification code has been sent.' });
+    } catch (err) {
+        console.error(TAG, err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+app.post('/reset-password', authLimiter, async (req, res) => {
     const TAG = "/reset-password";
     try {
-        const { phone, country_code, newPassword } = req.body;
+        const { phone, country_code, newPassword, otp } = req.body;
 
-        if (!phone || !country_code || !newPassword) {
+        if (!phone || !country_code || !newPassword || !otp) {
             return res.status(400).json({
                 success: false,
-                message: 'Phone, country code, and new password are required'
+                message: 'Phone, country code, verification code, and new password are required'
             });
         }
 
@@ -2997,6 +3144,23 @@ app.post('/reset-password', async (req, res) => {
                 success: false, 
                 message: "Password must be at least 7 characters and include letters, numbers, and symbols." 
             });
+        }
+
+        // SECURITY FIX: verify proof of phone ownership before allowing the reset.
+        if (!process.env.TWILIO_VERIFY_SERVICE_SID) {
+            console.error(TAG, "TWILIO_VERIFY_SERVICE_SID not configured; refusing reset for safety.");
+            return res.status(500).json({ success: false, message: "Password reset is temporarily unavailable." });
+        }
+        try {
+            const check = await client.verify.v2
+                .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+                .verificationChecks.create({ to: `${country_code}${phone}`, code: otp });
+            if (check.status !== 'approved') {
+                return res.status(401).json({ success: false, message: 'Invalid or expired verification code.' });
+            }
+        } catch (twilioErr) {
+            console.error(TAG, "Twilio verify error:", twilioErr.message);
+            return res.status(401).json({ success: false, message: 'Invalid or expired verification code.' });
         }
 
         const [userRows] = await db.query(
@@ -3038,7 +3202,9 @@ app.post('/reset-password', async (req, res) => {
     }
 });
 
-app.get("/getUserByPhone", async (req, res) => {
+app.get("/getUserByPhone", authenticateToken, authLimiter, async (req, res) => {
+    // SECURITY FIX: require auth + rate limit so this can't be used as an anonymous,
+    // unlimited phone-number -> profile lookup/enumeration oracle.
     const TAG = "/getUserByPhone"; 
     const phone = req.query.phone;
     const country_code = req.query.country_code; 
@@ -3074,11 +3240,13 @@ app.get("/getUserByPhone", async (req, res) => {
 });
 
 // Locate app.post('/markMessagesRead'...) in your server code and replace it:
-app.post('/markMessagesRead', async (req, res) => {
+app.post('/markMessagesRead', authenticateToken, async (req, res) => {
   try {
-    const { userId, otherUserId } = req.body;
-    if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
+    // SECURITY FIX: identity from the verified token, not the request body
+    const userId = req.user.id;
+    const { otherUserId } = req.body;
+    if (!otherUserId) {
+      return res.status(400).json({ success: false, message: 'otherUserId is required' });
     }
 
     // Explicitly parse IDs as base-10 integers to prevent type mismatches
@@ -3108,11 +3276,13 @@ app.post('/markMessagesRead', async (req, res) => {
   }
 });
 
-app.get('/getUnreadCount', async (req, res) => {
+app.get('/getUnreadCount', authenticateToken, async (req, res) => {
   try {
-    const { userId, otherUserId } = req.query;
-    if (!userId || !otherUserId) {
-      return res.status(400).json({ success: false, message: 'userId and otherUserId are required' });
+    // SECURITY FIX: identity from the verified token, not the request query
+    const userId = req.user.id;
+    const { otherUserId } = req.query;
+    if (!otherUserId) {
+      return res.status(400).json({ success: false, message: 'otherUserId is required' });
     }
     const query = `SELECT COUNT(*) as unreadCount FROM messages WHERE sender_id = ? AND receiver_id = ? AND status < 2`;
     const [rows] = await db.execute(query, [otherUserId, userId]);
@@ -3123,11 +3293,10 @@ app.get('/getUnreadCount', async (req, res) => {
   }
 });
 
-app.get('/getTotalUnreadCount', async (req, res) => {
+app.get('/getTotalUnreadCount', authenticateToken, async (req, res) => {
     const TAG = "/getTotalUnreadCount"; 
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ success: false, message: 'userId is required' });
-    const currentUserId = parseInt(userId);
+    // SECURITY FIX: identity from the verified token, not the request query
+    const currentUserId = req.user.id;
     try {
         // ─── OPTIMIZED: COUNTS TEXT MESSAGES AND LIVE SHARED MEDIA ASSETS SIMULTANEOUSLY ───
         const individualQuery = `
@@ -3153,11 +3322,14 @@ EXISTS (SELECT 1 FROM group_message_read_status gmrs WHERE gmrs.message_id = gm.
     }
 });
 
-app.post("/hideChat", async (req, res) => {
+app.post("/hideChat", authenticateToken, async (req, res) => {
     const TAG = "/hideChat"; 
     try {
-        const { userId, otherUserId, isGroup } = req.body; 
-        if (!userId || !otherUserId) return res.status(400).json({ success: false });
+        // SECURITY FIX: identity from the verified token, not the request body — otherwise
+        // any caller could hide/purge another user's chat history.
+        const userId = req.user.id;
+        const { otherUserId, isGroup } = req.body; 
+        if (!otherUserId) return res.status(400).json({ success: false });
 
         if (isGroup) {
             const [messages] = await db.query(`SELECT message_id FROM group_messages WHERE group_id = ?`, [otherUserId]);
@@ -3205,7 +3377,8 @@ app.post("/hideChat", async (req, res) => {
     }
 });
 
-app.post("/cleanupDeletedMessages", async (req, res) => {
+// SECURITY FIX: system-wide maintenance job, not a per-user action — restrict to internal callers
+app.post("/cleanupDeletedMessages", requireInternalJobSecret, async (req, res) => {
     const TAG = "/cleanupDeletedMessages";
     try {
         const [deletableMessages] = await db.query(`SELECT message_id FROM hidden_messages GROUP BY message_id HAVING COUNT(DISTINCT user_id) >= 2`);
@@ -3306,11 +3479,13 @@ app.post('/favorites', authenticateToken, async (req, res) => {
     }
 });
 
-app.get("/user/:userId", async (req, res) => {
+app.get("/user/:userId", authenticateToken, async (req, res) => {
     const TAG = "/user/:userId"; 
     try {
         const { userId } = req.params; 
-        const { viewerId } = req.query; 
+        // SECURITY FIX: viewerId gates friend-visibility logic below, so it must come from
+        // the verified token, not a self-reported query param.
+        const viewerId = req.user.id;
 
         if (!userId || isNaN(userId)) return res.status(400).json({ success: false });
 
@@ -3349,6 +3524,14 @@ app.get("/user/:userId", async (req, res) => {
         const user = rows[0]; 
         user.hasChat = Boolean(user.hasChat);
         user.profile_pic = getVisibleProfilePic(user, parseInt(viewerId), friendIds);
+
+        // SECURITY FIX: phone number was previously returned to ANY viewer regardless of
+        // visibility settings. Only return it when viewing your own profile. If your product
+        // intentionally shares phone numbers with friends/chat partners, relax this to
+        // `if (parseInt(userId) !== viewerId && !user.hasChat) delete user.phone;` instead.
+        if (parseInt(userId) !== viewerId) {
+            delete user.phone;
+        }
 
         res.json({ success: true, user: user }); 
     } catch (err) {
@@ -3396,9 +3579,11 @@ app.put('/settings/visibility', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/change-password', async (req, res) => {
+app.post('/change-password', authenticateToken, authLimiter, async (req, res) => {
     try {
-        const { userId, currentPassword, newPassword } = req.body;
+        // SECURITY FIX: identity must come from the verified JWT, never from the request body
+        const userId = req.user.id;
+        const { currentPassword, newPassword } = req.body;
 
         if (!newPassword || newPassword.length < 7) {
             return res.status(400).json({ 
@@ -3429,11 +3614,12 @@ app.post('/change-password', async (req, res) => {
     }
 });
 
-app.get('/api/online-users', (req, res) => {
+app.get('/api/online-users', authenticateToken, (req, res) => {
+  // SECURITY FIX: this dumped every user's online/last-seen status with no auth at all.
   res.json({ success: true, onlineUsers: Array.from(onlineUsers.entries()).map(([userId, data]) => ({ userId, isOnline: data.isOnline, lastSeen: data.lastSeen })) });
 });
 
-app.get('/api/user-status/:userId', async (req, res) => {
+app.get('/api/user-status/:userId', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
     const onlineData = onlineUsers.get(userId);
@@ -3546,11 +3732,16 @@ app.post('/leaveGroup', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => {
+app.post('/update-group-icon', authenticateToken, upload.single('group_icon'), async (req, res) => {
     const groupId = req.body.group_id;
     const cloudinaryUrl = req.file?.path;
     if (!groupId || !cloudinaryUrl) return res.status(400).json({ success: false });
     try {
+        // SECURITY FIX: only an existing member of the group can change its icon
+        const [membership] = await db.query('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?', [groupId, req.user.id]);
+        if (membership.length === 0) {
+            return res.status(403).json({ success: false, message: "Unauthorized." });
+        }
         await db.execute('UPDATE group_table SET group_icon = ? WHERE group_id = ?', [cloudinaryUrl, groupId]);
         res.json({ success: true, group_icon: cloudinaryUrl });
     } catch (error) {
@@ -3558,9 +3749,14 @@ app.post('/update-group-icon', upload.single('group_icon'), async (req, res) => 
     }
 });
 
-app.post('/remove-group-icon', async (req, res) => {
+app.post('/remove-group-icon', authenticateToken, async (req, res) => {
     const { group_id } = req.body;
     try {
+        // SECURITY FIX: only an existing member of the group can remove its icon
+        const [membership] = await db.query('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?', [group_id, req.user.id]);
+        if (membership.length === 0) {
+            return res.status(403).json({ success: false, message: "Unauthorized." });
+        }
         await db.execute('UPDATE group_table SET group_icon = NULL WHERE group_id = ?', [group_id]);
         res.json({ success: true });
     } catch (error) {
@@ -3658,7 +3854,7 @@ app.get('/group/:groupId/messages', authenticateToken, async (req, res) => {
     }
 });
 
-app.get('/group/by-name', async (req, res) => {
+app.get('/group/by-name', authenticateToken, async (req, res) => {
     const TAG = "/group/by-name";
     try {
         const { groupName } = req.query;
@@ -3891,10 +4087,12 @@ app.post('/group/send', authenticateToken, async (req, res) => {
     }
 });
 
-app.post("/group/deleteMessageForMe", async (req, res) => {
+app.post("/group/deleteMessageForMe", authenticateToken, async (req, res) => {
   try {
-    const { messageId, userId } = req.body;
-    if (!messageId || !userId) {
+    // SECURITY FIX: identity from the verified token, not the request body
+    const userId = req.user.id;
+    const { messageId } = req.body;
+    if (!messageId) {
       return res.status(400).json({ success: false, message: "Missing fields" });
     }
 
@@ -3910,10 +4108,12 @@ app.post("/group/deleteMessageForMe", async (req, res) => {
   }
 });
 
-app.delete('/group/deleteMessageForEveryone/:messageId', async (req, res) => {
+app.delete('/group/deleteMessageForEveryone/:messageId', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
-    const { userId } = req.body;
+    // SECURITY FIX: identity from the verified token, not the request body — this is what
+    // the "only sender can delete" check below relies on, so it must not be spoofable.
+    const userId = req.user.id;
 
     const [msgRows] = await db.execute('SELECT sender_id, group_id FROM group_messages WHERE message_id = ?', [messageId]);
     if (msgRows.length === 0) return res.status(404).json({ success: false });
@@ -3933,9 +4133,14 @@ app.delete('/group/deleteMessageForEveryone/:messageId', async (req, res) => {
 });
 
 
-app.get('/group/:groupId/members', async (req, res) => {
+app.get('/group/:groupId/members', authenticateToken, async (req, res) => {
     const { groupId } = req.params;
     try {
+        // SECURITY FIX: only existing members can list who else is in the group
+        const [membership] = await db.query('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?', [groupId, req.user.id]);
+        if (membership.length === 0) {
+            return res.status(403).json({ success: false, message: "Unauthorized." });
+        }
         const query = `
             SELECT 
                 u.id, 
@@ -3955,7 +4160,7 @@ app.get('/group/:groupId/members', async (req, res) => {
         res.json({ success: true, members: members });
     } catch (error) {
         console.error("Error fetching group members:", error);
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false });
     }
 });
 
@@ -3996,12 +4201,14 @@ app.post('/group/read', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/group/stop-location', async (req, res) => {
+app.post('/group/stop-location', authenticateToken, async (req, res) => {
     const TAG = "/group/stop-location";
-    const { userId, groupId } = req.body;
+    // SECURITY FIX: identity from the verified token, not the request body
+    const userId = req.user.id;
+    const { groupId } = req.body;
 
-    if (!userId || !groupId) {
-        return res.status(400).json({ success: false, message: "Missing userId or groupId" });
+    if (!groupId) {
+        return res.status(400).json({ success: false, message: "Missing groupId" });
     }
 
     try {
@@ -4026,12 +4233,15 @@ app.post('/group/stop-location', async (req, res) => {
         }
     } catch (error) {
         console.error(TAG, "Error stopping group live location:", error.message);
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false });
     }
 });
 
-app.get('/searchUsers', async (req, res) => {
-    const { query, currentUserId } = req.query;
+app.get('/searchUsers', authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request query — it gates
+    // friend-visibility logic and excludes the caller from their own results.
+    const currentUserId = req.user.id;
+    const { query } = req.query;
     const searchTerm = query ? query.trim().toLowerCase() : "";
     
     if (!searchTerm) return res.json({ success: true, users: [] });
@@ -4091,10 +4301,12 @@ const [users] = await db.execute(sql, [
     }
 });
 
-app.post('/sendChatRequest', async (req, res) => {
-    const { senderId, receiverId, message } = req.body;
+app.post('/sendChatRequest', authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request body
+    const senderId = req.user.id;
+    const { receiverId, message } = req.body;
 
-    if (!senderId || !receiverId || !message) {
+    if (!receiverId || !message) {
         return res.status(400).json({ success: false, message: "Missing data" });
     }
 
@@ -4131,12 +4343,15 @@ app.post('/sendChatRequest', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error("SQL Error:", err);
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false });
     }
 });
 
-app.post('/handleChatRequest', async (req, res) => {
-    const { userId, otherUserId, action } = req.body; // userId = Receiver
+app.post('/handleChatRequest', authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request body — this is the
+    // receiver deciding to accept/reject, so it must be the authenticated caller.
+    const userId = req.user.id; // userId = Receiver
+    const { otherUserId, action } = req.body;
     try {
         if (action === 'accept') {
             const [request] = await db.execute(
@@ -4194,8 +4409,10 @@ app.post('/handleChatRequest', async (req, res) => {
     }
 });
 
-app.get('/checkChatRequest', async (req, res) => {
-    const { senderId, receiverId } = req.query;
+app.get('/checkChatRequest', authenticateToken, async (req, res) => {
+    // SECURITY FIX: the caller must be the sender being checked; identity from the token
+    const senderId = req.user.id;
+    const { receiverId } = req.query;
     try {
         const [rows] = await db.execute(
             `SELECT initial_message FROM chat_requests 
@@ -4214,8 +4431,10 @@ IN ('pending','rejected')`,
     }
 });
 
-app.post('/deleteChatRequest', async (req, res) => {
-    const { senderId, receiverId } = req.body;
+app.post('/deleteChatRequest', authenticateToken, async (req, res) => {
+    // SECURITY FIX: only the original sender can cancel their own pending request
+    const senderId = req.user.id;
+    const { receiverId } = req.body;
     try {
         await db.execute(
             `DELETE FROM chat_requests 
@@ -4232,8 +4451,9 @@ app.post('/deleteChatRequest', async (req, res) => {
     }
 });
 
-app.get('/chatRequests', async (req, res) => {
-    const { userId } = req.query;
+app.get('/chatRequests', authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request query
+    const userId = req.user.id;
     try {
         const sql = `SELECT cr.id as requestId, cr.initial_message, u.id as userId, CONCAT(u.first_name, ' ', u.last_name) as name, u.profile_pic, u.gender, u.work_category FROM chat_requests cr 
 JOIN users u ON cr.sender_id = u.id WHERE cr.receiver_id = ? AND cr.status = 'pending' ORDER BY cr.id DESC`;
@@ -4244,8 +4464,9 @@ JOIN users u ON cr.sender_id = u.id WHERE cr.receiver_id = ? AND cr.status = 'pe
     }
 });
 
-app.get('/chatRequests/count', async (req, res) => {
-    const { userId } = req.query; // Add this line
+app.get('/chatRequests/count', authenticateToken, async (req, res) => {
+    // SECURITY FIX: identity from the verified token, not the request query
+    const userId = req.user.id;
     try {
         const [rows] = await db.execute(`SELECT COUNT(*) as count FROM chat_requests WHERE receiver_id = ? AND status = 'pending'`, [userId]);
         res.json({ success: true, count: rows[0].count });
@@ -4507,12 +4728,17 @@ app.post("/api/media/send-group", authenticateToken, uploadSharedMedia.single("m
 
     } catch (err) {
         console.error(TAG, err);
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false });
     }
 });
 
-app.get("/api/media/fetch/:userId", async (req, res) => {
+app.get("/api/media/fetch/:userId", authenticateToken, async (req, res) => {
     const { userId } = req.params;
+    // SECURITY FIX: previously anyone could fetch any user's private shared-media URLs by
+    // just changing the :userId in the URL — this is now locked to the account owner.
+    if (parseInt(userId) !== req.user.id) {
+        return res.status(403).json({ success: false, message: "Unauthorized." });
+    }
     try {
         // Enforce strict expiration boundaries matching baseline current timestamp boundaries
         const query = `
@@ -4524,7 +4750,7 @@ app.get("/api/media/fetch/:userId", async (req, res) => {
         const [rows] = await db.execute(query, [parseInt(userId)]);
         res.json({ success: true, media: rows });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false });
     }
 });
 
@@ -4623,7 +4849,8 @@ if (countRows.length > 0) {
     }
 });
 
-app.post("/api/media/housekeeper-cleanup", async (req, res) => {
+// SECURITY FIX: system-wide maintenance job, not a per-user action — restrict to internal callers
+app.post("/api/media/housekeeper-cleanup", requireInternalJobSecret, async (req, res) => {
     const TAG = "/api/media/housekeeper-cleanup";
     try {
         // Identify files that passed expiration threshold validation checkpoints
