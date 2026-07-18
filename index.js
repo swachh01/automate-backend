@@ -72,9 +72,6 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// SECURITY FIX: Basic rate limiting on auth / account-sensitive endpoints to prevent
-// brute-force credential guessing and phone-number enumeration.
-// npm install express-rate-limit
 const rateLimit = require("express-rate-limit");
 
 const authLimiter = rateLimit({
@@ -1475,24 +1472,23 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         destinationCol = 'destination';
         // Personal vehicles are implicitly Planned, visible until departure
         statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > UTC_TIMESTAMP()";
-    } else {
+        } else {
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
 
         if (rideCategory === 'Instant') {
             // Visible for 10 minutes post-creation
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)";
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(NOW(), INTERVAL 10 MINUTE)";
         } else if (rideCategory === 'Planned') {
             // Visible until departure
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.time > NOW()";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.time > UTC_TIMESTAMP()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
             if (rideCategory) {
                 statusFilter += ` AND tp.ride_category = ?`;
             }
         }
     }
-
     try {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
