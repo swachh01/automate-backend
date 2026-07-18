@@ -91,6 +91,17 @@ const otpLimiter = rateLimit({
   message: { success: false, message: "Too many OTP requests. Please try again later." }
 });
 
+// SECURITY FIX: /api/google-places-autocomplete proxies to a billed Google API using our own
+// server-side key. Without auth + a rate limit, anyone can hammer it and run up our Google
+// Maps bill / exhaust our quota. Require a logged-in user and cap requests per IP.
+const placesAutocompleteLimiter = rateLimit({
+  windowMs: 60 * 1000,   // 1 minute
+  max: 30,               // 30 requests per IP per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many autocomplete requests. Please slow down." }
+});
+
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
@@ -103,8 +114,15 @@ const io = new Server(server, {
   pingInterval: 25000
 });
 
-app.use(express.json({ limit: "200mb" }));
-app.use(express.urlencoded({ limit: "200mb",extended: true }));
+// SECURITY FIX: 200mb was sized as if HD photos/videos flowed through this parser, but they
+// don't — every upload route (profile_pic, group_icon, media_file) uses multer/Cloudinary
+// storage, which streams multipart data directly and never touches express.json/urlencoded.
+// This limit only applies to plain JSON/form bodies, so a large ceiling here just gives an
+// attacker room to exhaust server memory with oversized request bodies. 5mb comfortably
+// covers any legitimate JSON payload (e.g. base64 thumbnails, large trip/message payloads)
+// without weakening HD media sharing at all.
+app.use(express.json({ limit: "5mb" }));
+app.use(express.urlencoded({ limit: "5mb", extended: true }));
 
 cloudinary.config({
   secure: true,
@@ -157,6 +175,28 @@ const storage = new CloudinaryStorage({
 });
 const upload = multer({ storage: storage });
 
+// SECURITY FIX: previously any mimetype was accepted — only the resource_type (image vs
+// video) branched on it. That let someone upload arbitrary file types (executables, archives,
+// scripts, etc.) into our Cloudinary account under the chat-media label. Restrict to real
+// image/video formats. This intentionally still allows large, high-resolution photos and
+// videos (HEIC/HEIF, RAW-adjacent formats, 4K-capable video containers) — it only blocks
+// non-media file types, and the 100MB size cap below is unchanged.
+const ALLOWED_SHARED_MEDIA_MIMETYPES = new Set([
+  // Images
+  'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif',
+  'image/heic', 'image/heif',
+  // Videos
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska',
+  'video/3gpp', 'video/3gpp2', 'video/x-msvideo'
+]);
+
+function sharedMediaFileFilter(req, file, cb) {
+  if (ALLOWED_SHARED_MEDIA_MIMETYPES.has(file.mimetype)) {
+    return cb(null, true);
+  }
+  return cb(new Error('Unsupported file type. Only images and videos may be shared.'));
+}
+
 const sharedMediaStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: async (req, file) => {
@@ -171,7 +211,8 @@ const sharedMediaStorage = new CloudinaryStorage({
 
 const uploadSharedMedia = multer({ 
   storage: sharedMediaStorage,
-  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit rule allocation
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit rule allocation — unchanged, still supports HD photos/videos
+  fileFilter: sharedMediaFileFilter
 });
 
 async function updateUserPresence(userId, isOnline) {
@@ -585,7 +626,7 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-app.get('/api/google-places-autocomplete', async (req, res) => {
+app.get('/api/google-places-autocomplete', authenticateToken, placesAutocompleteLimiter, async (req, res) => {
     const { input } = req.query;
     const apiKey = process.env.GOOGLE_MAPS_API_KEY; // Ensure this is in your Cloud Run variables
     
@@ -5031,6 +5072,22 @@ app.post("/api/group-media/delete", authenticateToken, async (req, res) => {
         console.error("/api/group-media/delete Error:", error);
         res.status(500).json({ success: false, message: "Server transaction execution failure." });
     }
+});
+
+// SECURITY FIX / UX FIX: without this, a multer fileFilter rejection (unsupported file type)
+// or a file exceeding the 100MB shared-media limit would surface as an unhandled error /
+// generic 500 instead of a clean response. Centralize that handling here.
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ success: false, message: "File is too large. Maximum size is 100MB." });
+    }
+    return res.status(400).json({ success: false, message: err.message });
+  }
+  if (err && err.message === 'Unsupported file type. Only images and videos may be shared.') {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+  next(err);
 });
 
 const PORT = process.env.PORT || 8080;
