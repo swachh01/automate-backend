@@ -1446,7 +1446,6 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
     }
 });
 
-// AFTER REFACTORING:
 app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res) => {
     // SECURITY FIX: identity from the verified token, not the request query
     const userId = req.user.id;
@@ -1508,12 +1507,20 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
             fareSelector = "tp.estimated_fare";
         }
 
-        // Add proper positional parameters
+        // The SUM(CASE ...) placeholder always comes first in the compiled SQL text
+        // (it's in the SELECT clause, before the WHERE clause), so it must be pushed first.
         queryParams.push(userId);
-        if (commuteType !== 'Cab' && commuteType !== 'Own' && !rideCategory) {
-             // Catch fallback query param checks if applicable
-        } else if (commuteType === 'Rickshaw' && rideCategory === undefined) {
-            // Safety parsing fallback
+
+        // BUG FIX: statusFilter can contain a second '?' placeholder (the
+        // "AND tp.ride_category = ?" branch above, for any commuteType outside Cab/Own
+        // whose rideCategory is neither 'Instant' nor 'Planned'). That placeholder
+        // previously had no matching value pushed into queryParams at all, which made
+        // mysql2 throw a bind-parameters error on every query that hit this branch —
+        // silently producing an empty/failed response even though matching trips existed
+        // in the DB. Push it here, in the same order it appears in the query text (after
+        // the SELECT-clause placeholder, since the WHERE clause comes later).
+        if (statusFilter.includes('tp.ride_category = ?')) {
+            queryParams.push(rideCategory);
         }
 
         const query = `
