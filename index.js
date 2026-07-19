@@ -1607,7 +1607,7 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
     let statusFilter = "tp.status = 'Trip Active'";
     let dbTimeField = 'time';
 
-    // 1. FIXED: Replaced all local NOW() checks with UTC_TIMESTAMP() to fix visibility sync issues
+    // FIXED: Replaced local NOW() context checks with standard UTC_TIMESTAMP() parameters
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
@@ -1683,11 +1683,10 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
             ORDER BY tp.id DESC
         `;
 
-        // Pass destinationName and the logged-in viewerId cleanly
         const [users] = await db.query(query, [destinationName, viewerId]);
 
         const responseUsers = users.map(user => {
-            // 2. FIXED: Safely read database field values before any external privacy mutation can touch them
+            // FIXED: Isolating field variable reference mapping cleanly before external mutations
             const rawMobile = user.mobile_number; 
 
             return {
@@ -1706,7 +1705,7 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
                 service_provider: user.service_provider,
                 vehicle_number: user.vehicle_number || "",
                 fare: String(user.fare),
-                mobileNumber: rawMobile || null, // Clean injection directly into client mapping payload
+                mobileNumber: rawMobile || null, // Delivers the required data structure to Android model parameters
                 profilePic: getVisibleProfilePic(user, parseInt(viewerId), new Set())
             };
         });
