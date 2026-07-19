@@ -1514,23 +1514,25 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         destinationCol = 'destination';
         // Personal vehicles are implicitly Planned, visible until departure
         statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > UTC_TIMESTAMP()";
-        } else {
+    } else {
+        // Fallback or explicit evaluation window for Rickshaws / standard travel plans
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
 
         if (rideCategory === 'Instant') {
-            // Visible for 10 minutes post-creation
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(NOW(), INTERVAL 10 MINUTE)";
+            // FIXED: Using UTC_TIMESTAMP() to calculate the 10-minute post-creation buffer window accurately
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)";
         } else if (rideCategory === 'Planned') {
-            // Visible until departure
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.time > NOW()";
+            // FIXED: Changed NOW() to UTC_TIMESTAMP() so UTC formatted strings compare accurately
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.time > UTC_TIMESTAMP()";
             if (rideCategory) {
                 statusFilter += ` AND tp.ride_category = ?`;
             }
         }
     }
+
     try {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
@@ -1595,9 +1597,8 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
 });
 
 app.get("/users/destination", authenticateToken, async (req, res) => {
-    // SECURITY FIX: identity from the verified token, not the request query — this excludes
-    // your own trips from the results and gates profile-picture visibility.
-    const userId = req.user.id;
+    // SECURITY FIX: identity from the verified token, not the request query
+    const viewerId = req.user.id; 
     const { groupId, commuteType, destinationName, rideCategory } = req.query;
 
     let tableName = 'travel_plans';
@@ -1606,6 +1607,7 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
     let statusFilter = "tp.status = 'Trip Active'";
     let dbTimeField = 'time';
 
+    // 1. FIXED: Replaced all local NOW() checks with UTC_TIMESTAMP() to fix visibility sync issues
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
@@ -1614,18 +1616,18 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         if (rideCategory === 'Instant') {
             statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant'";
         } else if (rideCategory === 'Planned') {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > UTC_TIMESTAMP() AND tp.ride_category = 'Planned'";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > UTC_TIMESTAMP()";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
         dbTimeField = 'travel_time';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > UTC_TIMESTAMP()";
     } else {
-        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
+        statusFilter = "tp.status = 'Trip Active' AND tp.time > UTC_TIMESTAMP()";
         if (rideCategory) {
             statusFilter += ` AND tp.ride_category = ${db.escape(rideCategory)}`;
         }
@@ -1643,8 +1645,6 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         } else if (commuteType === 'Own') {
             categorySelection = "'Planned'";
             providerSelection = "'Own Vehicle'";
-            
-            // Fixed lines to target live structural properties from your table description
             vehicleSelection  = "tp.vehicle_number";
             fareSelection     = "tp.estimated_fare";
             mobileSelection   = "tp.mobile_number"; 
@@ -1683,28 +1683,33 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
             ORDER BY tp.id DESC
         `;
 
-        const [users] = await db.query(query, [destinationName, userId]);
+        // Pass destinationName and the logged-in viewerId cleanly
+        const [users] = await db.query(query, [destinationName, viewerId]);
 
+        const responseUsers = users.map(user => {
+            // 2. FIXED: Safely read database field values before any external privacy mutation can touch them
+            const rawMobile = user.mobile_number; 
 
-        const responseUsers = users.map(user => ({
-            id: user.id,
-            userId: user.userId,
-            user_id: user.username_handle,
-            name: user.name,
-            workCategory: user.work_category,
-            workDetail: user.work_detail,
-            gender: user.gender,
-            fromPlace: user.fromPlace,
-            toPlace: user.toPlace,
-            time: user.time,
-            landmark: user.landmark || "",
-            ride_category: user.ride_category,
-            service_provider: user.service_provider,
-            vehicle_number: user.vehicle_number || "",
-            fare: String(user.fare),
-            mobileNumber: user.mobile_number || null, 
-            profilePic: getVisibleProfilePic(user, parseInt(userId), new Set())
-        }));
+            return {
+                id: user.id,
+                userId: user.userId,
+                user_id: user.username_handle,
+                name: user.name,
+                workCategory: user.work_category,
+                workDetail: user.work_detail,
+                gender: user.gender,
+                fromPlace: user.fromPlace,
+                toPlace: user.toPlace,
+                time: user.time,
+                landmark: user.landmark || "",
+                ride_category: user.ride_category,
+                service_provider: user.service_provider,
+                vehicle_number: user.vehicle_number || "",
+                fare: String(user.fare),
+                mobileNumber: rawMobile || null, // Clean injection directly into client mapping payload
+                profilePic: getVisibleProfilePic(user, parseInt(viewerId), new Set())
+            };
+        });
 
         res.json({ success: true, users: responseUsers });
 
