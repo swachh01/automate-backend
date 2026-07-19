@@ -1485,6 +1485,8 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
     }
 });
 
+// ================= FETCH DESTINATIONS BY TYPE (RICKSHAW / CAB / OWN) =================
+
 app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res) => {
     // SECURITY FIX: identity from the verified token, not the request query
     const userId = req.user.id;
@@ -1495,38 +1497,36 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
     let statusFilter = "tp.status = 'Trip Active'";
     const queryParams = []; 
 
-    // CHANGE: Adjusted visibility windows to match requirements precisely
+    // OPTION A: Using NOW() uniformly to match backend creation calculation metrics perfectly
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
         
         if (rideCategory === 'Instant') {
             // Visible for 10 minutes post-creation (Leaves 10 minutes remaining on the 20-min buffer)
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.travel_datetime > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)";
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.travel_datetime > DATE_ADD(NOW(), INTERVAL 10 MINUTE)";
         } else if (rideCategory === 'Planned') {
             // Visible until the exact departure moment
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.travel_datetime > UTC_TIMESTAMP()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.travel_datetime > NOW()";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > UTC_TIMESTAMP()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
         // Personal vehicles are implicitly Planned, visible until departure
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > UTC_TIMESTAMP()";
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
     } else {
         // Fallback or explicit evaluation window for Rickshaws / standard travel plans
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
 
         if (rideCategory === 'Instant') {
-            // FIXED: Using UTC_TIMESTAMP() to calculate the 10-minute post-creation buffer window accurately
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)";
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(NOW(), INTERVAL 10 MINUTE)";
         } else if (rideCategory === 'Planned') {
-            // FIXED: Changed NOW() to UTC_TIMESTAMP() so UTC formatted strings compare accurately
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.time > NOW()";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.time > UTC_TIMESTAMP()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
             if (rideCategory) {
                 statusFilter += ` AND tp.ride_category = ?`;
             }
@@ -1548,17 +1548,9 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         }
 
         // The SUM(CASE ...) placeholder always comes first in the compiled SQL text
-        // (it's in the SELECT clause, before the WHERE clause), so it must be pushed first.
         queryParams.push(userId);
 
-        // BUG FIX: statusFilter can contain a second '?' placeholder (the
-        // "AND tp.ride_category = ?" branch above, for any commuteType outside Cab/Own
-        // whose rideCategory is neither 'Instant' nor 'Planned'). That placeholder
-        // previously had no matching value pushed into queryParams at all, which made
-        // mysql2 throw a bind-parameters error on every query that hit this branch —
-        // silently producing an empty/failed response even though matching trips existed
-        // in the DB. Push it here, in the same order it appears in the query text (after
-        // the SELECT-clause placeholder, since the WHERE clause comes later).
+        // BUG FIX: statusFilter placeholder alignment maintenance
         if (statusFilter.includes('tp.ride_category = ?')) {
             queryParams.push(rideCategory);
         }
@@ -1596,6 +1588,8 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
     }
 });
 
+// ================= FETCH USERS GATHERED BY SPECIFIC DESTINATION =================
+
 app.get("/users/destination", authenticateToken, async (req, res) => {
     // SECURITY FIX: identity from the verified token, not the request query
     const viewerId = req.user.id; 
@@ -1607,7 +1601,7 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
     let statusFilter = "tp.status = 'Trip Active'";
     let dbTimeField = 'time';
 
-    // FIXED: Replaced local NOW() context checks with standard UTC_TIMESTAMP() parameters
+    // OPTION A: Using NOW() systematically across context structures
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
@@ -1616,18 +1610,18 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         if (rideCategory === 'Instant') {
             statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant'";
         } else if (rideCategory === 'Planned') {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > UTC_TIMESTAMP() AND tp.ride_category = 'Planned'";
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW() AND tp.ride_category = 'Planned'";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > UTC_TIMESTAMP()";
+            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > NOW()";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
         dbTimeField = 'travel_time';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > UTC_TIMESTAMP()";
+        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > NOW()";
     } else {
-        statusFilter = "tp.status = 'Trip Active' AND tp.time > UTC_TIMESTAMP()";
+        statusFilter = "tp.status = 'Trip Active' AND tp.time > NOW()";
         if (rideCategory) {
             statusFilter += ` AND tp.ride_category = ${db.escape(rideCategory)}`;
         }
@@ -1686,7 +1680,6 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         const [users] = await db.query(query, [destinationName, viewerId]);
 
         const responseUsers = users.map(user => {
-            // FIXED: Isolating field variable reference mapping cleanly before external mutations
             const rawMobile = user.mobile_number; 
 
             return {
@@ -1705,7 +1698,7 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
                 service_provider: user.service_provider,
                 vehicle_number: user.vehicle_number || "",
                 fare: String(user.fare),
-                mobileNumber: rawMobile || null, // Delivers the required data structure to Android model parameters
+                mobileNumber: rawMobile || null, 
                 profilePic: getVisibleProfilePic(user, parseInt(viewerId), new Set())
             };
         });
