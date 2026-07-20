@@ -1708,33 +1708,33 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
 
         queryParams.push(destinationName, viewerId);
 
-        const query = `
-            SELECT
-                u.id,           
-                u.id as userId, 
-                u.user_id as username_handle,
-                CONCAT(u.first_name, ' ', u.last_name) as name,
-                u.work_category,
-                u.work_detail,
-                u.gender,
-                u.dob,
-                u.profile_pic,
-                u.profile_visibility,
-                tp.${fromCol} as fromPlace,
-                tp.${toCol} as toPlace,
-                tp.meet_at,
-                DATE_FORMAT(tp.${dbTimeField}, '%Y-%m-%dT%H:%i:%s.000Z') as time,
-                tp.landmark,
-                COALESCE(${categorySelection}, 'Planned') as ride_category,       
-                COALESCE(${providerSelection}, 'AutoMate') as service_provider, 
-                ${vehicleSelection} as vehicle_number,
-                COALESCE(${fareSelection}, 0.00) as fare,
-                ${mobileSelection} as mobile_number
-            FROM ${tableName} tp
-            JOIN users u ON tp.user_id = u.id
-            WHERE ${statusFilter} AND tp.${toCol} = ? AND tp.user_id != ?
-            ORDER BY tp.id DESC
-        `;
+
+        // Inside your endpoint query builder for fetching passenger lists:
+const query = `
+    SELECT
+        u.id,           
+        u.id as userId, 
+        u.user_id as username_handle,
+        CONCAT(u.first_name, ' ', u.last_name) as name,
+        u.work_category,
+        u.work_detail,
+        u.gender,
+        tp.${fromCol} as fromPlace,
+        tp.${toCol} as toPlace,
+        tp.meet_at,
+        DATE_FORMAT(tp.${dbTimeField}, '%Y-%m-%dT%H:%i:%s.000Z') as time,
+        tp.landmark,
+        COALESCE(${categorySelection}, 'Planned') as ride_category,       
+        COALESCE(${providerSelection}, 'AutoMate') as service_provider, 
+        ${vehicleSelection} as vehicle_number,
+        COALESCE(${fareSelection}, 0.00) as fare,
+        ${mobileSelection} as mobile_number
+    FROM ${tableName} tp
+    JOIN users u ON tp.user_id = u.id
+    WHERE ${statusFilter} AND tp.${toCol} = ? AND tp.user_id != ?
+    -- FIXED: Ensure there is NO "GROUP BY tp.user_id" statement here so separate days print sequentially!
+    ORDER BY tp.id DESC
+`;
 
         const [users] = await db.query(query, queryParams);
 
