@@ -1086,23 +1086,25 @@ app.post("/addTravelPlan", authenticateToken, async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert core tracking travel plan record using safe dynamic database evaluation
+        // 1. Locate the planQuery inside app.post("/addTravelPlan") and update columns/placeholders
         const planQuery = `
           INSERT INTO travel_plans 
             (user_id, from_place, to_place, time, status, 
              from_place_lat, from_place_lng, to_place_lat, to_place_lng, 
-             landmark, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare, 
+             landmark, meet_at, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare, 
              created_at, updated_at) 
           VALUES (?, ?, ?, 
-             CASE WHEN ? = 'Instant' THEN DATE_ADD(NOW(), INTERVAL 20 MINUTE) ELSE ? END, 
-             'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+             CASE WHEN ? = 'Instant' THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 6 MINUTE) ELSE ? END, 
+             'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP());
         `;
 
+        // 2. Update the matching execution parameters array exactly like this:
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace,
             ride_category, formattedTime,
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
             landmark || "Instant Booking",
+            req.body.pickupAt || null, // <─── THIS GRABS THE FRONTEND FIELD AND SAVES IT TO MEET_AT
             ride_category,
             service_provider,
             vehicle_number,
@@ -1110,7 +1112,7 @@ app.post("/addTravelPlan", authenticateToken, async (req, res) => {
             mobile_number,
             fare
         ]);
-
+        
         const newPlanId = planResult.insertId;
         if (!newPlanId) {
              await connection.rollback();
