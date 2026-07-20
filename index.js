@@ -1549,10 +1549,11 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         // For Rickshaw (travel_plans), group by destination name and date (cast to DATE to ignore hours/minutes)
         let dateGrouping = commuteType === 'Cab' ? "DATE(tp.travel_datetime)" : (commuteType === 'Own' ? "DATE(tp.travel_time)" : "DATE(tp.time)");
 
+
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
-                COUNT(*) as userCount,
+                COUNT(DISTINCT tp.user_id) as userCount, -- FIXED: Counts distinct people traveling
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
                 g.group_id,
                 MAX(${vehicleSelector}) AS vehicle_number,
@@ -1561,7 +1562,7 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
-            GROUP BY tp.${destinationCol}, g.group_id, ${dateGrouping} -- FIXED: Added date to grouping
+            GROUP BY tp.${destinationCol}, g.group_id, ${categorySelector}
             ORDER BY userCount DESC
         `;
 
