@@ -1259,23 +1259,25 @@ app.post("/addCabTravelPlan", authenticateToken, async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        // 1. Insert core tracking travel plan record using safe dynamic database evaluation
+        // 1. Update the INSERT query columns map and target values structure
         const planQuery = `
           INSERT INTO travel_plans_cab
             (user_id, pickup_location, destination, travel_datetime, status,
              from_place_lat, from_place_lng, to_place_lat, to_place_lng,
-             landmark, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare,
+             landmark, meet_at, ride_category, service_provider, vehicle_number, instant_fare, mobile_number, fare,
              created_at, updated_at)
           VALUES (?, ?, ?, 
-             CASE WHEN ? = 'Instant' THEN DATE_ADD(NOW(), INTERVAL 20 MINUTE) ELSE ? END, 
-             'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW());
+             CASE WHEN ? = 'Instant' THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 6 MINUTE) ELSE ? END, 
+             'Trip Active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP());
         `;
 
+        // 2. Add req.body.pickupAt to the dynamic parameter array execution block
         const [planResult] = await connection.query(planQuery, [
             userId, fromPlace, toPlace,
             ride_category, formattedTime,
             fromPlaceLat, fromPlaceLng, toPlaceLat, toPlaceLng,
             landmark || "Instant Booking",
+            req.body.pickupAt || null, // <─── SAVES THE MEET AT VALUE TO YOUR NEW DB COLUMN
             ride_category,
             service_provider,
             vehicle_number,
