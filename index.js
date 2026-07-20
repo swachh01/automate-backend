@@ -1529,10 +1529,15 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         }
     }
 
-    try {
+   try {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
-        let categorySelector = commuteType === 'Own' ? "'Planned'" : "MAX(tp.ride_category)";
+        
+        // 1. SELECT uses aggregate mappings for dynamically evaluated expressions
+        let selectCategoryExpr = commuteType === 'Own' ? "'Planned'" : "MAX(tp.ride_category)";
+        
+        // 2. GROUP BY uses the actual raw database field column or hardcoded structural definitions
+        let groupByCategoryExpr = commuteType === 'Own' ? "'Planned'" : "tp.ride_category";
 
         if (commuteType === 'Rickshaw' || commuteType === 'Cab' || commuteType === 'Own') {
             vehicleSelector = "tp.vehicle_number";
@@ -1546,23 +1551,20 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
 
         queryParams.unshift(userId);
 
-        // For Rickshaw (travel_plans), group by destination name and date (cast to DATE to ignore hours/minutes)
-        let dateGrouping = commuteType === 'Cab' ? "DATE(tp.travel_datetime)" : (commuteType === 'Own' ? "DATE(tp.travel_time)" : "DATE(tp.time)");
-
-
+        // FIXED: selectCategoryExpr handles the SELECT clause, and groupByCategoryExpr safely handles GROUP BY
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
-                COUNT(DISTINCT tp.user_id) as userCount, -- FIXED: Counts distinct people traveling
+                COUNT(DISTINCT tp.user_id) as userCount,
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
                 g.group_id,
                 MAX(${vehicleSelector}) AS vehicle_number,
                 MAX(${fareSelector}) AS instant_fare,
-                ${categorySelector} as ride_category
+                ${selectCategoryExpr} as ride_category
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
-            GROUP BY tp.${destinationCol}, g.group_id, ${categorySelector}
+            GROUP BY tp.${destinationCol}, g.group_id, ${groupByCategoryExpr}
             ORDER BY userCount DESC
         `;
 
@@ -1579,6 +1581,7 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         }));
 
         res.json({ success: true, destinations: formattedDestinations });
+
     } catch (err) {
         console.error("Error fetching filtered destinations:", err);
         res.status(500).json({ success: false, message: "Database error" });
