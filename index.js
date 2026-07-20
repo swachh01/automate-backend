@@ -1546,6 +1546,9 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
 
         queryParams.unshift(userId);
 
+        // For Rickshaw (travel_plans), group by destination name and date (cast to DATE to ignore hours/minutes)
+        let dateGrouping = commuteType === 'Cab' ? "DATE(tp.travel_datetime)" : (commuteType === 'Own' ? "DATE(tp.travel_time)" : "DATE(tp.time)");
+
         const query = `
             SELECT 
                 tp.${destinationCol} as destination, 
@@ -1558,7 +1561,7 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
-            GROUP BY tp.${destinationCol}, g.group_id
+            GROUP BY tp.${destinationCol}, g.group_id, ${dateGrouping} -- FIXED: Added date to grouping
             ORDER BY userCount DESC
         `;
 
@@ -1578,6 +1581,31 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
     } catch (err) {
         console.error("Error fetching filtered destinations:", err);
         res.status(500).json({ success: false, message: "Database error" });
+    }
+});
+
+app.get("/travel-plans/check-duplicate", authenticateToken, async (req, res) => {
+    const { fromPlace, toPlace, date } = req.query;
+    const userId = req.user.id;
+
+    try {
+        const query = `
+            SELECT id FROM travel_plans 
+            WHERE user_id = ? 
+              AND from_place = ? 
+              AND to_place = ? 
+              AND DATE(time) = DATE(?) 
+              AND status = 'Trip Active'
+            LIMIT 1
+        `;
+        const [rows] = await db.query(query, [userId, fromPlace, toPlace, date]);
+
+        if (rows.length > 0) {
+            return res.json({ isDuplicate: true, existingTripId: rows[0].id });
+        }
+        res.json({ isDuplicate: false });
+    } catch (err) {
+        res.status(500).json({ isDuplicate: false });
     }
 });
 
