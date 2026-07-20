@@ -1589,19 +1589,38 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
 });
 
 app.get("/travel-plans/check-duplicate", authenticateToken, async (req, res) => {
-    const { fromPlace, toPlace, date } = req.query;
     const userId = req.user.id;
+    const { fromPlace, toPlace, date, commuteType } = req.query;
+
+    let tableName = 'travel_plans';
+    let fromCol = 'from_place';
+    let toCol = 'to_place';
+    let timeCol = 'time';
+
+    if (commuteType === 'Cab') {
+        tableName = 'travel_plans_cab';
+        fromCol = 'pickup_location';
+        toCol = 'destination';
+        timeCol = 'travel_datetime';
+    } else if (commuteType === 'Own') {
+        tableName = 'travel_plans_own';
+        fromCol = 'pickup_location';
+        toCol = 'destination';
+        timeCol = 'travel_time';
+    }
 
     try {
+        // Using LIKE or clean DATE string formatting ensures timezone offsets don't break the match
         const query = `
-            SELECT id FROM travel_plans 
+            SELECT id FROM ${tableName} 
             WHERE user_id = ? 
-              AND from_place = ? 
-              AND to_place = ? 
-              AND DATE(time) = DATE(?) 
+              AND ${fromCol} = ? 
+              AND ${toCol} = ? 
+              AND DATE_FORMAT(${timeCol}, '%Y-%m-%d') = DATE_FORMAT(?, '%Y-%m-%d')
               AND status = 'Trip Active'
             LIMIT 1
         `;
+        
         const [rows] = await db.query(query, [userId, fromPlace, toPlace, date]);
 
         if (rows.length > 0) {
@@ -1609,6 +1628,7 @@ app.get("/travel-plans/check-duplicate", authenticateToken, async (req, res) => 
         }
         res.json({ isDuplicate: false });
     } catch (err) {
+        console.error("Error checking duplicate trip:", err);
         res.status(500).json({ isDuplicate: false });
     }
 });
