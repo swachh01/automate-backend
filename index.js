@@ -1485,10 +1485,7 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
     }
 });
 
-// ================= FETCH DESTINATIONS BY TYPE (RICKSHAW / CAB / OWN) =================
-
 app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res) => {
-    // SECURITY FIX: identity from the verified token, not the request query
     const userId = req.user.id;
     const { commuteType, rideCategory } = req.query;
 
@@ -1497,50 +1494,30 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
     let statusFilter = "tp.status = 'Trip Active'";
     const queryParams = []; 
 
-    // Generate strict absolute UTC ISO string matching database format requirements
-    const currentUtcTimeStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
-
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
         
         if (rideCategory === 'Instant') {
-            // Visible for 10 minutes post-creation (Leaves 10 minutes remaining on the 20-min buffer)
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant' AND tp.travel_datetime > DATE_ADD(?, INTERVAL 10 MINUTE)";
-            queryParams.push(currentUtcTimeStr);
-        } else if (rideCategory === 'Planned') {
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Planned' AND tp.travel_datetime > ?";
-            queryParams.push(currentUtcTimeStr);
+            // Instant plans last 6 minutes. Check if current time has passed creation + 6 minutes.
+            statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > ?";
-            queryParams.push(currentUtcTimeStr);
+            statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > ?";
-        queryParams.push(currentUtcTimeStr);
+        statusFilter += " AND CONVERT_TZ(tp.travel_time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
     } else {
-        // Fallback to standard travel_plans table
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
-
-        // Apply explicit filter condition for commute_type column matching table structural records
         statusFilter += " AND (tp.commute_type = 'Rickshaw' OR tp.commute_type IS NULL)";
 
         if (rideCategory === 'Instant') {
-            statusFilter += " AND tp.ride_category = 'Instant' AND tp.time > DATE_ADD(?, INTERVAL 10 MINUTE)";
-            queryParams.push(currentUtcTimeStr);
-        } else if (rideCategory === 'Planned') {
-            statusFilter += " AND tp.ride_category = 'Planned' AND tp.time > ?";
-            queryParams.push(currentUtcTimeStr);
+            // Instant plans last 6 minutes. Check if current time has passed creation + 6 minutes.
+            statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
         } else {
-            statusFilter += " AND tp.time > ?";
-            queryParams.push(currentUtcTimeStr);
-            if (rideCategory) {
-                statusFilter += ` AND tp.ride_category = ?`;
-                queryParams.push(rideCategory);
-            }
+            statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
         }
     }
 
@@ -1558,7 +1535,6 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
             fareSelector = "tp.estimated_fare";
         }
 
-        // Push userId first to match the projection placeholder arrangement
         queryParams.unshift(userId);
 
         const query = `
@@ -1594,64 +1570,47 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
     }
 });
 
-// ================= FETCH USERS GATHERED BY SPECIFIC DESTINATION =================
-
 app.get("/users/destination", authenticateToken, async (req, res) => {
-    // SECURITY FIX: identity from the verified token, not the request query
     const viewerId = req.user.id; 
     const { groupId, commuteType, destinationName, rideCategory } = req.query;
 
     let tableName = 'travel_plans';
     let fromCol = 'from_place';
     let toCol = 'to_place';
-    let statusFilter = "tp.status = 'Trip Active'";
     let dbTimeField = 'time';
+    let statusFilter = "tp.status = 'Trip Active'";
     
     const queryParams = [];
-    const currentUtcTimeStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         fromCol = 'pickup_location';
         toCol = 'destination';
         dbTimeField = 'travel_datetime';
+        
         if (rideCategory === 'Instant') {
-            statusFilter = "tp.status = 'Trip Active' AND tp.ride_category = 'Instant'";
-        } else if (rideCategory === 'Planned') {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > ? AND tp.ride_category = 'Planned'";
-            queryParams.push(currentUtcTimeStr);
+            statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
         } else {
-            statusFilter = "tp.status = 'Trip Active' AND tp.travel_datetime > ?";
-            queryParams.push(currentUtcTimeStr);
+            statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         fromCol = 'pickup_location';
         toCol = 'destination';
         dbTimeField = 'travel_time';
-        statusFilter = "tp.status = 'Trip Active' AND tp.travel_time > ?";
-        queryParams.push(currentUtcTimeStr);
+        statusFilter += " AND CONVERT_TZ(tp.travel_time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
     } else {
         tableName = 'travel_plans';
         fromCol = 'from_place';
         toCol = 'to_place';
         dbTimeField = 'time';
 
-        // Apply explicit filter condition for commute_type column matching table structural records
         statusFilter += " AND (tp.commute_type = 'Rickshaw' OR tp.commute_type IS NULL)";
 
         if (rideCategory === 'Instant') {
-            statusFilter += " AND tp.ride_category = 'Instant'";
-        } else if (rideCategory === 'Planned') {
-            statusFilter += " AND tp.time > ? AND tp.ride_category = 'Planned'";
-            queryParams.push(currentUtcTimeStr);
+            statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
         } else {
-            statusFilter += " AND tp.time > ?";
-            queryParams.push(currentUtcTimeStr);
-            if (rideCategory) {
-                statusFilter += ` AND tp.ride_category = ?`;
-                queryParams.push(rideCategory);
-            }
+            statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
         }
     }
 
@@ -1678,7 +1637,6 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
             mobileSelection   = "tp.mobile_number"; 
         }
 
-        // Append remaining positional criteria values to complete array pattern
         queryParams.push(destinationName, viewerId);
 
         const query = `
@@ -1723,7 +1681,7 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
                 gender: user.gender,
                 fromPlace: user.fromPlace,
                 toPlace: user.toPlace,
-                time: user.time, // Standard ISO format. App side will interpret string locally as IST.
+                time: user.time, 
                 landmark: user.landmark || "",
                 ride_category: user.ride_category,
                 service_provider: user.service_provider,
