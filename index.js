@@ -1499,10 +1499,12 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         destinationCol = 'destination';
         
         if (rideCategory === 'Instant') {
-            // Instant plans last 6 minutes. Check if current time has passed creation + 6 minutes.
             statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
-        } else {
+        } else if (rideCategory === 'Planned') {
             statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
+        } else {
+            statusFilter += " AND ((tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)) OR 
+(tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')))";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
@@ -1514,16 +1516,20 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         statusFilter += " AND (tp.commute_type = 'Rickshaw' OR tp.commute_type IS NULL)";
 
         if (rideCategory === 'Instant') {
-            // Instant plans last 6 minutes. Check if current time has passed creation + 6 minutes.
             statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
-        } else {
+        } else if (rideCategory === 'Planned') {
             statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
+        } else {
+            statusFilter += " AND ((tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)) OR 
+(tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')))";
         }
     }
 
     try {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
+        // FIXED: Enforce clear, reliable category strings mapping matching layout targets fallback
+        let categorySelector = commuteType === 'Own' ? "'Planned'" : "MAX(tp.ride_category)";
 
         if (commuteType === 'Rickshaw' || commuteType === 'Cab' || commuteType === 'Own') {
             vehicleSelector = "tp.vehicle_number";
@@ -1544,7 +1550,8 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
                 g.group_id,
                 MAX(${vehicleSelector}) AS vehicle_number,
-                MAX(${fareSelector}) AS instant_fare
+                MAX(${fareSelector}) AS instant_fare,
+                ${categorySelector} as ride_category
             FROM ${tableName} tp
             LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
@@ -1560,7 +1567,8 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
             userCount: d.userCount,
             isCurrentUserGoing: d.isCurrentUserGoing,
             vehicleNumber: d.vehicle_number || null, 
-            instantFare: d.instant_fare || null      
+            instantFare: d.instant_fare || null,
+            ride_category: d.ride_category || rideCategory || 'Planned' // FIXED: Returns ride_category cleanly to match GSON parsing models
         }));
 
         res.json({ success: true, destinations: formattedDestinations });
@@ -1590,8 +1598,11 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         
         if (rideCategory === 'Instant') {
             statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
-        } else {
+        } else if (rideCategory === 'Planned') {
             statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
+        } else {
+            statusFilter += " AND ((tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)) OR 
+(tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')))";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
@@ -1609,8 +1620,11 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
 
         if (rideCategory === 'Instant') {
             statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
-        } else {
+        } else if (rideCategory === 'Planned') {
             statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
+        } else {
+            statusFilter += " AND ((tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)) OR 
+(tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')))";
         }
     }
 
