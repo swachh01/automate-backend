@@ -1708,10 +1708,10 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         queryParams.push(destinationName, viewerId);
 
 
-        const query = `
+        // Update the SELECT query in /users/destination:
+const query = `
     SELECT
-        tp.id as tripId,
-        u.id,           
+        tp.id as tripId,                       -- <--- ADD UNIQUE TRIP ID HERE
         u.id as userId, 
         u.user_id as username_handle,
         CONCAT(u.first_name, ' ', u.last_name) as name,
@@ -1734,32 +1734,34 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
     ORDER BY tp.id DESC
 `;
 
-        const [users] = await db.query(query, queryParams);
+const [users] = await db.query(query, queryParams);
 
-        const responseUsers = users.map(user => {
-            const rawMobile = user.mobile_number; 
+const responseUsers = users.map(user => {
+    const rawMobile = user.mobile_number; 
 
-            return {
-                id: user.id,
-                userId: user.userId,
-                user_id: user.username_handle,
-                name: user.name,
-                workCategory: user.work_category,
-                workDetail: user.work_detail,
-                gender: user.gender,
-                fromPlace: user.fromPlace,
-                toPlace: user.toPlace,
-                meetAt: user.meet_at || null,
-                time: user.time, 
-                landmark: user.landmark || "",
-                ride_category: user.ride_category,
-                service_provider: user.service_provider,
-                vehicle_number: user.vehicle_number || "",
-                fare: String(user.fare),
-                mobileNumber: rawMobile || null, 
-                profilePic: getVisibleProfilePic(user, parseInt(viewerId), new Set())
-            };
-        });
+    return {
+        id: user.tripId,               -- <--- USE UNIQUE tripId HERE INSTEAD OF u.id
+        tripId: user.tripId,           -- <--- TRIP ID
+        userId: user.userId,           -- <--- USER ACCOUNT ID
+        user_id: user.username_handle,
+        name: user.name,
+        workCategory: user.work_category,
+        workDetail: user.work_detail,
+        gender: user.gender,
+        fromPlace: user.fromPlace,
+        toPlace: user.toPlace,
+        meetAt: user.meet_at || null,
+        time: user.time, 
+        landmark: user.landmark || "",
+        ride_category: user.ride_category,
+        service_provider: user.service_provider,
+        vehicle_number: user.vehicle_number || "",
+        fare: String(user.fare),
+        mobileNumber: rawMobile || null, 
+        profilePic: getVisibleProfilePic(user, parseInt(viewerId), new Set())
+    };
+});
+
 
         res.json({ success: true, users: responseUsers });
 
