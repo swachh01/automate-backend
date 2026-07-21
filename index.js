@@ -1575,15 +1575,12 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
 
     let tableName;
     let destinationCol;
-    let groupIdCol;
     let statusFilter = "tp.status = 'Trip Active'";
-    const queryParams = [];
+    const queryParams = []; 
 
-    // 1. Dynamic table configuration based on commute type
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
-        groupIdCol = 'destination_group_id'; // schema column name
         
         if (rideCategory === 'Instant') {
             statusFilter += " AND tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)";
@@ -1596,12 +1593,10 @@ UTC_TIMESTAMP()))`;
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
-        groupIdCol = 'destination_group_id';
         statusFilter += " AND tp.travel_time > UTC_TIMESTAMP()";
-    } else { // Default: Rickshaw
+    } else { // Rickshaw
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
-        groupIdCol = 'destination_group_id';
         statusFilter += " AND (tp.commute_type = 'Rickshaw' OR tp.commute_type IS NULL)";
 
         if (rideCategory === 'Instant') {
@@ -1616,6 +1611,9 @@ UTC_TIMESTAMP()))`;
     try {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
+        
+        let selectCategoryExpr = commuteType === 'Own' ? "'Planned'" : "MAX(tp.ride_category)";
+        let groupByCategoryExpr = commuteType === 'Own' ? "'Planned'" : "tp.ride_category";
 
         if (commuteType === 'Rickshaw' || commuteType === 'Cab' || commuteType === 'Own') {
             vehicleSelector = "tp.vehicle_number";
@@ -1629,37 +1627,38 @@ UTC_TIMESTAMP()))`;
 
         queryParams.unshift(userId);
 
-        // 2. Query selecting destination_group_id AS groupId
         const query = `
             SELECT 
-                tp.${groupIdCol} AS groupId, 
-                tp.${destinationCol} AS destination, 
-                COUNT(DISTINCT tp.user_id) AS userCount,
+                tp.${destinationCol} as destination, 
+                COUNT(DISTINCT tp.user_id) as userCount,
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
-                MAX(${vehicleSelector}) AS vehicleNumber,
-                MAX(${fareSelector}) AS instantFare,
-                COALESCE(MAX(tp.ride_category), 'Planned') AS ride_category
+                g.group_id,
+                MAX(${vehicleSelector}) AS vehicle_number,
+                MAX(${fareSelector}) AS instant_fare,
+                ${selectCategoryExpr} as ride_category
             FROM ${tableName} tp
+            LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
-            GROUP BY tp.${groupIdCol}, tp.${destinationCol}
+            GROUP BY tp.${destinationCol}, g.group_id, ${groupByCategoryExpr}
             ORDER BY userCount DESC
         `;
 
         const [destinations] = await db.query(query, queryParams);
-
+        
         const formattedDestinations = destinations.map(d => ({
-            groupId: d.groupId, 
+            groupId: d.group_id, 
             destination: d.destination,
             userCount: d.userCount,
-            isCurrentUserGoing: d.isCurrentUserGoing ? 1 : 0,
-            vehicleNumber: d.vehicleNumber || null, 
-            instantFare: d.instantFare || null,
+            isCurrentUserGoing: d.isCurrentUserGoing,
+            vehicleNumber: d.vehicle_number || null, 
+            instantFare: d.instant_fare || null,
             ride_category: d.ride_category || rideCategory || 'Planned'
         }));
 
         res.json({ success: true, destinations: formattedDestinations });
+
     } catch (err) {
-        console.error("Error fetching destinations by type:", err);
+        console.error("Error fetching filtered destinations:", err);
         res.status(500).json({ success: false, message: "Database error" });
     }
 });
