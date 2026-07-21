@@ -1575,49 +1575,47 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
 
     let tableName;
     let destinationCol;
+    let groupIdCol;
     let statusFilter = "tp.status = 'Trip Active'";
-    const queryParams = []; 
+    const queryParams = [];
 
+    // 1. Dynamic table configuration based on commute type
     if (commuteType === 'Cab') {
         tableName = 'travel_plans_cab';
         destinationCol = 'destination';
+        groupIdCol = 'destination_group_id'; // schema column name
         
         if (rideCategory === 'Instant') {
-            statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
+            statusFilter += " AND tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)";
         } else if (rideCategory === 'Planned') {
-            statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
+            statusFilter += " AND tp.ride_category = 'Planned' AND tp.travel_datetime > UTC_TIMESTAMP()";
         } else {
-            statusFilter += ` AND ((tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)) OR 
-(tp.ride_category = 'Planned' AND CONVERT_TZ(tp.travel_datetime, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')))`;
+            statusFilter += " AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.travel_datetime > 
+UTC_TIMESTAMP()))";
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
         destinationCol = 'destination';
-        statusFilter += " AND CONVERT_TZ(tp.travel_time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
-    } else {
+        groupIdCol = 'destination_group_id';
+        statusFilter += " AND tp.travel_time > UTC_TIMESTAMP()";
+    } else { // Default: Rickshaw
         tableName = 'travel_plans';
         destinationCol = 'to_place'; 
+        groupIdCol = 'destination_group_id';
         statusFilter += " AND (tp.commute_type = 'Rickshaw' OR tp.commute_type IS NULL)";
 
         if (rideCategory === 'Instant') {
-            statusFilter += " AND tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)";
+            statusFilter += " AND tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)";
         } else if (rideCategory === 'Planned') {
-            statusFilter += " AND tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')";
+            statusFilter += " AND tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()";
         } else {
-            statusFilter += ` AND ((tp.ride_category = 'Instant' AND CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') < DATE_ADD(CONVERT_TZ(tp.created_at, '+00:00', '+05:30'), INTERVAL 6 MINUTE)) OR 
-(tp.ride_category = 'Planned' AND CONVERT_TZ(tp.time, '+00:00', '+05:30') > CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')))`;
+            statusFilter += " AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()))";
         }
     }
 
-   try {
+    try {
         let vehicleSelector = "NULL";
         let fareSelector = "NULL";
-        
-        // 1. SELECT uses aggregate mappings for dynamically evaluated expressions
-        let selectCategoryExpr = commuteType === 'Own' ? "'Planned'" : "MAX(tp.ride_category)";
-        
-        // 2. GROUP BY uses the actual raw database field column or hardcoded structural definitions
-        let groupByCategoryExpr = commuteType === 'Own' ? "'Planned'" : "tp.ride_category";
 
         if (commuteType === 'Rickshaw' || commuteType === 'Cab' || commuteType === 'Own') {
             vehicleSelector = "tp.vehicle_number";
@@ -1631,39 +1629,37 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
 
         queryParams.unshift(userId);
 
-        // FIXED: selectCategoryExpr handles the SELECT clause, and groupByCategoryExpr safely handles GROUP BY
+        // 2. Query selecting destination_group_id AS groupId
         const query = `
             SELECT 
-                tp.${destinationCol} as destination, 
-                COUNT(DISTINCT tp.user_id) as userCount,
+                tp.${groupIdCol} AS groupId, 
+                tp.${destinationCol} AS destination, 
+                COUNT(DISTINCT tp.user_id) AS userCount,
                 SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
-                g.group_id,
-                MAX(${vehicleSelector}) AS vehicle_number,
-                MAX(${fareSelector}) AS instant_fare,
-                ${selectCategoryExpr} as ride_category
+                MAX(${vehicleSelector}) AS vehicleNumber,
+                MAX(${fareSelector}) AS instantFare,
+                COALESCE(MAX(tp.ride_category), 'Planned') AS ride_category
             FROM ${tableName} tp
-            LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
             WHERE ${statusFilter}
-            GROUP BY tp.${destinationCol}, g.group_id, ${groupByCategoryExpr}
+            GROUP BY tp.${groupIdCol}, tp.${destinationCol}
             ORDER BY userCount DESC
         `;
 
         const [destinations] = await db.query(query, queryParams);
-        
+
         const formattedDestinations = destinations.map(d => ({
-            groupId: d.group_id, 
+            groupId: d.groupId, 
             destination: d.destination,
             userCount: d.userCount,
-            isCurrentUserGoing: d.isCurrentUserGoing,
-            vehicleNumber: d.vehicle_number || null, 
-            instantFare: d.instant_fare || null,
+            isCurrentUserGoing: d.isCurrentUserGoing ? 1 : 0,
+            vehicleNumber: d.vehicleNumber || null, 
+            instantFare: d.instantFare || null,
             ride_category: d.ride_category || rideCategory || 'Planned'
         }));
 
         res.json({ success: true, destinations: formattedDestinations });
-
     } catch (err) {
-        console.error("Error fetching filtered destinations:", err);
+        console.error("Error fetching destinations by type:", err);
         res.status(500).json({ success: false, message: "Database error" });
     }
 });
