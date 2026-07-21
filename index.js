@@ -1740,9 +1740,9 @@ const responseUsers = users.map(user => {
     const rawMobile = user.mobile_number; 
 
     return {
-        id: user.tripId,               -- <--- USE UNIQUE tripId HERE INSTEAD OF u.id
-        tripId: user.tripId,           -- <--- TRIP ID
-        userId: user.userId,           -- <--- USER ACCOUNT ID
+        id: user.tripId,               
+        tripId: user.tripId,           
+        userId: user.userId,           
         user_id: user.username_handle,
         name: user.name,
         workCategory: user.work_category,
