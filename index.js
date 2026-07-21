@@ -838,6 +838,9 @@ app.post("/login", authLimiter, async (req, res) => {
         profile_pic, 
         password, 
         signup_status,
+        failed_login_attempts,
+        locked_until,
+        is_banned,
         COALESCE(bio, '') as bio,
         COALESCE(home_location, '') as home_location,
         home_lat,
@@ -857,6 +860,9 @@ app.post("/login", authLimiter, async (req, res) => {
         profile_pic, 
         password, 
         signup_status,
+        failed_login_attempts,
+        locked_until,
+        is_banned,
         COALESCE(bio, '') as bio,
         COALESCE(home_location, '') as home_location,
         home_lat,
@@ -873,6 +879,35 @@ app.post("/login", authLimiter, async (req, res) => {
 
     const user = rows[0];
 
+    // 1. Check Permanent Ban Status
+    if (user.is_banned === 1) {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is permanently banned due to multiple failed login attempts. Please contact customer support for assistance."
+      });
+    }
+
+    // 2. Check Active Lockout Duration
+    if (user.locked_until) {
+      const lockExpiry = new Date(user.locked_until);
+      const now = new Date();
+
+      if (now < lockExpiry) {
+        let durationMessage = "2 hours";
+        if (user.failed_login_attempts === 5) {
+          durationMessage = "12 hours";
+        } else if (user.failed_login_attempts === 6) {
+          durationMessage = "2 days";
+        }
+
+        return res.status(429).json({
+          success: false,
+          isLocked: true,
+          message: `We noticed suspicious activity. You are restricted from entering your password for ${durationMessage}. You may reset it using Forgot Password or try again later.`
+        });
+      }
+    }
+
     if (user.signup_status === 'pending') {
         return res.status(403).json({ 
             success: false, 
@@ -882,6 +917,7 @@ app.post("/login", authLimiter, async (req, res) => {
         });
     }
 
+    // 3. Password Verification
     let isPasswordValid = false;
 
     if (user.password.startsWith('$2') && user.password.length > 50) {
@@ -894,27 +930,73 @@ app.post("/login", authLimiter, async (req, res) => {
       }
     }
 
+    // 4. Handle Invalid Password Attempt & Apply Penalties
     if (!isPasswordValid) {
-      return res.status(401).json({ success: false, message: `Invalid credentials` });
+      const currentAttempts = user.failed_login_attempts || 0;
+      const newAttempts = currentAttempts + 1;
+      let lockDurationHours = 0;
+      let isBanned = 0;
+      let userResponseMsg = "Invalid credentials. Please try again.";
+
+      if (newAttempts === 4) {
+        lockDurationHours = 2; // 2-Hour Lockout
+        userResponseMsg = "We noticed suspicious activity. Password entry is restricted for 2 hours. You can try again later or click on Forgot Password.";
+      } else if (newAttempts === 5) {
+        lockDurationHours = 12; // 12-Hour Lockout
+        userResponseMsg = "Multiple failed login attempts detected. You are restricted from entering your password for 12 hours. You may click on Forgot Password to reset it.";
+      } else if (newAttempts === 6) {
+        lockDurationHours = 48; // 2 Days (48-Hour) Lockout
+        userResponseMsg = "Security lock triggered: You are restricted from entering your password for 2 days. You may reset your password using Forgot Password anytime.";
+      } else if (newAttempts >= 7) {
+        isBanned = 1; // Permanent Ban
+        userResponseMsg = "Your account has been permanently banned due to excessive failed login attempts. Please contact help/support for assistance.";
+      }
+
+      let updateQuery = `UPDATE users SET failed_login_attempts = ?`;
+      let updateParams = [newAttempts];
+
+      if (isBanned === 1) {
+        updateQuery += `, is_banned = 1 WHERE id = ?`;
+      } else if (lockDurationHours > 0) {
+        updateQuery += `, locked_until = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR) WHERE id = ?`;
+        updateParams.push(lockDurationHours);
+      } else {
+        updateQuery += ` WHERE id = ?`;
+      }
+      updateParams.push(user.id);
+
+      await db.query(updateQuery, updateParams);
+
+      return res.status(401).json({
+        success: false,
+        message: userResponseMsg
+      });
     }
 
+    // 5. Successful Login: Clear Attempt Count & Lock Timers
+    await db.query(
+      `UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?`,
+      [user.id]
+    );
+
     delete user.password;
+    delete user.failed_login_attempts;
+    delete user.locked_until;
+    delete user.is_banned;
 
     const tokenPayload = {
-    id: user.id,
-    user_id: user.user_id
-  };
+      id: user.id,
+      user_id: user.user_id
+    };
 
-  // Sign the token with an expiration timeframe (e.g., 7 days)
-  const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '7d' });
 
-  // Return both the user details and the token back to the client application
-  res.json({ 
-    success: true, 
-    message: "Login successful", 
-    token: token, // Client must save this token (e.g., in secure storage)
-    user: user 
-  });
+    res.json({ 
+      success: true, 
+      message: "Login successful", 
+      token: token, 
+      user: user 
+    });
 
   } catch (err) {
     console.error("/login error:", err);
@@ -922,7 +1004,6 @@ app.post("/login", authLimiter, async (req, res) => {
   }
 });
 
-// Replace your existing app.post("/updateProfile", ...) with this:
 app.post("/updateProfile", authenticateToken, upload.single("profile_pic"), async (req, res) => {
   try {
     console.log("=== Update Profile Request (Stage 4 Complete) ===");
@@ -3285,15 +3366,16 @@ app.post('/reset-password', authLimiter, async (req, res) => {
         if (isSamePassword) {
             return res.status(400).json({
                 success: false,
-                message: "Your new password cannot be the same as your current password. Please choose a different one."
+                message: "Your new password cannot be one of your earlier passwords. Please choose a different one."
             });
         }
 
         const userId = user.id;
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
+        // Clears login restrictions and attempts on successful password reset
         await db.query(
-            'UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', 
+            'UPDATE users SET password = ?, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = ?', 
             [newHashedPassword, userId]
         );
 
