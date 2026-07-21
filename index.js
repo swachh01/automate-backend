@@ -1386,7 +1386,7 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
         // SECURE FIX: Enforce the identity from the authenticated JWT token instead of req.body
         const userId = req.user.id;
 
-        const { vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare, mobileNumber } = req.body;
+        const { vehicleType, vehicleNumber, pickup, destination, time, landmark, estimatedFare, mobileNumber, pickupAt } = req.body;
 
         if (!userId || !destination || !time || !vehicleNumber || !vehicleType) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -1403,8 +1403,9 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
-        const query = `INSERT INTO travel_plans_own (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, estimated_fare, mobile_number, status) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
+        const query = `INSERT INTO travel_plans_own 
+                       (user_id, vehicle_type, vehicle_number, pickup_location, destination, travel_time, landmark, meet_at, estimated_fare, mobile_number, status) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Trip Active')`;
 
         const [ownResult] = await connection.query(query, [
             userId, 
@@ -1414,10 +1415,11 @@ app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
             destination, 
             formattedTime, 
             landmark || null, 
+            pickupAt || null, // <--- SAVES THE MEET AT LOCATION HERE
             estimatedFare || 0.00,
             mobileNumber || null
         ]);
-
+ 
         const groupQuery = `INSERT IGNORE INTO \`group_table\` (group_name) VALUES (?)`; 
         await connection.query(groupQuery, [destination]);
 
@@ -1708,10 +1710,9 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         queryParams.push(destinationName, viewerId);
 
 
-        // Update the SELECT query in /users/destination:
-const query = `
+    const query = `
     SELECT
-        tp.id as tripId,                       -- <--- ADD UNIQUE TRIP ID HERE
+        tp.id as tripId,
         u.id as userId, 
         u.user_id as username_handle,
         CONCAT(u.first_name, ' ', u.last_name) as name,
@@ -1720,7 +1721,7 @@ const query = `
         u.gender,
         tp.${fromCol} as fromPlace,
         tp.${toCol} as toPlace,
-        tp.meet_at,
+        tp.meet_at,                           
         DATE_FORMAT(tp.${dbTimeField}, '%Y-%m-%dT%H:%i:%s.000Z') as time,
         tp.landmark,
         COALESCE(${categorySelection}, 'Planned') as ride_category,       
