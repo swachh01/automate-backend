@@ -1610,13 +1610,12 @@ app.get("/travel-plans/check-duplicate", authenticateToken, async (req, res) => 
     }
 
     try {
-        // Using LIKE or clean DATE string formatting ensures timezone offsets don't break the match
         const query = `
             SELECT id FROM ${tableName} 
             WHERE user_id = ? 
               AND ${fromCol} = ? 
               AND ${toCol} = ? 
-              AND DATE_FORMAT(${timeCol}, '%Y-%m-%d') = DATE_FORMAT(?, '%Y-%m-%d')
+              AND DATE(CONVERT_TZ(${timeCol}, '+00:00', '+05:30')) = DATE(?)
               AND status = 'Trip Active'
             LIMIT 1
         `;
@@ -1709,9 +1708,9 @@ app.get("/users/destination", authenticateToken, async (req, res) => {
         queryParams.push(destinationName, viewerId);
 
 
-        // Inside your endpoint query builder for fetching passenger lists:
-const query = `
+        const query = `
     SELECT
+        tp.id as tripId,
         u.id,           
         u.id as userId, 
         u.user_id as username_handle,
@@ -1732,7 +1731,6 @@ const query = `
     FROM ${tableName} tp
     JOIN users u ON tp.user_id = u.id
     WHERE ${statusFilter} AND tp.${toCol} = ? AND tp.user_id != ?
-    -- FIXED: Ensure there is NO "GROUP BY tp.user_id" statement here so separate days print sequentially!
     ORDER BY tp.id DESC
 `;
 
