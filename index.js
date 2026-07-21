@@ -623,14 +623,13 @@ app.get('/debug/routes', (req, res) => {
   res.json({ routes });
 });
 
-app.get('/api/google-places-autocomplete', authenticateToken, placesAutocompleteLimiter, async (req, res) => {
+app.get('/api/google-places-autocomplete', placesAutocompleteLimiter, async (req, res) => {
     const { input } = req.query;
-    const apiKey = process.env.GOOGLE_MAPS_API_KEY; // Ensure this is in your Cloud Run variables
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY; 
     
     if (!input) return res.json({ predictions: [] });
 
     try {
-        // Filter by 'school' and 'university' types to keep results relevant to Reloaded Automate
         const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&types=school|university&key=${apiKey}`;
         const response = await axios.get(url);
         res.json(response.data);
