@@ -3317,7 +3317,6 @@ app.post('/reset-password', authLimiter, async (req, res) => {
     try {
         const { phone, country_code, newPassword, otp } = req.body;
 
-        // REMOVED '|| !otp' from validation if using Firebase Phone Auth on the client
         if (!phone || !country_code || !newPassword) {
             return res.status(400).json({
                 success: false,
@@ -3373,9 +3372,14 @@ app.post('/reset-password', authLimiter, async (req, res) => {
         const userId = user.id;
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
-        // Reset password & clear any active lockouts/failed attempt counts
+        // Reset password & explicitly lift any active lockouts / clear failed attempt counters
         await db.query(
-            'UPDATE users SET password = ?, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = ?', 
+            `UPDATE users 
+             SET password = ?, 
+                 failed_login_attempts = 0, 
+                 locked_until = NULL, 
+                 updated_at = NOW() 
+             WHERE id = ?`, 
             [newHashedPassword, userId]
         );
 
@@ -3765,23 +3769,22 @@ app.put('/settings/visibility', authenticateToken, async (req, res) => {
 });
 
 app.post('/change-password', authenticateToken, authLimiter, async (req, res) => {
+    const TAG = "/change-password";
     try {
-        // SECURITY FIX: identity must come from the verified JWT, never from the request body
         const userId = req.user.id;
         const { currentPassword, newPassword } = req.body;
 
-        if (!newPassword || newPassword.length < 7) {
+        if (!newPassword || newPassword.length < 7 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
             return res.status(400).json({ 
                 success: false, 
-                message: 'Password doesn’t contain 7 characters' 
+                message: 'Password must be at least 7 characters and include letters, numbers, and symbols.' 
             });
         }
 
         const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
-        if (rows.length === 0) return res.status(404).json({ success: false });
+        if (rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
         const isMatch = await bcrypt.compare(currentPassword, rows[0].password);
-        if (!isMatch) return res.status(400).json({ success: false, message: 'Current password is incorrect' });
         if (!isMatch) {
             return res.status(400).json({ 
                 success: false, 
@@ -3789,13 +3792,31 @@ app.post('/change-password', authenticateToken, authLimiter, async (req, res) =>
             });
         }
 
+        const isSamePassword = await bcrypt.compare(newPassword, rows[0].password);
+        if (isSamePassword) {
+            return res.status(400).json({
+                success: false,
+                message: "Your new password cannot be the same as your current password."
+            });
+        }
+
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
-        await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [newHashedPassword, userId]);
         
-        res.json({ success: true });
+        // Update password and lift any restrictions if present
+        await db.query(
+            `UPDATE users 
+             SET password = ?, 
+                 failed_login_attempts = 0, 
+                 locked_until = NULL, 
+                 updated_at = NOW() 
+             WHERE id = ?`, 
+            [newHashedPassword, userId]
+        );
+        
+        res.json({ success: true, message: 'Password changed successfully' });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false });
+        console.error(TAG, error);
+        res.status(500).json({ success: false, message: 'Server error changing password' });
     }
 });
 
