@@ -903,7 +903,8 @@ app.post("/login", authLimiter, async (req, res) => {
         return res.status(429).json({
           success: false,
           isLocked: true,
-          message: `We noticed suspicious activity. You are restricted from entering your password for ${durationMessage}. You may reset it using Forgot Password or try again later.`
+          message: `We noticed suspicious activity. You are restricted from logging in for ${durationMessage}. You may login by updating your password using Forgot Password or try again after 
+${durationMessage}.`
         });
       }
     }
