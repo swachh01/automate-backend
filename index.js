@@ -1590,8 +1590,8 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
         } else if (rideCategory === 'Planned') {
             statusFilter += " AND tp.ride_category = 'Planned' AND tp.travel_datetime > UTC_TIMESTAMP()";
         } else {
-            statusFilter += " AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.travel_datetime > 
-UTC_TIMESTAMP()))";
+            statusFilter += ` AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.travel_datetime > 
+UTC_TIMESTAMP()))`;
         }
     } else if (commuteType === 'Own') {
         tableName = 'travel_plans_own';
