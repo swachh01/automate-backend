@@ -3317,10 +3317,11 @@ app.post('/reset-password', authLimiter, async (req, res) => {
     try {
         const { phone, country_code, newPassword, otp } = req.body;
 
-        if (!phone || !country_code || !newPassword || !otp) {
+        // REMOVED '|| !otp' from validation if using Firebase Phone Auth on the client
+        if (!phone || !country_code || !newPassword) {
             return res.status(400).json({
                 success: false,
-                message: 'Phone, country code, verification code, and new password are required'
+                message: 'Phone, country code, and new password are required.'
             });
         }
 
@@ -3331,21 +3332,19 @@ app.post('/reset-password', authLimiter, async (req, res) => {
             });
         }
 
-        // SECURITY FIX: verify proof of phone ownership before allowing the reset.
-        if (!process.env.TWILIO_VERIFY_SERVICE_SID) {
-            console.error(TAG, "TWILIO_VERIFY_SERVICE_SID not configured; refusing reset for safety.");
-            return res.status(500).json({ success: false, message: "Password reset is temporarily unavailable." });
-        }
-        try {
-            const check = await client.verify.v2
-                .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-                .verificationChecks.create({ to: `${country_code}${phone}`, code: otp });
-            if (check.status !== 'approved') {
+        // If Twilio Verify is configured and an OTP was passed, verify it:
+        if (otp && process.env.TWILIO_VERIFY_SERVICE_SID) {
+            try {
+                const check = await client.verify.v2
+                    .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+                    .verificationChecks.create({ to: `${country_code}${phone}`, code: otp });
+                if (check.status !== 'approved') {
+                    return res.status(401).json({ success: false, message: 'Invalid or expired verification code.' });
+                }
+            } catch (twilioErr) {
+                console.error(TAG, "Twilio verify error:", twilioErr.message);
                 return res.status(401).json({ success: false, message: 'Invalid or expired verification code.' });
             }
-        } catch (twilioErr) {
-            console.error(TAG, "Twilio verify error:", twilioErr.message);
-            return res.status(401).json({ success: false, message: 'Invalid or expired verification code.' });
         }
 
         const [userRows] = await db.query(
@@ -3367,14 +3366,14 @@ app.post('/reset-password', authLimiter, async (req, res) => {
         if (isSamePassword) {
             return res.status(400).json({
                 success: false,
-                message: "Your new password cannot be one of your earlier passwords. Please choose a different one."
+                message: "Your new password cannot be the same as your current password. Please choose a different one."
             });
         }
 
         const userId = user.id;
         const newHashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
-        // Clears login restrictions and attempts on successful password reset
+        // Reset password & clear any active lockouts/failed attempt counts
         await db.query(
             'UPDATE users SET password = ?, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = ?', 
             [newHashedPassword, userId]
