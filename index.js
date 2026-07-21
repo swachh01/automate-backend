@@ -76,8 +76,8 @@ app.use(cors(corsOptions));
 const rateLimit = require("express-rate-limit");
 
 const authLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 15 minutes
-  max: 200,                  // 20 requests per IP per window
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,                  // 20 requests per IP per window
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: "Too many attempts. Please try again later." }
@@ -91,9 +91,6 @@ const otpLimiter = rateLimit({
   message: { success: false, message: "Too many OTP requests. Please try again later." }
 });
 
-// SECURITY FIX: /api/google-places-autocomplete proxies to a billed Google API using our own
-// server-side key. Without auth + a rate limit, anyone can hammer it and run up our Google
-// Maps bill / exhaust our quota. Require a logged-in user and cap requests per IP.
 const placesAutocompleteLimiter = rateLimit({
   windowMs: 60 * 1000,   // 1 minute
   max: 30,               // 30 requests per IP per minute
