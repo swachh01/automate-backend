@@ -1578,35 +1578,38 @@ app.get("/travel-plans/destinations-by-type", authenticateToken, async (req, res
     let statusFilter = "tp.status = 'Trip Active'";
     const queryParams = []; 
 
-    if (commuteType === 'Cab') {
-        tableName = 'travel_plans_cab';
-        destinationCol = 'destination';
-        
-        if (rideCategory === 'Instant') {
-            statusFilter += " AND tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)";
-        } else if (rideCategory === 'Planned') {
-            statusFilter += " AND tp.ride_category = 'Planned' AND tp.travel_datetime > UTC_TIMESTAMP()";
-        } else {
-            statusFilter += ` AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.travel_datetime > 
-UTC_TIMESTAMP()))`;
-        }
-    } else if (commuteType === 'Own') {
-        tableName = 'travel_plans_own';
-        destinationCol = 'destination';
-        statusFilter += " AND tp.travel_time > UTC_TIMESTAMP()";
-    } else { // Rickshaw
-        tableName = 'travel_plans';
-        destinationCol = 'to_place'; 
-        statusFilter += " AND (tp.commute_type = 'Rickshaw' OR tp.commute_type IS NULL)";
 
-        if (rideCategory === 'Instant') {
-            statusFilter += " AND tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)";
-        } else if (rideCategory === 'Planned') {
-            statusFilter += " AND tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()";
+    // ─── REPLACE CONVERT_TZ WITH DIRECT UTC TIMESTAMP COMPARISONS ───
+        if (commuteType === 'Cab') {
+            tableName = 'travel_plans_cab';
+            destinationCol = 'destination';
+            
+            if (rideCategory === 'Instant') {
+                statusFilter += " AND tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)";
+            } else if (rideCategory === 'Planned') {
+                statusFilter += " AND tp.ride_category = 'Planned' AND tp.travel_datetime > UTC_TIMESTAMP()";
+            } else {
+                statusFilter += ` AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.travel_datetime > 
+UTC_TIMESTAMP()))`;
+            }
+        } else if (commuteType === 'Own') {
+            tableName = 'travel_plans_own';
+            destinationCol = 'destination';
+            statusFilter += " AND tp.travel_time > UTC_TIMESTAMP()";
         } else {
-            statusFilter += " AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()))";
+            tableName = 'travel_plans';
+            destinationCol = 'to_place'; 
+            statusFilter += " AND (tp.commute_type = 'Rickshaw' OR tp.commute_type IS NULL)";
+
+            if (rideCategory === 'Instant') {
+                statusFilter += " AND tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)";
+            } else if (rideCategory === 'Planned') {
+                statusFilter += " AND tp.ride_category = 'Planned' AND tp.time > UTC_TIMESTAMP()";
+            } else {
+                statusFilter += ` AND ((tp.ride_category = 'Instant' AND UTC_TIMESTAMP() < DATE_ADD(tp.created_at, INTERVAL 6 MINUTE)) OR (tp.ride_category = 'Planned' AND tp.time > 
+UTC_TIMESTAMP()))`;
+            }
         }
-    }
 
     try {
         let vehicleSelector = "NULL";
