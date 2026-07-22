@@ -1630,21 +1630,23 @@ UTC_TIMESTAMP()))`;
 
         queryParams.unshift(userId);
 
-        const query = `
-            SELECT 
-                tp.${destinationCol} as destination, 
-                COUNT(DISTINCT tp.user_id) as userCount,
-                SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
-                g.group_id,
-                MAX(${vehicleSelector}) AS vehicle_number,
-                MAX(${fareSelector}) AS instant_fare,
-                ${selectCategoryExpr} as ride_category
-            FROM ${tableName} tp
-            LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
-            WHERE ${statusFilter}
-            GROUP BY tp.${destinationCol}, g.group_id, ${groupByCategoryExpr}
-            ORDER BY userCount DESC
-        `;
+        // Inside /travel-plans/destinations-by-type route in index.js:
+
+const query = `
+    SELECT 
+        tp.${destinationCol} as destination, 
+        COUNT(DISTINCT tp.user_id) as userCount,
+        SUM(CASE WHEN tp.user_id = ? THEN 1 ELSE 0 END) > 0 AS isCurrentUserGoing,
+        g.group_id,
+        MAX(${vehicleSelector}) AS vehicle_number,
+        MAX(${fareSelector}) AS instant_fare,
+        ${selectCategoryExpr} as ride_category
+    FROM ${tableName} tp
+    LEFT JOIN \`group_table\` g ON g.group_name = tp.${destinationCol}
+    WHERE ${statusFilter}
+    GROUP BY tp.${destinationCol}, g.group_id
+    ORDER BY userCount DESC
+`;
 
         const [destinations] = await db.query(query, queryParams);
         
