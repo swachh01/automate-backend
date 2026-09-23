@@ -759,6 +759,28 @@ app.get("/check-phone-availability", authLimiter, async (req, res) => {
     }
 });
 
+app.get("/check-account-exists", authLimiter, async (req, res) => {
+    const { phone, country_code } = req.query;
+
+    if (!phone || !country_code) {
+        return res.status(400).json({ success: false, message: "Phone and country code required." });
+    }
+
+    const normalized = normalizePhoneData(phone, country_code);
+
+    try {
+        const [rows] = await db.query(
+            `SELECT id FROM users WHERE phone = ? AND country_code = ? AND signup_status = 'completed'`,
+            [normalized.phone, normalized.country_code]
+        );
+
+        return res.json({ exists: rows.length > 0 });
+    } catch (err) {
+        console.error("/check-account-exists", "Error checking account:", err);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
 // SECURITY FIX: this route was a full account-enumeration oracle (any phone number ->
 // full row data) with NO production gate, unlike its sibling /debug/* routes, and NO auth.
 // It is now blocked in production and requires a valid session even in dev/staging.
