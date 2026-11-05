@@ -998,7 +998,11 @@ ${durationMessage}.`
       [user.id]
     );
 
+    // Revoke all previous refresh tokens across other devices to enforce single-device active sessions
+    await db.query(`DELETE FROM refresh_tokens WHERE user_id = ?`, [user.id]);
+
     delete user.password;
+    delete user.failed_login_annotations;
     delete user.failed_login_attempts;
     delete user.locked_until;
     delete user.is_banned;
@@ -1008,12 +1012,21 @@ ${durationMessage}.`
       user_id: user.user_id
     };
 
-    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '7d' });
+    // Issue short-lived Access Token (e.g., 1 day) and long-lived Refresh Token (30 days)
+    const accessToken = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+    const refreshToken = jwt.sign(tokenPayload, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET, { expiresIn: '30d' });
+
+    // Store the new refresh token in database
+    await db.query(
+      `INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 DAY))`,
+      [user.id, refreshToken]
+    );
 
     res.json({ 
       success: true, 
       message: "Login successful", 
-      token: token, 
+      token: accessToken, 
+      refreshToken: refreshToken,
       user: user 
     });
 
