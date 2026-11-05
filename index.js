@@ -1478,6 +1478,26 @@ app.post("/addCabTravelPlan", authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/refresh-token', async (req, res) => {
+    const { refreshToken } = req.body;
+    if (!refreshToken) return res.status(401).json({ success: false, message: "Refresh token required" });
+
+    try {
+        const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET);
+        
+        // Verify token exists in database and isn't revoked
+        const [rows] = await db.query('SELECT * FROM refresh_tokens WHERE user_id = ? AND token = ? AND expires_at > UTC_TIMESTAMP()', [payload.id, refreshToken]);
+        if (rows.length === 0) return res.status(403).json({ success: false, message: "Invalid or expired refresh token" });
+
+        const newTokenPayload = { id: payload.id, user_id: payload.user_id };
+        const newAccessToken = jwt.sign(newTokenPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
+
+        res.json({ success: true, token: newAccessToken });
+    } catch (err) {
+        res.status(403).json({ success: false, message: "Token verification failed" });
+    }
+});
+
 app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
     const TAG = "/addOwnVehiclePlan";
     let connection;
