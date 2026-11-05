@@ -3639,23 +3639,9 @@ app.delete('/deleteMessage/:messageId', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/favorites/:userId', authenticateToken, async (req, res) => {
-    const { userId } = req.params;
-    
-    if (!userId) {
-        return res.status(400).json({ success: false, message: "Missing required parameter" });
-    }
-
+app.get('/favorites', authenticateToken, async (req, res) => {
     try {
-        const targetUserId = parseInt(userId);
-
-        // SECURE FIX: Prevent a user from requesting someone else's pinned favorites list
-        if (req.user.id !== targetUserId) {
-            return res.status(403).json({ 
-                success: false, 
-                message: "Access Denied: You cannot view another user's favorite routes." 
-            });
-        }
+        const targetUserId = req.user.id; // Safely extracted from verified JWT token
 
         const [favorites] = await db.query(
             `SELECT id, user_id, routeName, from_place, to_place, from_place_lat, from_place_lng, to_place_lat, to_place_lng 
