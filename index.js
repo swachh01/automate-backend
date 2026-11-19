@@ -8,6 +8,7 @@ const admin = require("firebase-admin");
 const axios = require('axios');
 const { parsePhoneNumberFromString } = require('libphonenumber-js');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const authenticateToken = require('./authMiddleware');
 
 let serviceAccount;
@@ -152,6 +153,38 @@ const pool = mysql.createPool({
 });
 
 const db = pool.promise();
+
+// ================= TOKEN HELPERS =================
+// Access token: short-lived JWT, verified on every request.
+// Refresh token: random opaque string. Only its SHA-256 hash is stored, so a DB leak
+// does not expose usable tokens. Sliding 60-day expiry: every refresh extends it, so
+// anyone who opens the app at least once in 60 days is never asked to log in again.
+const ACCESS_TTL = '1h';
+const REFRESH_TTL_DAYS = 60;
+// Set SINGLE_DEVICE=true in Cloud Run once every login path saves tokens
+// (a login on one phone then signs out all other phones).
+const SINGLE_DEVICE_LOGIN = process.env.SINGLE_DEVICE === 'true';
+
+const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+
+function signAccessToken(id, handle) {
+  return jwt.sign({ id, user_id: handle || null }, process.env.JWT_SECRET,
+                  { expiresIn: ACCESS_TTL, algorithm: 'HS256' });
+}
+
+async function issueTokens(userId, handle, { singleDevice = false } = {}) {
+  const refreshToken = crypto.randomBytes(48).toString('hex');
+  if (singleDevice) {
+    await db.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
+  } else {
+    await db.query('DELETE FROM refresh_tokens WHERE user_id = ? AND expires_at < UTC_TIMESTAMP()', [userId]);
+  }
+  await db.query(
+    `INSERT INTO refresh_tokens (user_id, token, expires_at)
+     VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY))`,
+    [userId, hashToken(refreshToken), REFRESH_TTL_DAYS]);
+  return { token: signAccessToken(userId, handle), refreshToken };
+}
 
 pool.getConnection((err, connection) => {
   if (err) {
@@ -710,15 +743,14 @@ app.post("/create-account", authLimiter, async (req, res) => {
 
         const newUser = userRows[0];
 
-        // FEATURE ENHANCEMENT: Generate a signed JWT token directly upon database insertion success
-        const tokenPayload = { id: newUser.id, phone: newUser.phone };
-        const authToken = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '30d' });
+        // Access token + refresh token (so new users can silently renew their session too)
+        const { token, refreshToken } = await issueTokens(newUser.id, null);
 
-        // FIXED: Return BOTH the user object details AND the authenticating token string mapping parameter
         res.status(201).json({
             success: true,
             message: "Account created successfully. Please complete your profile.",
-            token: authToken,
+            token,
+            refreshToken,
             user: newUser
         });
 
@@ -998,36 +1030,20 @@ ${durationMessage}.`
       [user.id]
     );
 
-    // Revoke all previous refresh tokens across other devices to enforce single-device active sessions
-    await db.query(`DELETE FROM refresh_tokens WHERE user_id = ?`, [user.id]);
-
     delete user.password;
     delete user.failed_login_annotations;
     delete user.failed_login_attempts;
     delete user.locked_until;
     delete user.is_banned;
 
-    const tokenPayload = {
-      id: user.id,
-      user_id: user.user_id
-    };
+    const { token, refreshToken } = await issueTokens(user.id, user.user_id, { singleDevice: SINGLE_DEVICE_LOGIN });
 
-    // Issue short-lived Access Token (e.g., 1 day) and long-lived Refresh Token (30 days)
-    const accessToken = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
-    const refreshToken = jwt.sign(tokenPayload, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET, { expiresIn: '30d' });
-
-    // Store the new refresh token in database
-    await db.query(
-      `INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 DAY))`,
-      [user.id, refreshToken]
-    );
-
-    res.json({ 
-      success: true, 
-      message: "Login successful", 
-      token: accessToken, 
-      refreshToken: refreshToken,
-      user: user 
+    res.json({
+      success: true,
+      message: "Login successful",
+      token,
+      refreshToken,
+      user
     });
 
   } catch (err) {
@@ -1491,24 +1507,54 @@ app.post("/addCabTravelPlan", authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/refresh-token', async (req, res) => {
-    const { refreshToken } = req.body;
-    if (!refreshToken) return res.status(401).json({ success: false, message: "Refresh token required" });
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false,
+  message: { success: false, message: "Too many refresh attempts." }
+});
 
-    try {
-        const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET);
-        
-        // Verify token exists in database and isn't revoked
-        const [rows] = await db.query('SELECT * FROM refresh_tokens WHERE user_id = ? AND token = ? AND expires_at > UTC_TIMESTAMP()', [payload.id, refreshToken]);
-        if (rows.length === 0) return res.status(403).json({ success: false, message: "Invalid or expired refresh token" });
-
-        const newTokenPayload = { id: payload.id, user_id: payload.user_id };
-        const newAccessToken = jwt.sign(newTokenPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
-
-        res.json({ success: true, token: newAccessToken });
-    } catch (err) {
-        res.status(403).json({ success: false, message: "Token verification failed" });
+app.post('/refresh-token', refreshLimiter, async (req, res) => {
+    const { refreshToken } = req.body || {};
+    if (!refreshToken || typeof refreshToken !== 'string') {
+        return res.status(401).json({ success: false, message: "Refresh token required" });
     }
+    try {
+        const h = hashToken(refreshToken);
+        const [rows] = await db.query(
+            `SELECT u.id AS uid, u.user_id AS handle, u.is_banned
+               FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id
+              WHERE rt.token = ? AND rt.expires_at > UTC_TIMESTAMP()`, [h]);
+
+        if (!rows.length || rows[0].is_banned === 1) {
+            return res.status(401).json({ success: false, message: "Session expired" });
+        }
+
+        // Sliding window: using the app keeps the session alive
+        await db.query(
+            `UPDATE refresh_tokens SET expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY) WHERE token = ?`,
+            [REFRESH_TTL_DAYS, h]);
+
+        res.json({ success: true, token: signAccessToken(rows[0].uid, rows[0].handle) });
+    } catch (err) {
+        console.error('/refresh-token', err);
+        // 500 (not 401) so the app keeps the session and retries later
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
+app.post('/logout', async (req, res) => {
+    const { refreshToken } = req.body || {};
+    try {
+        if (refreshToken && typeof refreshToken === 'string') {
+            const h = hashToken(refreshToken);
+            // stop pushes to the phone that just logged out
+            await db.query(
+                'UPDATE users SET fcm_token = NULL WHERE id = (SELECT user_id FROM refresh_tokens WHERE token = ? LIMIT 1)', [h]);
+            await db.query('DELETE FROM refresh_tokens WHERE token = ?', [h]);
+        }
+    } catch (e) {
+        console.error('/logout', e);
+    }
+    res.json({ success: true });
 });
 
 app.post("/addOwnVehiclePlan", authenticateToken, async (req, res) => {
@@ -3366,7 +3412,7 @@ app.post('/request-password-reset-otp', otpLimiter, async (req, res) => {
 app.post('/reset-password', authLimiter, async (req, res) => {
     const TAG = "/reset-password";
     try {
-        const { phone, country_code, newPassword, otp } = req.body;
+        const { phone, country_code, newPassword, firebaseIdToken } = req.body;
 
         if (!phone || !country_code || !newPassword) {
             return res.status(400).json({
@@ -3382,19 +3428,18 @@ app.post('/reset-password', authLimiter, async (req, res) => {
             });
         }
 
-        // If Twilio Verify is configured and an OTP was passed, verify it:
-        if (otp && process.env.TWILIO_VERIFY_SERVICE_SID) {
-            try {
-                const check = await client.verify.v2
-                    .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-                    .verificationChecks.create({ to: `${country_code}${phone}`, code: otp });
-                if (check.status !== 'approved') {
-                    return res.status(401).json({ success: false, message: 'Invalid or expired verification code.' });
-                }
-            } catch (twilioErr) {
-                console.error(TAG, "Twilio verify error:", twilioErr.message);
-                return res.status(401).json({ success: false, message: 'Invalid or expired verification code.' });
-            }
+        // Proof of phone ownership: the app verified the OTP with Firebase and sends the ID token.
+        if (!firebaseIdToken || typeof firebaseIdToken !== 'string') {
+            return res.status(401).json({ success: false, message: 'Phone verification required.' });
+        }
+        try {
+            const decoded = await admin.auth().verifyIdToken(firebaseIdToken);
+            const expected = `${country_code}${String(phone).replace(/\D/g, '')}`;
+            if (decoded.phone_number !== expected) throw new Error('phone mismatch');
+            if (Date.now() / 1000 - decoded.auth_time > 600) throw new Error('verification too old');
+        } catch (e) {
+            console.warn(TAG, 'firebase verify failed:', e.message);
+            return res.status(401).json({ success: false, message: 'Verification expired. Please verify your number again.' });
         }
 
         const [userRows] = await db.query(
@@ -3433,6 +3478,9 @@ app.post('/reset-password', authLimiter, async (req, res) => {
              WHERE id = ?`, 
             [newHashedPassword, userId]
         );
+
+        // Sign out every device; the user logs in again with the new password
+        await db.query('DELETE FROM refresh_tokens WHERE user_id = ?', [userId]);
 
         res.json({ success: true, message: 'Password reset successfully' });
 
@@ -3818,7 +3866,7 @@ app.post('/change-password', authenticateToken, authLimiter, async (req, res) =>
             });
         }
 
-        const [rows] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
+        const [rows] = await db.query('SELECT password, user_id FROM users WHERE id = ?', [userId]);
         if (rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
 
         const isMatch = await bcrypt.compare(currentPassword, rows[0].password);
@@ -3849,8 +3897,10 @@ app.post('/change-password', authenticateToken, authLimiter, async (req, res) =>
              WHERE id = ?`, 
             [newHashedPassword, userId]
         );
-        
-        res.json({ success: true, message: 'Password changed successfully' });
+
+        // Sign out every OTHER device, but give THIS device fresh tokens
+        const { token, refreshToken } = await issueTokens(userId, rows[0].user_id, { singleDevice: true });
+        res.json({ success: true, message: 'Password changed successfully', token, refreshToken });
     } catch (error) {
         console.error(TAG, error);
         res.status(500).json({ success: false, message: 'Server error changing password' });
